@@ -1,6 +1,10 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { IPC, type AuthStatus, type DesktopApi } from '../shared/ipc';
-import { REPOS_IPC as R, type RepositorySummary } from '../shared/repos';
+import {
+  REPOS_IPC as R,
+  type CloneProgressEvent,
+  type RepositorySummary,
+} from '../shared/repos';
 
 // Each method maps to one fixed channel. No generic invoke, no raw ipcRenderer, no token access.
 const api: DesktopApi = {
@@ -59,6 +63,17 @@ const api: DesktopApi = {
     linkRemote: (id) => ipcRenderer.invoke(R.linkRemote, id),
     activity: () => ipcRenderer.invoke(R.activity),
     remoteOverview: (force) => ipcRenderer.invoke(R.remoteOverview, { force }),
+    remoteList: (input) => ipcRenderer.invoke(R.remoteList, input),
+    remoteUpdate: (input) => ipcRenderer.invoke(R.remoteUpdate, input),
+    remoteDelete: (id) => ipcRenderer.invoke(R.remoteDelete, id),
+    clone: (input) => ipcRenderer.invoke(R.clone, input),
+    cancelClone: (jobId) => ipcRenderer.invoke(R.cloneCancel, jobId),
+    onCloneProgress(callback) {
+      const listener = (_event: IpcRendererEvent, event: CloneProgressEvent) =>
+        callback(event);
+      ipcRenderer.on(R.cloneProgress, listener);
+      return () => ipcRenderer.removeListener(R.cloneProgress, listener);
+    },
     onChanged(callback) {
       const listener = (
         _event: IpcRendererEvent,

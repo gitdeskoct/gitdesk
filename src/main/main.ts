@@ -30,7 +30,10 @@ import { createGitIdentity } from './git/git-identity';
 import { createHandle } from './ipc/handle';
 import { registerIpc } from './ipc/register';
 import { registerAppScheme, serveRendererFrom } from './protocol';
-import { createRemoteService, type RemoteService } from './remote/remote-service';
+import {
+  createRemoteService,
+  type RemoteService,
+} from './remote/remote-service';
 import { createRepositoryService } from './repos/repository-service';
 import { createRepositoryStore } from './repos/repository-store';
 import { hardenApp } from './security';
@@ -170,6 +173,9 @@ function start() {
     remote,
     settings: () => settings.get(),
     emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
+    emitCloneProgress: (event) =>
+      mainWindow?.webContents.send(REPOS_IPC.cloneProgress, event),
+    log,
     desktop: {
       async pickDirectory({ title, create }) {
         const options: Electron.OpenDialogOptions = {

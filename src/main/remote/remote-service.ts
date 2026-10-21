@@ -1,7 +1,18 @@
 import type { AuthStatus } from '../../shared/ipc';
-import type { RemoteOverview, RemoteRepository } from '../../shared/repos';
+import type {
+  RemoteActivity,
+  RemoteListInput,
+  RemoteOverview,
+  RemotePage,
+  RemoteRepository,
+  RemoteUpdateInput,
+} from '../../shared/repos';
 import type { Settings } from '../../shared/settings';
-import { ApiRequestError, NetworkError, type ApiClient } from '../auth/api-client';
+import {
+  ApiRequestError,
+  NetworkError,
+  type ApiClient,
+} from '../auth/api-client';
 import type { AuthService } from '../auth/auth-service';
 import { readState, writeState, type AppDatabase } from '../db/database';
 import { UserError } from '../errors';
@@ -16,6 +27,7 @@ export const MANUAL_GAP_MS = 30_000;
 export const RETRY_GAP_MS = 2 * 60_000;
 
 type CachedOverview = { accountId: string; total: number; fetchedAt: number };
+type CachedActivity = { accountId: string; items: RemoteActivity[] };
 type Usage = { day: string; count: number };
 
 const accountIdOf = (status: AuthStatus): string | null =>
@@ -23,6 +35,28 @@ const accountIdOf = (status: AuthStatus): string | null =>
   status.account
     ? status.account.id
     : null;
+
+// Server codes become sentences; anything unexpected gets the caller's fallback.
+function userError(err: unknown, fallback: string): UserError {
+  if (err instanceof UserError) return err;
+  if (err instanceof NetworkError)
+    return new UserError("Can't reach the gitdesk server.");
+  if (err instanceof ApiRequestError) {
+    if (err.code === 'NAME_TAKEN')
+      return new UserError(
+        'A remote repository with that name already exists.',
+      );
+    if (err.code === 'LIMIT_REACHED')
+      return new UserError(
+        'Your account has reached its limit of remote repositories.',
+      );
+    if (err.code === 'NOT_FOUND')
+      return new UserError('That remote repository no longer exists.');
+    if (err.status === 429)
+      return new UserError('Too many requests. Try again in a minute.');
+  }
+  return new UserError(fallback);
+}
 
 export function createRemoteService(deps: {
   db: AppDatabase;
@@ -37,6 +71,8 @@ export function createRemoteService(deps: {
   let lastError: RemoteOverview['error'] = null;
   let liveAt: number | null = null;
   let inflight: Promise<void> | null = null;
+  // Bumped on sign-out: a response that started before it must not write the old account's data back.
+  let epoch = 0;
 
   const usage = (): Usage => {
     const day = new Date(now()).toISOString().slice(0, 10);
@@ -45,7 +81,10 @@ export function createRemoteService(deps: {
   };
   const countRequest = () => {
     const current = usage();
-    writeState(deps.db, 'remote_usage', { ...current, count: current.count + 1 });
+    writeState(deps.db, 'remote_usage', {
+      ...current,
+      count: current.count + 1,
+    });
   };
 
   const cachedFor = (accountId: string): CachedOverview | null => {
@@ -54,11 +93,32 @@ export function createRemoteService(deps: {
       | undefined;
     return stored?.accountId === accountId ? stored : null;
   };
+  const activityFor = (accountId: string): RemoteActivity[] => {
+    const stored = readState(deps.db, 'remote_activity') as
+      | CachedActivity
+      | undefined;
+    return stored?.accountId === accountId ? stored.items : [];
+  };
 
   async function call<T>(fn: (token: string) => Promise<T>): Promise<T> {
     lastAttempt = now();
     countRequest();
     return deps.auth.authorized(fn);
+  }
+
+  // Remote calls need a signed-in, connected account and an app that isn't set to local-only.
+  function signedInAccount(): string {
+    if (deps.settings().localOnly)
+      throw new UserError(
+        'gitdesk is set to work without an account. Turn that off in Settings › General.',
+      );
+    const status = deps.auth.getStatus();
+    const accountId = accountIdOf(status);
+    if (!accountId || status.status !== 'authenticated')
+      throw new UserError(
+        'Sign in and connect to use your remote repositories.',
+      );
+    return accountId;
   }
 
   const errorOf = (err: unknown): RemoteOverview['error'] =>
@@ -69,8 +129,10 @@ export function createRemoteService(deps: {
         : 'failed';
 
   async function fetchOverview(accountId: string): Promise<void> {
+    const started = epoch;
     try {
       const result = await call((token) => deps.api.dashboardOverview(token));
+      if (started !== epoch) return;
       const fetchedAt = now();
       deps.store.replaceRemote(accountId, result.recent, fetchedAt);
       writeState(deps.db, 'remote_overview', {
@@ -78,9 +140,14 @@ export function createRemoteService(deps: {
         total: result.total,
         fetchedAt,
       } satisfies CachedOverview);
+      writeState(deps.db, 'remote_activity', {
+        accountId,
+        items: result.recentActivity,
+      } satisfies CachedActivity);
       liveAt = fetchedAt;
       lastError = null;
     } catch (err) {
+      if (started !== epoch) return;
       lastError = errorOf(err);
       // The last good data stays on screen, but it is no longer described as current.
       liveAt = null;
@@ -88,7 +155,7 @@ export function createRemoteService(deps: {
   }
 
   function snapshot(status: AuthStatus): RemoteOverview {
-    const accountId = accountIdOf(status);
+    const accountId = deps.settings().localOnly ? null : accountIdOf(status);
     const base = {
       requestsToday: usage().count,
       nextRefreshAt: lastAttempt ? lastAttempt + MANUAL_GAP_MS : null,
@@ -99,6 +166,7 @@ export function createRemoteService(deps: {
         state: 'signed-out',
         total: null,
         recent: [],
+        activity: [],
         fetchedAt: null,
         error: null,
       };
@@ -109,6 +177,7 @@ export function createRemoteService(deps: {
         state: 'never',
         total: null,
         recent: [],
+        activity: [],
         fetchedAt: null,
         error: status.status === 'offline' ? 'offline' : lastError,
       };
@@ -117,16 +186,40 @@ export function createRemoteService(deps: {
       state: liveAt === cached.fetchedAt ? 'live' : 'cached',
       total: cached.total,
       recent: deps.store.readRemote(accountId).slice(0, 5),
+      activity: activityFor(accountId),
       fetchedAt: cached.fetchedAt,
       error: status.status === 'offline' ? 'offline' : lastError,
     };
+  }
+
+  // Keeps the cached list in step with a confirmed server change, without inventing a fetch time.
+  function patchCache(
+    accountId: string,
+    change: (list: RemoteRepository[]) => RemoteRepository[],
+    totalDelta: number,
+  ): void {
+    const cached = cachedFor(accountId);
+    if (!cached) return;
+    deps.store.replaceRemote(
+      accountId,
+      change(deps.store.readRemote(accountId)),
+      cached.fetchedAt,
+    );
+    writeState(deps.db, 'remote_overview', {
+      ...cached,
+      total: Math.max(0, cached.total + totalDelta),
+    } satisfies CachedOverview);
   }
 
   return {
     async overview(force: boolean): Promise<RemoteOverview> {
       const status = deps.auth.getStatus();
       const accountId = accountIdOf(status);
-      if (accountId && status.status === 'authenticated') {
+      if (
+        accountId &&
+        status.status === 'authenticated' &&
+        !deps.settings().localOnly
+      ) {
         const cached = cachedFor(accountId);
         const sinceAttempt = now() - lastAttempt;
         const due = force
@@ -144,49 +237,82 @@ export function createRemoteService(deps: {
       return snapshot(deps.auth.getStatus());
     },
 
-    // Creates remote metadata only. The local repository is never touched from here.
-    async create(input: {
-      name: string;
-      description: string | null;
-    }): Promise<RemoteRepository> {
-      const status = deps.auth.getStatus();
-      const accountId = accountIdOf(status);
-      if (!accountId || status.status !== 'authenticated')
-        throw new UserError('Sign in and connect to create a remote repository.');
+    // Creates remote metadata only. The local repository is never touched from here. The same
+    // key on a retry returns the repository a timed-out first attempt already created.
+    async create(
+      input: { name: string; description: string | null },
+      idempotencyKey: string,
+    ): Promise<RemoteRepository> {
+      const accountId = signedInAccount();
       try {
         const { repository } = await call((token) =>
-          deps.api.createRepository(token, input),
+          deps.api.createRepository(token, input, idempotencyKey),
         );
-        // Update the cache from the server's own response instead of refetching the overview.
-        const cached = cachedFor(accountId);
-        const fetchedAt = cached?.fetchedAt ?? now();
-        deps.store.replaceRemote(
+        patchCache(
           accountId,
-          [repository, ...deps.store.readRemote(accountId)],
-          fetchedAt,
+          (list) => [repository, ...list.filter((r) => r.id !== repository.id)],
+          deps.store.readRemote(accountId).some((r) => r.id === repository.id)
+            ? 0
+            : 1,
         );
-        writeState(deps.db, 'remote_overview', {
-          accountId,
-          total: (cached?.total ?? 0) + 1,
-          fetchedAt,
-        } satisfies CachedOverview);
         return repository;
       } catch (err) {
-        if (err instanceof ApiRequestError && err.code === 'NAME_TAKEN')
-          throw new UserError('A remote repository with that name already exists.');
-        if (err instanceof ApiRequestError && err.status === 429)
-          throw new UserError('Too many requests. Try again in a minute.');
-        if (err instanceof NetworkError)
-          throw new UserError("Can't reach the gitdesk server.");
-        throw new UserError("The server couldn't create the remote repository.");
+        throw userError(
+          err,
+          "The server couldn't create the remote repository.",
+        );
       }
+    },
+
+    // One page straight from the server; the list is never served from cache as if it were current.
+    async list(input: RemoteListInput): Promise<RemotePage> {
+      signedInAccount();
+      try {
+        return await call((token) => deps.api.listRepositories(token, input));
+      } catch (err) {
+        throw userError(err, "Couldn't load your remote repositories.");
+      }
+    },
+
+    async update(input: RemoteUpdateInput): Promise<RemoteRepository> {
+      const accountId = signedInAccount();
+      const { id, ...body } = input;
+      try {
+        const { repository } = await call((token) =>
+          deps.api.updateRepository(token, id, body),
+        );
+        patchCache(
+          accountId,
+          (list) => list.map((r) => (r.id === id ? repository : r)),
+          0,
+        );
+        return repository;
+      } catch (err) {
+        throw userError(err, "The server couldn't save those details.");
+      }
+    },
+
+    // Deletes the remote only. The caller unlinks local registrations; folders stay untouched.
+    async remove(id: string): Promise<void> {
+      const accountId = signedInAccount();
+      try {
+        await call((token) => deps.api.deleteRepository(token, id));
+      } catch (err) {
+        throw userError(
+          err,
+          "The server couldn't delete the remote repository.",
+        );
+      }
+      patchCache(accountId, (list) => list.filter((r) => r.id !== id), -1);
     },
 
     // Signing out removes the cached remote names: they belong to the account, not the computer.
     handleAuth(status: AuthStatus): void {
       if (status.status === 'signed-out') {
+        epoch++;
         deps.store.clearRemote();
         writeState(deps.db, 'remote_overview', null);
+        writeState(deps.db, 'remote_activity', null);
         liveAt = null;
         lastError = null;
       }

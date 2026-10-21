@@ -3,7 +3,9 @@ import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { Loading } from '../../components/ui/status';
 import { PLATFORM_NAMES } from '../../lib/format';
 import { Copy, FolderOpen } from 'lucide-react';
+import { GitMissingArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
+import { EmptyState } from '../../components/ui/empty-state';
 import { InlineStatus } from '../../components/ui/status';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { useAppInfo, useCopyDiagnostics, useOpenLogs } from '../../lib/queries';
@@ -13,7 +15,20 @@ export function AboutSection() {
   const openLogs = useOpenLogs();
   const copy = useCopyDiagnostics();
   if (info.isPending) return <Loading label="Reading version details…" />;
-  if (info.isError) return null;
+  if (info.isError)
+    return (
+      <EmptyState
+        art={<GitMissingArt />}
+        title="Couldn't read version details"
+        action={
+          <Button pending={info.isFetching} onClick={() => void info.refetch()}>
+            Try again
+          </Button>
+        }
+      >
+        {ipcErrorMessage(info.error, 'The app did not report its version.')}
+      </EmptyState>
+    );
 
   return (
     <>

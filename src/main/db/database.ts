@@ -52,6 +52,10 @@ const MIGRATIONS = [
      detail TEXT
    );
    CREATE INDEX local_activity_time ON local_activity (occurred_at)`,
+  // inspected_at is the last attempt; status_at is when status_json was last refreshed, so a
+  // failed or "missing" check never makes an old snapshot look new.
+  `ALTER TABLE repository_cache ADD COLUMN status_at INTEGER;
+   UPDATE repository_cache SET status_at = inspected_at WHERE status_json IS NOT NULL`,
 ];
 
 export type AppDatabase = DatabaseSync;

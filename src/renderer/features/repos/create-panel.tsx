@@ -53,7 +53,11 @@ function CheckRow({
       <div>
         <label
           htmlFor={id}
-          className={disabled ? 'text-sm font-medium text-muted' : 'text-sm font-medium text-ink'}
+          className={
+            disabled
+              ? 'text-sm font-medium text-muted'
+              : 'text-sm font-medium text-ink'
+          }
         >
           {label}
         </label>
@@ -78,7 +82,10 @@ function Result({
   return (
     <div role="status" className="grid gap-3 border-t border-line pt-4 text-sm">
       <p className="flex gap-2.5">
-        <CircleCheck aria-hidden className="mt-0.5 size-4 shrink-0 text-success" />
+        <CircleCheck
+          aria-hidden
+          className="mt-0.5 size-4 shrink-0 text-success"
+        />
         <span>
           <b className="font-semibold">Local repository created</b> at{' '}
           <span className="font-mono text-[0.8125rem]">
@@ -91,7 +98,10 @@ function Result({
       </p>
       {(result.remote.status === 'created' || link.isSuccess) && (
         <p className="flex gap-2.5">
-          <CircleCheck aria-hidden className="mt-0.5 size-4 shrink-0 text-success" />
+          <CircleCheck
+            aria-hidden
+            className="mt-0.5 size-4 shrink-0 text-success"
+          />
           <span>
             <b className="font-semibold">Private remote created</b> on your
             gitdesk account.
@@ -101,12 +111,16 @@ function Result({
       {remoteFailed && (
         <>
           <p className="flex gap-2.5">
-            <CircleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-danger" />
+            <CircleAlert
+              aria-hidden
+              className="mt-0.5 size-4 shrink-0 text-danger"
+            />
             <span>
               <b className="font-semibold">The remote wasn't created.</b>{' '}
               {link.isError
                 ? ipcErrorMessage(link.error, 'Try again in a minute.')
-                : result.remote.status === 'failed' && result.remote.message}{' '}
+                : result.remote.status === 'failed' &&
+                  result.remote.message}{' '}
               Your local repository is safe.
             </span>
           </p>
@@ -147,15 +161,24 @@ export function CreatePanel({ onClose }: { onClose: () => void }) {
   const choose = useChooseLocation();
   const create = useCreateRepository();
   const [values, setValues] = useState({ name: '', description: '' });
-  const [errors, setErrors] = useState<{ name?: string; description?: string; location?: string }>({});
-  const [location, setLocation] = useState<{ token: string; displayPath: string } | null>(null);
+  const [errors, setErrors] = useState<{
+    name?: string;
+    description?: string;
+    location?: string;
+  }>({});
+  const [location, setLocation] = useState<{
+    token: string;
+    displayPath: string;
+  } | null>(null);
   const [readme, setReadme] = useState(true);
   const [remote, setRemote] = useState(online);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const parsed = formSchema.safeParse(values);
-    const fields = parsed.success ? {} : z.flattenError(parsed.error).fieldErrors;
+    const fields = parsed.success
+      ? {}
+      : z.flattenError(parsed.error).fieldErrors;
     const next = {
       name: fields.name?.[0],
       description: fields.description?.[0],
@@ -173,7 +196,11 @@ export function CreatePanel({ onClose }: { onClose: () => void }) {
   };
 
   return (
-    <SidePanel title="Create repository" onClose={onClose}>
+    <SidePanel
+      title="Create repository"
+      onClose={onClose}
+      locked={create.isPending}
+    >
       {create.isSuccess ? (
         <Result result={create.data} onClose={onClose} />
       ) : (
@@ -263,7 +290,12 @@ export function CreatePanel({ onClose }: { onClose: () => void }) {
             <Button type="submit" variant="primary" pending={create.isPending}>
               {create.isPending ? 'Creating…' : 'Create repository'}
             </Button>
-            <Button variant="ghost" onClick={onClose}>
+            {/* Stays focusable but inert while creating, so the result can't be thrown away. */}
+            <Button
+              variant="ghost"
+              aria-disabled={create.isPending || undefined}
+              onClick={() => !create.isPending && onClose()}
+            >
               Cancel
             </Button>
           </div>

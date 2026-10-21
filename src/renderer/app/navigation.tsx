@@ -16,8 +16,11 @@ export type SettingsSection =
   | 'account'
   | 'devices'
   | 'about';
+export type RepoShow = 'all' | 'changed' | 'ahead' | 'behind' | 'problems';
 export type Route =
-  | { name: 'home' | 'repositories' | 'pulls' | 'issues' }
+  | { name: 'home' | 'pulls' | 'issues' }
+  // `show` lets Home's statistics open the list already filtered.
+  | { name: 'repositories'; show?: RepoShow }
   // A registered repository, by gitdesk's id; the path stays in main.
   | { name: 'repository'; id: string }
   | { name: 'settings'; section: SettingsSection; row?: string };

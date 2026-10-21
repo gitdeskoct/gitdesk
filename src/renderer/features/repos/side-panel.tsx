@@ -5,20 +5,33 @@ import { Button } from '../../components/ui/button';
 import { Tooltip } from '../../components/ui/tooltip';
 
 // A non-modal panel docked to the right of the page body: the page stays readable and usable
-// beside it, and Escape or the close button puts it away. Focus moves in when it opens.
+// beside it, and Escape or the close button puts it away. Focus moves in when it opens and goes
+// back to whatever opened it when it closes. While `locked`, work is running and closing would
+// lose its result, so the panel stays.
 export function SidePanel({
   title,
   onClose,
+  locked = false,
   children,
 }: {
   title: string;
   onClose: () => void;
+  locked?: boolean;
   children: ReactNode;
 }) {
   const id = useId();
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
-    ref.current?.querySelector<HTMLElement>('input, button:not([data-close])')?.focus();
+    const opener =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    ref.current
+      ?.querySelector<HTMLElement>('input, button:not([data-close])')
+      ?.focus();
+    return () => {
+      if (opener?.isConnected) opener.focus();
+    };
   }, []);
 
   return (
@@ -29,9 +42,9 @@ export function SidePanel({
       animate={{ opacity: 1, x: 0 }}
       transition={{ duration: 0.16, ease: 'easeOut' }}
       onKeyDown={(event) => {
-        if (event.key === 'Escape') {
+        if (event.key === 'Escape' && !event.defaultPrevented) {
           event.stopPropagation();
-          onClose();
+          if (!locked) onClose();
         }
       }}
       className="flex w-[min(420px,45%)] min-w-80 flex-none flex-col border-l border-line bg-surface"
@@ -40,13 +53,17 @@ export function SidePanel({
         <h2 id={id} className="text-[0.9375rem] font-semibold text-ink">
           {title}
         </h2>
-        <Tooltip label="Close" side="bottom">
+        <Tooltip
+          label={locked ? 'Wait for it to finish' : 'Close'}
+          side="bottom"
+        >
           <Button
             variant="ghost"
             size="icon"
             data-close
             aria-label="Close panel"
-            onClick={onClose}
+            aria-disabled={locked || undefined}
+            onClick={() => !locked && onClose()}
           >
             <X />
           </Button>

@@ -11,6 +11,7 @@ const STATUS = {
   NOT_FOUND: 404,
   NAME_TAKEN: 409,
   LIMIT_REACHED: 403,
+  PAYLOAD_TOO_LARGE: 413,
   INTERNAL: 500,
 } satisfies Record<string, ContentfulStatusCode>;
 

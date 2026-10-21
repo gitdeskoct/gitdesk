@@ -217,6 +217,27 @@ A button that starts async work shows a spinner while the work is pending.
 - The button **stays focusable** while pending, so keyboard focus is not lost.
 - The spinner SVG is `aria-hidden`. The label carries the meaning.
 
+## Toasts
+
+Short results of actions whose own UI has already closed: a menu item, a bulk action, a copy.
+
+- **Flat.** `surface` fill, `line` border, 6px corner, the menu shadow (it floats, like a menu). Bottom right, at most three.
+- **Icon plus title.** Success and danger color the icon only; the text stays `ink` and `muted`.
+- **Never a decision.** Anything that needs an answer stays inline on the page. Errors stay 8 seconds, everything else 4.
+- **F8** moves focus to the toasts (Radix default).
+
+_Why: a closed menu can't show its own spinner or error, and a result that vanishes silently reads as nothing happened._
+
+## Destructive confirmations
+
+Removing a repository from gitdesk, removing several, and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Deleting a remote also asks for its name to be typed, because it can't be undone.
+
+There are no centered modals. _Why: the CSP blocks the style tag a modal's scroll lock injects, and an inline band keeps the context visible._
+
+## Progress
+
+Long work with a known end (cloning) shows a 6px `accent` bar on a `control` track with a 4px corner, its stage, its percent and a Cancel button. Work without a known end uses the spinner.
+
 ## Focus
 
 Focus is a 2px solid `accent` outline at a 2px offset (`:focus-visible` in `globals.css`). It is never removed without a visible replacement.

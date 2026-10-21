@@ -5,6 +5,7 @@ import {
   Palette,
   GitCommitHorizontal,
   Keyboard,
+  LayoutDashboard,
   Search,
   SlidersHorizontal,
   User,
@@ -25,6 +26,7 @@ import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
 import { ShortcutsSection } from './shortcuts-section';
+import { WorkspaceSection } from './workspace-section';
 import { SECTION_LABELS, searchSettings } from './search-index';
 
 const GROUPS: {
@@ -36,6 +38,7 @@ const GROUPS: {
     items: [
       { id: 'general', icon: SlidersHorizontal },
       { id: 'appearance', icon: Palette },
+      { id: 'workspace', icon: LayoutDashboard },
       { id: 'git', icon: GitCommitHorizontal },
       { id: 'shortcuts', icon: Keyboard },
     ],
@@ -111,6 +114,7 @@ export function SettingsLayout({
   const sections: Record<SettingsSection, ReactNode> = {
     general: <GeneralSection />,
     appearance: <AppearanceSection />,
+    workspace: <WorkspaceSection />,
     git: <GitSection />,
     shortcuts: <ShortcutsSection />,
     account: <AccountSection status={status} />,

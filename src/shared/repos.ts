@@ -36,6 +36,8 @@ export type RepositorySummary = {
   availability: RepoAvailability;
   // The last successful inspection. A snapshot, never proof of the current state.
   status: RepoStatus | null;
+  // When `status` was taken. inspectedAt is the last attempt, which may have failed.
+  statusAt: number | null;
   inspectedAt: number | null;
   inspecting: boolean;
   error: string | null;
@@ -45,6 +47,8 @@ export type RepositorySummary = {
 export type ChangedFile = {
   path: string;
   kind: 'staged' | 'modified' | 'untracked' | 'conflict';
+  // Git's one-letter status for this side: M, A, D, R, C, T, ? or U.
+  code: string;
 };
 
 export type RepositoryChanges = { files: ChangedFile[]; truncated: boolean };
@@ -53,7 +57,7 @@ export type LocalActivity = {
   id: number;
   repositoryId: string;
   repositoryName: string;
-  type: 'added' | 'created' | 'opened' | 'commit';
+  type: 'added' | 'created' | 'opened' | 'commit' | 'checkout' | 'cloned';
   at: number;
   detail: string | null;
 };
@@ -80,10 +84,9 @@ export const repositoryNameSchema = z
   .refine((name) => !/\.(git|lock)$/i.test(name), {
     message: "The name can't end in .git or .lock.",
   })
-  .refine(
-    (name) => !/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(name),
-    { message: 'Windows reserves that name. Pick another.' },
-  );
+  .refine((name) => !/^(con|prn|aux|nul|com\d|lpt\d)(\..*)?$/i.test(name), {
+    message: 'Windows reserves that name. Pick another.',
+  });
 
 export const descriptionSchema = z
   .string()
@@ -114,13 +117,38 @@ export type CreateRepositoryResult = {
   readmeCommitted: boolean | null;
 };
 
-export const pinInputSchema = z.object({ id: repoIdSchema, pinned: z.boolean() });
+// Cloning from your account needs the sync transport (Git objects in R2 behind a Git-compatible
+// endpoint). Until that ships, the clone flow runs up to its final step and says why it stops.
+export const SYNC_TRANSPORT_READY = false;
+
+export const cloneInputSchema = z.object({
+  jobId: z.uuid(),
+  remoteId: z.uuid(),
+  name: repositoryNameSchema,
+  locationToken: tokenSchema,
+});
+export type CloneInput = z.infer<typeof cloneInputSchema>;
+export type CloneResult =
+  | { status: 'unavailable' }
+  | { status: 'cloned'; repository: RepositorySummary };
+export type CloneProgressEvent = {
+  jobId: string;
+  stage: string;
+  percent: number;
+};
+
+export const pinInputSchema = z.object({
+  id: repoIdSchema,
+  pinned: z.boolean(),
+});
 export const initializeInputSchema = z.object({ token: tokenSchema });
 export const refreshInputSchema = repoIdSchema.nullable();
 
 // Remote metadata from the Worker. Treated as untrusted input and validated on arrival.
 export const remoteRepositorySchema = z.object({
   id: z.string().min(1).max(64),
+  // Lenient on purpose: one legacy name must not fail a whole list. The clone step checks the
+  // folder name with repositoryNameSchema before anything is written.
   name: z.string().min(1).max(100),
   description: z.string().max(280).nullable(),
   visibility: z.enum(['private']),
@@ -130,12 +158,56 @@ export const remoteRepositorySchema = z.object({
 });
 export type RemoteRepository = z.infer<typeof remoteRepositorySchema>;
 
+// Events the Worker records for the account. repositoryId is null once the repository is deleted.
+export const remoteActivitySchema = z.object({
+  id: z.string().min(1).max(64),
+  type: z.enum([
+    'repository.created',
+    'repository.updated',
+    'repository.deleted',
+  ]),
+  repositoryId: z.string().max(64).nullable(),
+  repositoryName: z.string().min(1).max(100),
+  createdAt: z.number(),
+});
+export type RemoteActivity = z.infer<typeof remoteActivitySchema>;
+
+export type RemotePage = {
+  repositories: RemoteRepository[];
+  nextCursor: string | null;
+};
+
+export const remoteListInputSchema = z.object({
+  sort: z.enum(['updated', 'name']),
+  cursor: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,400}$/)
+    .nullable(),
+});
+export type RemoteListInput = z.infer<typeof remoteListInputSchema>;
+
+export const remoteUpdateInputSchema = z
+  .object({
+    id: z.uuid(),
+    name: repositoryNameSchema.optional(),
+    description: descriptionSchema.nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (input) => input.name !== undefined || input.description !== undefined,
+    {
+      message: 'Change the name or the description.',
+    },
+  );
+export type RemoteUpdateInput = z.infer<typeof remoteUpdateInputSchema>;
+
 export type RemoteOverview = {
   // signed-out: no account. live: fetched this session. cached: last known, with fetchedAt.
   // never: signed in, nothing fetched yet (manual refresh mode or still loading).
   state: 'signed-out' | 'live' | 'cached' | 'never';
   total: number | null;
   recent: RemoteRepository[];
+  activity: RemoteActivity[];
   fetchedAt: number | null;
   // Why the last attempt failed, if it did. The cached data stays visible.
   error: 'offline' | 'rate-limited' | 'failed' | null;
@@ -164,7 +236,13 @@ export const REPOS_IPC = {
   linkRemote: 'repos:link-remote',
   activity: 'repos:activity',
   changed: 'repos:changed',
+  clone: 'repos:clone',
+  cloneCancel: 'repos:clone-cancel',
+  cloneProgress: 'repos:clone-progress',
   remoteOverview: 'remote:overview',
+  remoteList: 'remote:list',
+  remoteUpdate: 'remote:update',
+  remoteDelete: 'remote:delete',
 } as const;
 
 export interface ReposApi {
@@ -185,5 +263,12 @@ export interface ReposApi {
   linkRemote(id: string): Promise<RemoteRepository>;
   activity(): Promise<LocalActivity[]>;
   remoteOverview(force: boolean): Promise<RemoteOverview>;
+  remoteList(input: RemoteListInput): Promise<RemotePage>;
+  remoteUpdate(input: RemoteUpdateInput): Promise<RemoteRepository>;
+  // Deletes the remote for good; local repositories linked to it are unlinked, never deleted.
+  remoteDelete(id: string): Promise<void>;
+  clone(input: CloneInput): Promise<CloneResult>;
+  cancelClone(jobId: string): Promise<void>;
+  onCloneProgress(callback: (event: CloneProgressEvent) => void): () => void;
   onChanged(callback: (repositories: RepositorySummary[]) => void): () => void;
 }

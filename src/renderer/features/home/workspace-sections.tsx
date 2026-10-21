@@ -2,6 +2,10 @@ import {
   ArrowDown,
   ArrowUp,
   CircleAlert,
+  Clock,
+  CloudDownload,
+  CloudOff,
+  Cloud,
   FolderOpen,
   FolderPlus,
   FolderX,
@@ -11,27 +15,47 @@ import {
   Pencil,
   type LucideIcon,
 } from 'lucide-react';
-import type { LocalActivity, RepositorySummary } from '../../../shared/repos';
-import { ActivityArt } from '../../components/illustrations';
+import { useState } from 'react';
+import type {
+  LocalActivity,
+  RemoteActivity,
+  RemoteOverview,
+  RepositorySummary,
+} from '../../../shared/repos';
+import { ActivityArt, OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
-import { InlineStatus } from '../../components/ui/status';
+import { InlineStatus, Loading } from '../../components/ui/status';
+import { useToast } from '../../components/ui/toast';
 import { relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { changeCount, type Attention } from '../../lib/repo-status';
-import { useInitializeRepository, useRepositoryActivity } from '../../lib/queries';
+import {
+  useInitializeRepository,
+  useLocateRepository,
+  useRefreshRemote,
+  useRepositoryActivity,
+} from '../../lib/queries';
 import { useWorkspaceUi } from '../../app/workspace-ui';
-import { useOpenRepo } from '../repos/repo-row';
+import { RemoveConfirm, useOpenRepo } from '../repos/repo-row';
+
+const count = (n: number | null | undefined, one: string, many: string) =>
+  `${n ?? 0} ${n === 1 ? one : many}`;
 
 const ATTENTION: Record<
   Attention['kind'],
-  { icon: LucideIcon; tone: string; text: (repo: RepositorySummary) => string; detail: string }
+  {
+    icon: LucideIcon;
+    tone: string;
+    text: (repo: RepositorySummary) => string;
+    detail: string;
+  }
 > = {
   missing: {
     icon: FolderX,
     tone: 'text-danger',
     text: (r) => `${r.name}'s folder can't be found`,
-    detail: 'It was moved or deleted. Locate it again or remove it from gitdesk.',
+    detail: 'It was moved or deleted.',
   },
   'not-a-repo': {
     icon: CircleAlert,
@@ -48,7 +72,8 @@ const ATTENTION: Record<
   conflict: {
     icon: GitMerge,
     tone: 'text-danger',
-    text: (r) => `${r.name} has ${r.status?.conflicts} unresolved conflicts`,
+    text: (r) =>
+      `${r.name} has ${count(r.status?.conflicts, 'unresolved conflict', 'unresolved conflicts')}`,
     detail: 'Resolve them before you commit.',
   },
   operation: {
@@ -66,60 +91,217 @@ const ATTENTION: Record<
   behind: {
     icon: ArrowDown,
     tone: 'text-warning',
-    text: (r) => `${r.name} is ${r.status?.behind} behind its upstream`,
+    text: (r) =>
+      `${r.name} is ${count(r.status?.behind, 'commit', 'commits')} behind its upstream`,
     detail: 'Compared with the last fetched upstream.',
   },
   changed: {
     icon: Pencil,
     tone: 'text-warning',
-    text: (r) => `${r.name} has ${changeCount(r.status)} uncommitted changes`,
+    text: (r) =>
+      `${r.name} has ${count(changeCount(r.status), 'uncommitted change', 'uncommitted changes')}`,
     detail: 'Staged, modified or untracked files.',
   },
   ahead: {
     icon: ArrowUp,
     tone: 'text-accent',
-    text: (r) => `${r.name} has ${r.status?.ahead} commits to push`,
+    text: (r) =>
+      `${r.name} has ${count(r.status?.ahead, 'commit', 'commits')} to push`,
     detail: 'Ahead of its known upstream.',
+  },
+  'no-upstream': {
+    icon: CloudOff,
+    tone: 'text-muted',
+    text: (r) =>
+      `${r.status?.branch ?? 'This branch'} in ${r.name} has no upstream`,
+    detail: "The repository has a remote, but this branch isn't tracking it.",
   },
 };
 
-export function AttentionList({ items, limit = 6 }: { items: Attention[]; limit?: number }) {
+function AttentionRow({ repo, kind }: Attention) {
   const openRepo = useOpenRepo();
+  const locate = useLocateRepository();
+  const toast = useToast();
+  const [confirming, setConfirming] = useState(false);
+  const entry = ATTENTION[kind];
+  const lost = kind === 'missing' || kind === 'not-a-repo';
+  return (
+    <li className="border-b border-line">
+      <div className="flex items-center gap-3 py-2.5">
+        <entry.icon aria-hidden className={`size-4 shrink-0 ${entry.tone}`} />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[0.84375rem] font-medium text-ink">
+            {entry.text(repo)}
+          </div>
+          <div className="truncate text-xs text-muted">{entry.detail}</div>
+        </div>
+        {lost ? (
+          <div className="flex gap-1.5">
+            <Button
+              size="sm"
+              pending={locate.isPending}
+              onClick={() =>
+                locate.mutate(repo.id, {
+                  onError: (err) =>
+                    toast({
+                      tone: 'danger',
+                      title: "Couldn't use that folder",
+                      description: ipcErrorMessage(
+                        err,
+                        'Pick the folder that holds the repository.',
+                      ),
+                    }),
+                })
+              }
+            >
+              Locate
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setConfirming(true)}
+            >
+              Remove
+            </Button>
+          </div>
+        ) : (
+          <Button size="sm" onClick={() => openRepo(repo.id)}>
+            Open
+          </Button>
+        )}
+      </div>
+      {confirming && (
+        <RemoveConfirm repo={repo} onCancel={() => setConfirming(false)} />
+      )}
+    </li>
+  );
+}
+
+export function AttentionList({
+  items,
+  remote,
+  limit = 6,
+}: {
+  items: Attention[];
+  remote: RemoteOverview | undefined;
+  limit?: number;
+}) {
+  const refresh = useRefreshRemote();
+  // Ahead and behind are only as fresh as the last fetch, so stale remote data is itself worth saying.
+  const stale = remote && remote.state === 'cached' && remote.fetchedAt;
   return (
     <ul className="border-t border-line">
-      {items.slice(0, limit).map(({ repo, kind }) => {
-        const entry = ATTENTION[kind];
-        return (
-          <li key={repo.id} className="flex items-center gap-3 border-b border-line py-2.5">
-            <entry.icon aria-hidden className={`size-4 shrink-0 ${entry.tone}`} />
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-[0.84375rem] font-medium text-ink">
-                {entry.text(repo)}
-              </div>
-              <div className="truncate text-xs text-muted">{entry.detail}</div>
+      {stale && (
+        <li className="flex items-center gap-3 border-b border-line py-2.5">
+          <Clock aria-hidden className="size-4 shrink-0 text-warning" />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[0.84375rem] font-medium text-ink">
+              Remote details are from {relativeTime(remote.fetchedAt!)}
             </div>
-            <Button size="sm" onClick={() => openRepo(repo.id)}>
-              Open
-            </Button>
-          </li>
-        );
-      })}
+            <div className="truncate text-xs text-muted">
+              {remote.error === 'offline'
+                ? "You're offline."
+                : "The server didn't answer."}{' '}
+              Counts may have changed since.
+            </div>
+          </div>
+          <Button
+            size="sm"
+            pending={refresh.isPending}
+            onClick={() => refresh.mutate()}
+          >
+            Retry
+          </Button>
+        </li>
+      )}
+      {items.slice(0, limit).map((item) => (
+        <AttentionRow key={item.repo.id} {...item} />
+      ))}
     </ul>
   );
 }
 
-const ACTIVITY: Record<LocalActivity['type'], { icon: LucideIcon; label: string }> = {
+const LOCAL: Record<
+  LocalActivity['type'],
+  { icon: LucideIcon; label: string }
+> = {
   added: { icon: FolderPlus, label: 'Added to gitdesk' },
   created: { icon: FolderPlus, label: 'Created' },
+  cloned: { icon: CloudDownload, label: 'Cloned' },
   opened: { icon: FolderOpen, label: 'Opened' },
   commit: { icon: GitCommitHorizontal, label: 'New commit' },
+  checkout: { icon: GitBranch, label: 'Switched to' },
 };
 
-export function ActivityList() {
+const REMOTE: Record<RemoteActivity['type'], string> = {
+  'repository.created': 'Remote created',
+  'repository.updated': 'Remote details changed',
+  'repository.deleted': 'Remote deleted',
+};
+
+type Entry = {
+  key: string;
+  name: string;
+  icon: LucideIcon;
+  text: string;
+  at: number;
+  source: string;
+};
+
+// Local events and the account's events in one list, each labelled with where it happened.
+export function ActivityList({
+  remote,
+}: {
+  remote: RemoteOverview | undefined;
+}) {
   const activity = useRepositoryActivity();
   const { addRepository, adding } = useWorkspaceUi();
-  if (activity.isPending) return null;
-  if (!activity.data?.length)
+  if (activity.isPending) return <Loading label="Loading activity…" />;
+  if (activity.isError)
+    return (
+      <EmptyState
+        compact
+        art={<OfflineArt />}
+        title="Couldn't load activity"
+        action={
+          <Button
+            size="sm"
+            pending={activity.isFetching}
+            onClick={() => void activity.refetch()}
+          >
+            Try again
+          </Button>
+        }
+      >
+        {ipcErrorMessage(
+          activity.error,
+          'gitdesk could not read its local activity log.',
+        )}
+      </EmptyState>
+    );
+
+  const entries: Entry[] = [
+    ...activity.data.map((item) => ({
+      key: `local:${item.id}`,
+      name: item.repositoryName,
+      icon: LOCAL[item.type].icon,
+      text: `${LOCAL[item.type].label}${item.detail ? `: ${item.detail}` : ''}`,
+      at: item.at,
+      source: 'This computer',
+    })),
+    ...(remote?.activity ?? []).map((item) => ({
+      key: `remote:${item.id}`,
+      name: item.repositoryName,
+      icon: Cloud,
+      text: REMOTE[item.type],
+      at: item.createdAt,
+      source: 'Your account',
+    })),
+  ]
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 6);
+
+  if (!entries.length)
     return (
       <EmptyState
         compact
@@ -136,23 +318,22 @@ export function ActivityList() {
     );
   return (
     <ul className="border-t border-line">
-      {activity.data.slice(0, 6).map((item) => {
-        const entry = ACTIVITY[item.type];
-        return (
-          <li key={item.id} className="flex gap-3 border-b border-line py-2.5">
-            <entry.icon aria-hidden className="mt-0.5 size-4 shrink-0 text-muted" />
-            <div className="min-w-0">
-              <div className="truncate text-[0.84375rem] font-medium text-ink">
-                {item.repositoryName}
-              </div>
-              <div className="truncate text-xs text-muted" title={item.detail ?? undefined}>
-                {entry.label}
-                {item.detail ? `: ${item.detail}` : ''} · {relativeTime(item.at)}
-              </div>
+      {entries.map((entry) => (
+        <li key={entry.key} className="flex gap-3 border-b border-line py-2.5">
+          <entry.icon
+            aria-hidden
+            className="mt-0.5 size-4 shrink-0 text-muted"
+          />
+          <div className="min-w-0">
+            <div className="truncate text-[0.84375rem] font-medium text-ink">
+              {entry.name}
             </div>
-          </li>
-        );
-      })}
+            <div className="truncate text-xs text-muted" title={entry.text}>
+              {entry.text} · {relativeTime(entry.at)} · {entry.source}
+            </div>
+          </div>
+        </li>
+      ))}
     </ul>
   );
 }
@@ -175,19 +356,6 @@ export function AddNotice() {
         }
       >
         {notice.message}
-      </InlineStatus>
-    );
-  if (notice.kind === 'exists')
-    return (
-      <InlineStatus
-        className="mb-6"
-        action={
-          <Button size="sm" variant="ghost" onClick={dismissNotice}>
-            Dismiss
-          </Button>
-        }
-      >
-        {notice.name} was already in gitdesk.
       </InlineStatus>
     );
   return (
@@ -216,8 +384,8 @@ export function AddNotice() {
         </div>
       }
     >
-      <span className="font-mono text-[0.8125rem]">{notice.displayPath}</span> isn't a
-      Git repository.
+      <span className="font-mono text-[0.8125rem]">{notice.displayPath}</span>{' '}
+      isn't a Git repository.
       {initialize.isError && (
         <span className="mt-1 block text-danger">
           {ipcErrorMessage(initialize.error, "Couldn't initialize Git there.")}

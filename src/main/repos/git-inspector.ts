@@ -2,7 +2,7 @@ import { existsSync, realpath } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
-import { simpleGit, type SimpleGit } from 'simple-git';
+import { simpleGit, type SimpleGit, type SimpleGitOptions } from 'simple-git';
 import type { RepoStatus, RepositoryChanges } from '../../shared/repos';
 import { UserError } from '../errors';
 import { parseLastCommit, parseStatus } from './git-status';
@@ -56,15 +56,35 @@ function gitEnv(): Record<string, string> {
   };
 }
 
+// A repository's own .git/config can name programs Git runs during ordinary reads: core.fsmonitor
+// runs on `git status` and gpg.program on `git log` when log.showSignature is set. Command-line -c
+// beats repository config, so these are turned off for every command gitdesk runs.
+export const SAFE_CONFIG = ['core.fsmonitor=false', 'log.showSignature=false'];
+
 // Read-only and non-interactive: optional locks off so a background status never blocks your
 // editor's commit on index.lock, no credential prompts, a hard timeout, no shell. Arguments are
 // fixed here; nothing from the renderer reaches a Git command line.
-export function gitAt(dir: string): SimpleGit {
+export function gitAt(
+  dir: string,
+  options: Pick<SimpleGitOptions, 'abort' | 'progress'> & {
+    config?: string[];
+    allowProtocolOverride?: boolean;
+  } = {},
+): SimpleGit {
   return simpleGit({
     baseDir: dir,
     maxConcurrentProcesses: 2,
     timeout: { block: TIMEOUT_MS },
     trimmed: false,
+    config: [...SAFE_CONFIG, ...(options.config ?? [])],
+    abort: options.abort,
+    progress: options.progress,
+    // simple-git refuses any core.fsmonitor or protocol.* override; these opt-ins only admit the
+    // fixed values gitdesk sets itself, which switch those features off or narrow them.
+    unsafe: {
+      allowUnsafeFsMonitor: true,
+      allowUnsafeProtocolOverride: options.allowProtocolOverride ?? false,
+    },
     // simple-git blocks GIT_* variables unless named; these are the only ones gitdesk sets.
     allowEnvironment: [
       'GIT_OPTIONAL_LOCKS',
@@ -88,7 +108,7 @@ export function describeGitError(err: unknown): string {
     return "Git doesn't trust this folder's owner. Add it to safe.directory to use it.";
   if (/timed? ?out|block timeout/i.test(text))
     return 'Git took too long to answer.';
-  if (/not a git repository/i.test(text))
+  if (/not a git repository|must be run in a work tree/i.test(text))
     return "This folder isn't a Git repository.";
   return "Git couldn't read this repository.";
 }
@@ -112,22 +132,28 @@ export type RootResult =
 
 // The selected folder may be a subfolder: Git reports the real working-tree root.
 export async function resolveRoot(dir: string): Promise<RootResult> {
-  const git = gitAt(dir);
   try {
+    // Inside the try: simple-git throws on construction when the folder vanished after picking.
+    const git = gitAt(dir);
     const bare = (await git.raw(['rev-parse', '--is-bare-repository'])).trim();
     if (bare === 'true') return { kind: 'bare' };
     const top = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
     if (!top) return { kind: 'not-a-repository' };
     return { kind: 'repository', root: await canonicalPath(top) };
   } catch (err) {
-    if (/not a git repository/i.test(String(err)))
+    // Picking the .git folder itself reports "must be run in a work tree".
+    if (/not a git repository|must be run in a work tree/i.test(String(err)))
       return { kind: 'not-a-repository' };
     throw new GitError(describeGitError(err));
   }
 }
 
 export type Inspection =
-  | { availability: 'missing' | 'not-a-repo'; status: null; error: string | null }
+  | {
+      availability: 'missing' | 'not-a-repo';
+      status: null;
+      error: string | null;
+    }
   | { availability: 'available'; status: RepoStatus; error: null };
 
 const OPERATION_FILES = [
@@ -155,9 +181,14 @@ export async function inspect(root: string): Promise<Inspection> {
   const git = gitAt(root);
   let raw: string;
   try {
+    // If this folder's own .git is gone but it sits inside another repository, Git would happily
+    // report the parent's status. The top level must still be the registered root.
+    const top = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
+    if (!top || pathKey(await canonicalPath(top)) !== pathKey(root))
+      return { availability: 'not-a-repo', status: null, error: null };
     raw = await git.raw(STATUS_ARGS);
   } catch (err) {
-    if (/not a git repository/i.test(String(err)))
+    if (/not a git repository|must be run in a work tree/i.test(String(err)))
       return { availability: 'not-a-repo', status: null, error: null };
     throw new GitError(describeGitError(err));
   }

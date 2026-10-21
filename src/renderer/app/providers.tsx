@@ -5,6 +5,7 @@ import {
 } from '@tanstack/react-query';
 import { MotionConfig } from 'framer-motion';
 import { useEffect, useState, type ReactNode } from 'react';
+import { ToastProvider } from '../components/ui/toast';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { keys, repoKeys, useSettings } from '../lib/queries';
 import { NavigationProvider } from './navigation';
@@ -71,9 +72,11 @@ export function Providers({ children }: { children: ReactNode }) {
       <RepoSync />
       <Appearance>
         <TooltipProvider delayDuration={300}>
-          <NavigationProvider>
-            <WorkspaceUiProvider>{children}</WorkspaceUiProvider>
-          </NavigationProvider>
+          <ToastProvider>
+            <NavigationProvider>
+              <WorkspaceUiProvider>{children}</WorkspaceUiProvider>
+            </NavigationProvider>
+          </ToastProvider>
         </TooltipProvider>
       </Appearance>
     </QueryClientProvider>

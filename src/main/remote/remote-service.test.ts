@@ -4,7 +4,11 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthStatus } from '../../shared/ipc';
 import { DEFAULT_SETTINGS, type Settings } from '../../shared/settings';
-import { ApiRequestError, NetworkError, type ApiClient } from '../auth/api-client';
+import {
+  ApiRequestError,
+  NetworkError,
+  type ApiClient,
+} from '../auth/api-client';
 import { openDatabase, type AppDatabase } from '../db/database';
 import { createRepositoryStore } from '../repos/repository-store';
 import {
@@ -14,7 +18,12 @@ import {
   RETRY_GAP_MS,
 } from './remote-service';
 
-const account = { id: 'acct-1', displayName: 'Ada', email: 'a@x.dev', avatarUrl: null };
+const account = {
+  id: 'acct-1',
+  displayName: 'Ada',
+  email: 'a@x.dev',
+  avatarUrl: null,
+};
 const repo = (id: string) => ({
   id,
   name: id,
@@ -56,7 +65,12 @@ beforeEach(() => {
   settings = { ...DEFAULT_SETTINGS };
   dashboardOverview.mockReset();
   createRepository.mockReset();
-  dashboardOverview.mockResolvedValue({ total: 3, recent: [repo('a')], serverTime: time });
+  dashboardOverview.mockResolvedValue({
+    total: 3,
+    recent: [repo('a')],
+    recentActivity: [],
+    serverTime: time,
+  });
 });
 afterEach(() => {
   db.close();
@@ -66,7 +80,10 @@ afterEach(() => {
 describe('remote overview throttle', () => {
   it('fetches once, then serves the cache until the automatic gap passes', async () => {
     const remote = setup();
-    expect(await remote.overview(false)).toMatchObject({ state: 'live', total: 3 });
+    expect(await remote.overview(false)).toMatchObject({
+      state: 'live',
+      total: 3,
+    });
     time += AUTO_GAP_MS - 1;
     await remote.overview(false);
     expect(dashboardOverview).toHaveBeenCalledTimes(1);
@@ -77,7 +94,11 @@ describe('remote overview throttle', () => {
 
   it('shares one request between concurrent callers', async () => {
     const remote = setup();
-    await Promise.all([remote.overview(false), remote.overview(true), remote.overview(false)]);
+    await Promise.all([
+      remote.overview(false),
+      remote.overview(true),
+      remote.overview(false),
+    ]);
     expect(dashboardOverview).toHaveBeenCalledTimes(1);
   });
 
@@ -106,7 +127,11 @@ describe('remote overview throttle', () => {
     dashboardOverview.mockRejectedValue(new NetworkError());
     time += AUTO_GAP_MS;
     const result = await remote.overview(false);
-    expect(result).toMatchObject({ state: 'cached', total: 3, error: 'offline' });
+    expect(result).toMatchObject({
+      state: 'cached',
+      total: 3,
+      error: 'offline',
+    });
     expect(result.recent.map((r) => r.id)).toEqual(['a']);
     // A failed attempt waits the retry gap before trying again.
     time += RETRY_GAP_MS - 1;
@@ -115,15 +140,22 @@ describe('remote overview throttle', () => {
   });
 
   it('reports rate limiting from the server', async () => {
-    dashboardOverview.mockRejectedValue(new ApiRequestError('RATE_LIMITED', 429));
+    dashboardOverview.mockRejectedValue(
+      new ApiRequestError('RATE_LIMITED', 429),
+    );
     const remote = setup();
-    expect(await remote.overview(false)).toMatchObject({ error: 'rate-limited' });
+    expect(await remote.overview(false)).toMatchObject({
+      error: 'rate-limited',
+    });
   });
 
   it('does not call the server while offline or signed out', async () => {
     status = { status: 'offline', account };
     const remote = setup();
-    expect(await remote.overview(true)).toMatchObject({ state: 'never', error: 'offline' });
+    expect(await remote.overview(true)).toMatchObject({
+      state: 'never',
+      error: 'offline',
+    });
     status = { status: 'signed-out' };
     expect(await remote.overview(true)).toMatchObject({ state: 'signed-out' });
     expect(dashboardOverview).not.toHaveBeenCalled();
@@ -136,7 +168,10 @@ describe('remote overview throttle', () => {
     remote.handleAuth(status);
     status = { status: 'authenticated', account, persistence: 'secure' };
     settings = { ...settings, remoteRefresh: 'manual' };
-    expect(await remote.overview(false)).toMatchObject({ state: 'never', recent: [] });
+    expect(await remote.overview(false)).toMatchObject({
+      state: 'never',
+      recent: [],
+    });
   });
 
   it('never shows one account the cache of another', async () => {
@@ -148,7 +183,10 @@ describe('remote overview throttle', () => {
       persistence: 'secure',
     };
     settings = { ...settings, remoteRefresh: 'manual' };
-    expect(await remote.overview(false)).toMatchObject({ state: 'never', total: null });
+    expect(await remote.overview(false)).toMatchObject({
+      state: 'never',
+      total: null,
+    });
   });
 
   it('counts requests for the day', async () => {
@@ -162,8 +200,82 @@ describe('remote overview throttle', () => {
   it('turns server errors on create into readable messages', async () => {
     createRepository.mockRejectedValue(new ApiRequestError('NAME_TAKEN', 409));
     const remote = setup();
-    await expect(remote.create({ name: 'a', description: null })).rejects.toThrow(
-      'already exists',
+    await expect(
+      remote.create({ name: 'a', description: null }, 'key-1'),
+    ).rejects.toThrow('already exists');
+    createRepository.mockRejectedValue(
+      new ApiRequestError('LIMIT_REACHED', 403),
     );
+    await expect(
+      remote.create({ name: 'a', description: null }, 'key-1'),
+    ).rejects.toThrow('reached its limit');
+  });
+
+  it('sends the idempotency key with a create', async () => {
+    createRepository.mockResolvedValue({ repository: repo('b') });
+    await setup().create({ name: 'b', description: null }, 'key-7');
+    expect(createRepository).toHaveBeenCalledWith(
+      'token',
+      { name: 'b', description: null },
+      'key-7',
+    );
+  });
+
+  it('does not invent a total when nothing was fetched yet', async () => {
+    settings = { ...settings, remoteRefresh: 'manual' };
+    createRepository.mockResolvedValue({ repository: repo('b') });
+    const remote = setup();
+    await remote.create({ name: 'b', description: null }, 'key-1');
+    expect(await remote.overview(false)).toMatchObject({
+      state: 'never',
+      total: null,
+    });
+  });
+
+  it('adds a created repository to an existing cache without moving its fetch time', async () => {
+    const remote = setup();
+    const before = await remote.overview(false);
+    createRepository.mockResolvedValue({ repository: repo('b') });
+    time += 5_000;
+    await remote.create({ name: 'b', description: null }, 'key-1');
+    const after = await remote.overview(false);
+    expect(after).toMatchObject({ total: 4, fetchedAt: before.fetchedAt });
+    expect(after.recent.map((r) => r.id)).toContain('b');
+  });
+
+  it('drops an overview that lands after sign-out', async () => {
+    let finish!: (value: unknown) => void;
+    dashboardOverview.mockReturnValue(
+      new Promise((resolve) => (finish = resolve)),
+    );
+    const remote = setup();
+    const pending = remote.overview(false);
+    status = { status: 'signed-out' };
+    remote.handleAuth(status);
+    finish({
+      total: 9,
+      recent: [repo('z')],
+      recentActivity: [],
+      serverTime: time,
+    });
+    await pending;
+    status = { status: 'authenticated', account, persistence: 'secure' };
+    settings = { ...settings, remoteRefresh: 'manual' };
+    expect(await remote.overview(false)).toMatchObject({
+      state: 'never',
+      total: null,
+      recent: [],
+    });
+  });
+
+  it('makes no remote calls while gitdesk is set to local-only', async () => {
+    settings = { ...settings, localOnly: true };
+    const remote = setup();
+    expect(await remote.overview(true)).toMatchObject({ state: 'signed-out' });
+    await expect(
+      remote.create({ name: 'a', description: null }, 'key-1'),
+    ).rejects.toThrow('without an account');
+    expect(dashboardOverview).not.toHaveBeenCalled();
+    expect(createRepository).not.toHaveBeenCalled();
   });
 });

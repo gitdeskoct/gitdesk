@@ -3,6 +3,7 @@ import { cn } from '../../lib/cn';
 
 // One drawing, one sentence, one action, always in that order. The full form fills the workspace
 // body so it sits in the optical center; the compact form is for side columns and panels.
+// `action` is required: an empty view is a prompt to act (DESIGN.md › Empty states).
 export function EmptyState({
   art,
   title,
@@ -14,7 +15,7 @@ export function EmptyState({
   art: ReactNode;
   title: string;
   children: ReactNode;
-  action?: ReactNode;
+  action: ReactNode;
   compact?: boolean;
   className?: string;
 }) {

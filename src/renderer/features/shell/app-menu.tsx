@@ -32,6 +32,8 @@ import {
   useSignOut,
 } from '../../lib/queries';
 import { modLabel, shortcutText, type ShortcutId } from '../../lib/shortcuts';
+import { useToast } from '../../components/ui/toast';
+import { ipcErrorMessage } from '../../lib/ipc-error';
 import { accountOf } from './account-menu';
 
 const contentClass =
@@ -115,6 +117,14 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
   const signIn = useSignIn();
   const signOut = useSignOut();
   const openLogs = useOpenLogs();
+  const toast = useToast();
+  // Menu items close on select, so a failure has to be reported somewhere that stays.
+  const failed = (title: string) => (err: unknown) =>
+    toast({
+      tone: 'danger',
+      title,
+      description: ipcErrorMessage(err, 'Try again in a moment.'),
+    });
   const lastFocus = useRef<HTMLElement | null>(null);
   const signedIn = !!accountOf(status);
   const hint = (id: ShortcutId) => shortcutText(id);
@@ -146,13 +156,21 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
           <Item
             icon={LogOut}
             label="Sign out"
-            onSelect={() => signOut.mutate()}
+            onSelect={() =>
+              signOut.mutate(undefined, {
+                onError: failed("Couldn't sign out"),
+              })
+            }
           />
         ) : (
           <Item
             icon={LogIn}
             label="Sign in with Google"
-            onSelect={() => signIn.mutate()}
+            onSelect={() =>
+              signIn.mutate(undefined, {
+                onError: failed("Couldn't start sign-in"),
+              })
+            }
           />
         )}
         <Separator />
@@ -236,7 +254,11 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
         <Item
           icon={FolderOpen}
           label="Open logs folder"
-          onSelect={() => openLogs.mutate()}
+          onSelect={() =>
+            openLogs.mutate(undefined, {
+              onError: failed("Couldn't open the logs folder"),
+            })
+          }
         />
         {inShell && (
           <>

@@ -39,9 +39,9 @@ export function parseStatus(output: string): ParsedStatus {
     files: [],
     truncated: false,
   };
-  const add = (path: string, kind: ChangedFile['kind']) => {
+  const add = (path: string, kind: ChangedFile['kind'], code: string) => {
     if (status.files.length < MAX_FILES)
-      status.files.push({ path: clip(path), kind });
+      status.files.push({ path: clip(path), kind, code });
     else status.truncated = true;
   };
 
@@ -74,12 +74,12 @@ export function parseStatus(output: string): ParsedStatus {
     if (type === '!') continue;
     if (type === '?') {
       status.untracked++;
-      add(pathOf(record, FIELDS_BEFORE_PATH['?']), 'untracked');
+      add(pathOf(record, FIELDS_BEFORE_PATH['?']), 'untracked', '?');
       continue;
     }
     if (type === 'u') {
       status.conflicts++;
-      add(pathOf(record, FIELDS_BEFORE_PATH.u), 'conflict');
+      add(pathOf(record, FIELDS_BEFORE_PATH.u), 'conflict', 'U');
       continue;
     }
     if (type === '1' || type === '2') {
@@ -87,11 +87,11 @@ export function parseStatus(output: string): ParsedStatus {
       const path = pathOf(record, FIELDS_BEFORE_PATH[type]);
       if (x && x !== '.') {
         status.staged++;
-        add(path, 'staged');
+        add(path, 'staged', x);
       }
       if (y && y !== '.') {
         status.unstaged++;
-        add(path, 'modified');
+        add(path, 'modified', y);
       }
       if (type === '2') i++; // skip the original path of the rename or copy
     }

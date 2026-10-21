@@ -1,8 +1,23 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from 'vitest';
 import { DEFAULT_SETTINGS } from '../../shared/settings';
 import { openDatabase } from '../db/database';
 import { UserError } from '../errors';
@@ -119,13 +134,17 @@ describe('repository service', () => {
     await service.refresh(added.repository.id);
 
     const [repo] = service.list();
-    expect(repo?.status).toMatchObject({ staged: 1, unstaged: 1, untracked: 1 });
+    expect(repo?.status).toMatchObject({
+      staged: 1,
+      unstaged: 1,
+      untracked: 1,
+    });
     const changes = await service.changes(added.repository.id);
     expect(changes.files).toEqual(
       expect.arrayContaining([
-        { path: 'new.txt', kind: 'staged' },
-        { path: 'README.md', kind: 'modified' },
-        { path: 'untracked.txt', kind: 'untracked' },
+        { path: 'new.txt', kind: 'staged', code: 'A' },
+        { path: 'README.md', kind: 'modified', code: 'M' },
+        { path: 'untracked.txt', kind: 'untracked', code: '?' },
       ]),
     );
   });
@@ -137,12 +156,102 @@ describe('repository service', () => {
     const added = await service.add();
     if (added.status !== 'added') throw new Error('not added');
 
+    const statusAt = service.list()[0]?.statusAt;
+    expect(statusAt).toBeTypeOf('number');
     rmSync(root, { recursive: true, force: true });
-    await service.refresh(null);
+    await service.refresh(added.repository.id);
 
     const [repo] = service.list();
     expect(repo?.availability).toBe('missing');
     expect(repo?.status?.branch).toBe('main');
+    // The failed check is recorded, but the snapshot keeps its own, older time.
+    expect(repo?.statusAt).toBe(statusAt);
+    expect(repo!.inspectedAt!).toBeGreaterThanOrEqual(statusAt!);
+  });
+
+  // A downloaded repository's .git/config is untrusted: reading its status must not run its programs.
+  it("does not run a repository's core.fsmonitor command", async () => {
+    const root = makeRepo('hostile');
+    const marker = path.join(dir, 'fsmonitor-ran');
+    git(
+      root,
+      'config',
+      'core.fsmonitor',
+      `echo ran > "${marker.replace(/\\/g, '/')}" #`,
+    );
+    // Sanity check: plain Git does run it, so the test would catch a regression.
+    git(root, 'status', '--porcelain=v2');
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    picked = root;
+    const { service } = setup();
+    const added = await service.add();
+    if (added.status !== 'added') throw new Error('not added');
+    await service.refresh(added.repository.id);
+    await service.changes(added.repository.id);
+
+    expect(service.list()[0]?.status?.branch).toBe('main');
+    expect(existsSync(marker)).toBe(false);
+  });
+
+  it('stops trusting a folder whose .git is gone, even inside another repository', async () => {
+    const outer = makeRepo('outer');
+    const inner = path.join(outer, 'inner');
+    mkdirSync(inner);
+    git(inner, 'init', '-q', '-b', 'main');
+    picked = inner;
+    const { service } = setup();
+    const added = await service.add();
+    if (added.status !== 'added') throw new Error('not added');
+
+    rmSync(path.join(inner, '.git'), { recursive: true, force: true });
+    await service.refresh(added.repository.id);
+
+    expect(service.list()[0]?.availability).toBe('not-a-repo');
+  });
+
+  it('ends on the located folder even when an older check is still running', async () => {
+    const root = makeRepo('app');
+    picked = root;
+    const { service } = setup();
+    const added = await service.add();
+    if (added.status !== 'added') throw new Error('not added');
+
+    const moved = path.join(dir, 'moved');
+    renameSync(root, moved);
+    const stale = service.refresh(added.repository.id);
+    picked = moved;
+    await service.locate(added.repository.id);
+    await stale;
+
+    const [repo] = service.list();
+    expect(repo?.availability).toBe('available');
+    expect(repo?.displayPath).toContain('moved');
+  });
+
+  it('reports clone as unavailable without spending the folder choice', async () => {
+    picked = dir;
+    const { service } = setup();
+    const location = await service.chooseLocation();
+    if (!location) throw new Error('no location');
+
+    const result = await service.clone({
+      jobId: '6f1c1b52-6d0c-4b8e-9d0e-3d1f1b2a4c5d',
+      remoteId: '0b6f2d43-1c3a-4f6e-8a9b-7c2d1e0f3a4b',
+      name: 'from-remote',
+      locationToken: location.token,
+    });
+    expect(result).toEqual({ status: 'unavailable' });
+    // The same token still works for something else.
+    await expect(
+      service.create({
+        name: 'still-mine',
+        locationToken: location.token,
+        readme: false,
+        remote: false,
+      }),
+    ).resolves.toBeTruthy();
   });
 
   it('offers to initialize a plain folder through a one-time token', async () => {
@@ -158,7 +267,9 @@ describe('repository service', () => {
     const repo = await service.initialize(result.token);
     expect(repo.status?.branch).toBeTruthy();
     expect(existsSync(path.join(plain, '.git'))).toBe(true);
-    await expect(service.initialize(result.token)).rejects.toBeInstanceOf(UserError);
+    await expect(service.initialize(result.token)).rejects.toBeInstanceOf(
+      UserError,
+    );
   });
 
   it('creates a local repository with a committed README and no remote', async () => {
@@ -177,7 +288,9 @@ describe('repository service', () => {
 
     expect(result.remote).toEqual({ status: 'skipped' });
     expect(result.readmeCommitted).toBe(true);
-    expect(result.repository.status?.lastCommit?.subject).toBe('Initial commit');
+    expect(result.repository.status?.lastCommit?.subject).toBe(
+      'Initial commit',
+    );
     expect(git(path.join(dir, 'reading-list'), 'log', '--oneline')).toContain(
       'Initial commit',
     );
@@ -186,7 +299,9 @@ describe('repository service', () => {
 
   it('keeps the local repository and reports the remote step when the remote fails', async () => {
     picked = dir;
-    remoteCreate.mockRejectedValue(new UserError("Can't reach the gitdesk server."));
+    remoteCreate.mockRejectedValue(
+      new UserError("Can't reach the gitdesk server."),
+    );
     const { service } = setup();
     const location = await service.chooseLocation();
     if (!location) throw new Error('no location');

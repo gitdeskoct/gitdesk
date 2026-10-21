@@ -1,23 +1,59 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
+import { getDb } from '../src/db/client';
+import { repositories } from '../src/db/schema';
+import { MAX_REPOSITORIES_PER_ACCOUNT } from '../src/modules/repositories/repositories';
 import { call, fakeGoogle, postJson, signIn } from './helpers';
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
 
-type Remote = { id: string; name: string; description: string | null; visibility: string };
+type Remote = {
+  id: string;
+  name: string;
+  description: string | null;
+  visibility: string;
+  updatedAt: number;
+};
+type Page = { repositories: Remote[]; nextCursor: string | null };
+
+// AUTH_LIMITER counts sign-ins per IP, so each test signs in from its own pair of addresses.
+let nextIp = 40;
 
 async function twoAccounts() {
   const google = await fakeGoogle();
   const app = createApp({ google: google.provider });
   google.state.claims = { ...google.state.claims, sub: `owner-${crypto.randomUUID()}` };
-  const owner = await signIn(app, google, '198.51.100.40');
+  const owner = await signIn(app, google, `198.51.100.${nextIp++}`);
   google.state.claims = { ...google.state.claims, sub: `other-${crypto.randomUUID()}` };
-  const other = await signIn(app, google, '198.51.100.41');
+  const other = await signIn(app, google, `198.51.100.${nextIp++}`);
   return { app, owner, other };
 }
 
-const create = (app: ReturnType<typeof createApp>, token: string, body: unknown) =>
-  postJson(app, '/api/v1/repositories', body, undefined, bearer(token));
+const create = (
+  app: ReturnType<typeof createApp>,
+  token: string,
+  body: unknown,
+  headers: Record<string, string> = {},
+) => postJson(app, '/api/v1/repositories', body, undefined, { ...bearer(token), ...headers });
+
+const send = (
+  app: ReturnType<typeof createApp>,
+  token: string,
+  method: string,
+  path: string,
+  body?: unknown,
+) =>
+  call(app, path, {
+    method,
+    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: { 'content-type': 'application/json', ...bearer(token) },
+  });
+
+const list = async (app: ReturnType<typeof createApp>, token: string, query: string) => {
+  const res = await call(app, `/api/v1/repositories?${query}`, { headers: bearer(token) });
+  return { status: res.status, body: (await res.json()) as Page };
+};
 
 describe('remote repositories', () => {
   it('requires a signed-in session', async () => {
@@ -61,9 +97,13 @@ describe('remote repositories', () => {
   });
 
   it('rejects names that are not safe folder names and unknown fields', async () => {
-    const { app, owner } = await twoAccounts();
+    const { app, owner, other } = await twoAccounts();
     for (const name of ['', '.hidden', 'a b', '../up', 'x.git', 'a/b', 'x'.repeat(101)]) {
       expect((await create(app, owner.access_token, { name })).status).toBe(400);
+    }
+    // Windows reserved names; a second account because WRITE_LIMITER counts rejected writes too.
+    for (const name of ['con', 'NUL', 'Aux.txt', 'com1', 'LPT9.md']) {
+      expect((await create(app, other.access_token, { name })).status).toBe(400);
     }
     expect(
       (await create(app, owner.access_token, { name: 'ok', ownerAccountId: 'someone' })).status,
@@ -121,5 +161,135 @@ describe('remote repositories', () => {
       (await call(app, '/api/v1/repositories?limit=500', { headers: bearer(owner.access_token) }))
         .status,
     ).toBe(400);
+  });
+
+  it('sorts by name and rejects cursors that do not decode for the sort', async () => {
+    const { app, owner } = await twoAccounts();
+    for (const name of ['beta', 'Alpha', 'gamma']) {
+      expect((await create(app, owner.access_token, { name })).status).toBe(201);
+    }
+    const page1 = await list(app, owner.access_token, 'sort=name&limit=2');
+    expect(page1.body.repositories.map((r) => r.name)).toEqual(['Alpha', 'beta']);
+    const page2 = await list(
+      app,
+      owner.access_token,
+      `sort=name&limit=2&cursor=${page1.body.nextCursor}`,
+    );
+    expect(page2.body.repositories.map((r) => r.name)).toEqual(['gamma']);
+    expect(page2.body.nextCursor).toBeNull();
+
+    const updated = await list(app, owner.access_token, 'limit=1');
+    for (const query of [
+      'cursor=abc',
+      `cursor=${btoa('{"not":"a tuple"}').replace(/=+$/, '')}`,
+      `sort=name&cursor=${updated.body.nextCursor}`,
+      `cursor=${page1.body.nextCursor}`,
+      'sort=size',
+    ]) {
+      const res = await list(app, owner.access_token, query);
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ error: { code: 'VALIDATION_FAILED' } });
+    }
+  });
+
+  it('never creates more than the cap, even when creates race', async () => {
+    const { app, owner } = await twoAccounts();
+    const db = getDb(env.DB);
+    const now = Date.now();
+    const rows = Array.from({ length: MAX_REPOSITORIES_PER_ACCOUNT - 1 }, (_, i) => ({
+      id: crypto.randomUUID(),
+      ownerAccountId: owner.account.id,
+      name: `seed-${i}`,
+      nameKey: `seed-${i}`,
+      createdAt: now,
+      updatedAt: now,
+    }));
+    // D1 caps bound parameters per statement, so seed in chunks.
+    for (let i = 0; i < rows.length; i += 10) {
+      await db.insert(repositories).values(rows.slice(i, i + 10));
+    }
+
+    const results = await Promise.all(
+      ['race-1', 'race-2', 'race-3'].map((name) => create(app, owner.access_token, { name })),
+    );
+    expect(results.map((r) => r.status).sort()).toEqual([201, 403, 403]);
+    expect(await results.find((r) => r.status === 403)!.json()).toMatchObject({
+      error: { code: 'LIMIT_REACHED' },
+    });
+  });
+
+  it('only stores private repositories', async () => {
+    const { owner } = await twoAccounts();
+    const now = Date.now();
+    await expect(
+      getDb(env.DB)
+        .insert(repositories)
+        .values({
+          id: crypto.randomUUID(),
+          ownerAccountId: owner.account.id,
+          name: 'open',
+          nameKey: 'open',
+          visibility: 'public' as 'private',
+          createdAt: now,
+          updatedAt: now,
+        }),
+    ).rejects.toThrow();
+  });
+
+  it('returns the original repository when a create is retried with the same key', async () => {
+    const { app, owner, other } = await twoAccounts();
+    const key = { 'idempotency-key': crypto.randomUUID() };
+    const first = await create(app, owner.access_token, { name: 'retry' }, key);
+    const second = await create(app, owner.access_token, { name: 'retry' }, key);
+    expect(first.status).toBe(201);
+    expect(second.status).toBe(201);
+    expect(await second.json()).toEqual(await first.json());
+
+    expect((await create(app, owner.access_token, { name: 'retry' })).status).toBe(409);
+    // Keys are per account.
+    expect((await create(app, other.access_token, { name: 'retry' }, key)).status).toBe(201);
+    const badKey = { 'idempotency-key': 'nope' };
+    expect((await create(app, owner.access_token, { name: 'x' }, badKey)).status).toBe(400);
+  });
+
+  it('updates name and description for the owner only', async () => {
+    const { app, owner, other } = await twoAccounts();
+    const res = await create(app, owner.access_token, { name: 'draft' });
+    const { repository } = (await res.json()) as { repository: Remote };
+    await create(app, owner.access_token, { name: 'taken' });
+    const path = `/api/v1/repositories/${repository.id}`;
+    const patch = (token: string, body: unknown) => send(app, token, 'PATCH', path, body);
+
+    const renamed = await patch(owner.access_token, { name: 'Final', description: 'Done' });
+    expect(renamed.status).toBe(200);
+    const body = (await renamed.json()) as { repository: Remote };
+    expect(body.repository).toMatchObject({ id: repository.id, name: 'Final', description: 'Done' });
+    expect(body.repository.updatedAt).toBeGreaterThanOrEqual(repository.updatedAt);
+
+    expect(await (await patch(owner.access_token, { description: '' })).json()).toMatchObject({
+      repository: { name: 'Final', description: null },
+    });
+    // A case-only rename keeps the same name key.
+    expect((await patch(owner.access_token, { name: 'final' })).status).toBe(200);
+
+    const conflict = await patch(owner.access_token, { name: 'TAKEN' });
+    expect(conflict.status).toBe(409);
+    expect(await conflict.json()).toMatchObject({ error: { code: 'NAME_TAKEN' } });
+    expect((await patch(other.access_token, { name: 'mine' })).status).toBe(404);
+    expect((await patch(owner.access_token, {})).status).toBe(400);
+    expect((await patch(owner.access_token, { visibility: 'public' })).status).toBe(400);
+  });
+
+  it('deletes for the owner only', async () => {
+    const { app, owner, other } = await twoAccounts();
+    const res = await create(app, owner.access_token, { name: 'gone' });
+    const { repository } = (await res.json()) as { repository: Remote };
+    const path = `/api/v1/repositories/${repository.id}`;
+    expect((await send(app, other.access_token, 'DELETE', path)).status).toBe(404);
+    expect((await send(app, owner.access_token, 'DELETE', path)).status).toBe(204);
+    expect((await send(app, owner.access_token, 'DELETE', path)).status).toBe(404);
+    expect((await call(app, path, { headers: bearer(owner.access_token) })).status).toBe(404);
+    // The name is free again.
+    expect((await create(app, owner.access_token, { name: 'gone' })).status).toBe(201);
   });
 });

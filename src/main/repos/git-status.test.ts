@@ -27,14 +27,18 @@ describe('parseStatus', () => {
   });
 
   it('leaves ahead and behind unknown without an upstream', () => {
-    const status = parseStatus(z('# branch.oid (initial)', '# branch.head main'));
+    const status = parseStatus(
+      z('# branch.oid (initial)', '# branch.head main'),
+    );
     expect(status.headOid).toBeNull();
     expect(status.ahead).toBeNull();
     expect(status.behind).toBeNull();
   });
 
   it('reports a detached HEAD without a branch name', () => {
-    const status = parseStatus(z(`# branch.oid ${OID}`, '# branch.head (detached)'));
+    const status = parseStatus(
+      z(`# branch.oid ${OID}`, '# branch.head (detached)'),
+    );
     expect(status.detached).toBe(true);
     expect(status.branch).toBeNull();
   });
@@ -51,14 +55,19 @@ describe('parseStatus', () => {
         '! ignored.log',
       ),
     );
-    expect(status).toMatchObject({ staged: 2, unstaged: 2, untracked: 1, conflicts: 1 });
+    expect(status).toMatchObject({
+      staged: 2,
+      unstaged: 2,
+      untracked: 1,
+      conflicts: 1,
+    });
     expect(status.files).toEqual([
-      { path: 'src/staged.ts', kind: 'staged' },
-      { path: 'src/edited file.ts', kind: 'modified' },
-      { path: 'src/both.ts', kind: 'staged' },
-      { path: 'src/both.ts', kind: 'modified' },
-      { path: 'conflict.ts', kind: 'conflict' },
-      { path: 'notes/new file.md', kind: 'untracked' },
+      { path: 'src/staged.ts', kind: 'staged', code: 'M' },
+      { path: 'src/edited file.ts', kind: 'modified', code: 'M' },
+      { path: 'src/both.ts', kind: 'staged', code: 'M' },
+      { path: 'src/both.ts', kind: 'modified', code: 'M' },
+      { path: 'conflict.ts', kind: 'conflict', code: 'U' },
+      { path: 'notes/new file.md', kind: 'untracked', code: '?' },
     ]);
   });
 
@@ -73,7 +82,10 @@ describe('parseStatus', () => {
     );
     expect(status.staged).toBe(1);
     expect(status.untracked).toBe(1);
-    expect(status.files.map((f) => f.path)).toEqual(['new-name.ts', 'after.txt']);
+    expect(status.files.map((f) => f.path)).toEqual([
+      'new-name.ts',
+      'after.txt',
+    ]);
   });
 
   it('caps the file list and says so', () => {
@@ -87,7 +99,9 @@ describe('parseStatus', () => {
 
 describe('parseLastCommit', () => {
   it('splits hash, time and subject', () => {
-    expect(parseLastCommit(`${OID}\u00001700000000\u0000Fix: a <b> & "c"\n`)).toEqual({
+    expect(
+      parseLastCommit(`${OID}\u00001700000000\u0000Fix: a <b> & "c"\n`),
+    ).toEqual({
       oid: OID,
       at: 1_700_000_000_000,
       subject: 'Fix: a <b> & "c"',

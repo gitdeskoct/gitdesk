@@ -3,15 +3,20 @@ import { watch, type FSWatcher } from 'node:fs';
 import { mkdir, rmdir, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import type {
-  AddRepositoryResult,
-  CreateRepositoryInput,
-  CreateRepositoryResult,
-  LocalActivity,
-  RemoteRepository,
-  RepositoryChanges,
-  RepositorySummary,
+import {
+  repositoryNameSchema,
+  type CloneInput,
+  type CloneProgressEvent,
+  type CloneResult,
+  type AddRepositoryResult,
+  type CreateRepositoryInput,
+  type CreateRepositoryResult,
+  type LocalActivity,
+  type RemoteRepository,
+  type RepositoryChanges,
+  type RepositorySummary,
 } from '../../shared/repos';
+import { gitDefaultsSchema } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import { UserError } from '../errors';
 import type { RemoteService } from '../remote/remote-service';
@@ -25,11 +30,15 @@ import {
   pathKey,
   resolveRoot,
 } from './git-inspector';
+import { cloneInto } from './clone-runner';
 import type { RepoRow, RepositoryStore } from './repository-store';
 
 // Desktop integration the service needs, injected so tests can drive it without Electron.
 export type Desktop = {
-  pickDirectory(options: { title: string; create: boolean }): Promise<string | null>;
+  pickDirectory(options: {
+    title: string;
+    create: boolean;
+  }): Promise<string | null>;
   openPath(target: string): Promise<string>;
   copyText(text: string): void;
 };
@@ -42,7 +51,8 @@ const FOCUS_GAP_MS = 30_000;
 const TOKEN_TTL_MS = 10 * 60_000;
 
 // Changes inside .git that mean the status may differ: staging, commits, checkouts, fetches.
-const WATCHED = /^(index|HEAD|ORIG_HEAD|FETCH_HEAD|MERGE_HEAD|packed-refs|refs)/;
+const WATCHED =
+  /^(index|HEAD|ORIG_HEAD|FETCH_HEAD|MERGE_HEAD|packed-refs|refs)/;
 
 export class RepoError extends UserError {}
 
@@ -59,15 +69,23 @@ export function createRepositoryService(deps: {
   desktop: Desktop;
   settings: () => Settings;
   emit: (repositories: RepositorySummary[]) => void;
+  emitCloneProgress?: (event: CloneProgressEvent) => void;
+  // Where a remote repository can be fetched from. Null until the sync transport exists.
+  resolveCloneUrl?: (remoteId: string) => Promise<string | null>;
+  cloneProtocols?: string[];
   now?: () => number;
+  log?: Pick<Console, 'warn'>;
 }) {
   const now = deps.now ?? Date.now;
+  const log = deps.log ?? console;
   const { store } = deps;
   const inspecting = new Set<string>();
   const queued = new Map<string, Array<() => void>>();
   const order: string[] = [];
   let running = 0;
-  const watchers = new Map<string, FSWatcher>();
+  // Bumped when a registration's folder changes, so an inspection of the old path is discarded.
+  const generation = new Map<string, number>();
+  const watchers = new Map<string, FSWatcher[]>();
   const watchTimers = new Map<string, NodeJS.Timeout>();
   // One-time folder tokens: the renderer refers to a picked folder without ever holding its path.
   const tokens = new Map<string, { dir: string; expires: number }>();
@@ -75,6 +93,7 @@ export function createRepositoryService(deps: {
   let interval: NodeJS.Timeout | null = null;
   let lastFocusRefresh = 0;
   let disposed = false;
+  const clones = new Map<string, AbortController>();
 
   const toSummary = (row: RepoRow): RepositorySummary => ({
     id: row.id,
@@ -86,6 +105,7 @@ export function createRepositoryService(deps: {
     lastOpenedAt: row.lastOpenedAt,
     availability: row.availability ?? 'available',
     status: row.status,
+    statusAt: row.statusAt,
     inspectedAt: row.inspectedAt,
     inspecting: inspecting.has(row.id) || queued.has(row.id),
     error: row.error,
@@ -113,28 +133,42 @@ export function createRepositoryService(deps: {
     if (disposed) return;
     const row = store.get(id);
     if (!row) return;
+    const started = generation.get(id) ?? 0;
+    const current = () => !disposed && (generation.get(id) ?? 0) === started;
+    let result: Parameters<RepositoryStore['saveInspection']>[1];
     try {
-      const result = await inspect(row.rootPath);
-      if (disposed) return;
+      result = await inspect(row.rootPath);
+    } catch (err) {
+      result = {
+        availability: 'available',
+        status: null,
+        error: err instanceof GitError ? err.message : describeGitError(err),
+      };
+    }
+    if (!current()) return;
+    try {
       store.saveInspection(id, result, now());
     } catch (err) {
-      if (disposed) return;
-      store.saveInspection(
-        id,
-        {
-          availability: 'available',
-          status: null,
-          error: err instanceof GitError ? err.message : describeGitError(err),
-        },
-        now(),
+      // The row can be removed mid-inspection; a failed write must not reject the queue.
+      log.warn(
+        'saving an inspection failed',
+        err instanceof Error ? err.message : err,
       );
     }
     syncWatcher(id);
   }
 
   function pump(): void {
-    while (!disposed && running < CONCURRENCY && order.length) {
+    let skipped = 0;
+    // One inspection per repository at a time: a newer request waits behind the running one
+    // instead of racing it, so an older result can never overwrite a newer one.
+    while (!disposed && running < CONCURRENCY && order.length > skipped) {
       const id = order.shift()!;
+      if (inspecting.has(id)) {
+        order.push(id);
+        skipped++;
+        continue;
+      }
       const waiters = queued.get(id) ?? [];
       queued.delete(id);
       inspecting.add(id);
@@ -166,13 +200,15 @@ export function createRepositoryService(deps: {
   }
 
   function unwatch(id: string): void {
-    watchers.get(id)?.close();
+    watchers.get(id)?.forEach((watcher) => watcher.close());
     watchers.delete(id);
     clearTimeout(watchTimers.get(id));
     watchTimers.delete(id);
   }
 
   // Watch events are hints, never the truth: they only schedule a status check, debounced.
+  // .git itself is watched shallowly (index, HEAD, merge state); refs/ recursively, because a
+  // commit only rewrites refs/heads/<branch>.
   function syncWatcher(id: string): void {
     const row = store.get(id);
     const wanted =
@@ -182,20 +218,34 @@ export function createRepositoryService(deps: {
     if (!wanted) return unwatch(id);
     if (watchers.has(id) || watchers.size >= MAX_WATCHERS) return;
     const gitDir = path.join(row.rootPath, '.git');
+    const schedule = () => {
+      clearTimeout(watchTimers.get(id));
+      watchTimers.set(
+        id,
+        setTimeout(() => void enqueue([id]), WATCH_DEBOUNCE_MS),
+      );
+    };
     void stat(gitDir)
       .then((info) => {
         // A worktree's .git is a file pointing elsewhere; those rely on focus and interval checks.
         if (!info.isDirectory() || watchers.has(id)) return;
-        const watcher = watch(gitDir, { persistent: false }, (_event, file) => {
-          if (file && !WATCHED.test(String(file))) return;
-          clearTimeout(watchTimers.get(id));
-          watchTimers.set(
-            id,
-            setTimeout(() => void enqueue([id]), WATCH_DEBOUNCE_MS),
-          );
+        const top = watch(gitDir, { persistent: false }, (_event, file) => {
+          if (!file || WATCHED.test(String(file))) schedule();
         });
-        watcher.on('error', () => unwatch(id));
-        watchers.set(id, watcher);
+        const opened = [top];
+        try {
+          opened.push(
+            watch(
+              path.join(gitDir, 'refs'),
+              { persistent: false, recursive: true },
+              schedule,
+            ),
+          );
+        } catch {
+          // shortcut: no recursive refs watch where the platform refuses it; focus and interval checks still run.
+        }
+        for (const watcher of opened) watcher.on('error', () => unwatch(id));
+        watchers.set(id, opened);
       })
       .catch(() => undefined);
   }
@@ -213,7 +263,9 @@ export function createRepositoryService(deps: {
     const entry = tokens.get(token);
     tokens.delete(token);
     if (!entry || entry.expires < now())
-      throw new RepoError('That folder choice expired. Choose the folder again.');
+      throw new RepoError(
+        'That folder choice expired. Choose the folder again.',
+      );
     return entry.dir;
   }
 
@@ -226,10 +278,10 @@ export function createRepositoryService(deps: {
     const existing = store.idForKey(key);
     if (existing) {
       store.touchOpened(existing, now());
+      changed();
       return { status: 'exists', repository: toSummary(rowOrThrow(existing)) };
     }
-    if (store.list().length >= MAX_REPOSITORIES)
-      throw new RepoError(`gitdesk keeps up to ${MAX_REPOSITORIES} repositories.`);
+    assertRoom();
     const id = randomUUID();
     store.insert({
       id,
@@ -245,22 +297,42 @@ export function createRepositoryService(deps: {
     return { status: 'added', repository: toSummary(rowOrThrow(id)) };
   }
 
+  function assertRoom(): void {
+    if (store.list().length >= MAX_REPOSITORIES)
+      throw new RepoError(
+        `gitdesk keeps up to ${MAX_REPOSITORIES} repositories.`,
+      );
+  }
+
+  // The parent folder may sit inside another repository whose local config sets this, so the value
+  // is treated as untrusted: the same rule as Settings › Git, and never able to read as an option.
   async function defaultBranch(dir: string): Promise<string> {
     const value = (
       await gitAt(dir)
         .raw(['config', '--get', 'init.defaultBranch'])
         .catch(() => '')
     ).trim();
-    return /^[A-Za-z0-9._/-]{1,100}$/.test(value) ? value : 'main';
+    const parsed = gitDefaultsSchema.shape.defaultBranch.safeParse(value);
+    return parsed.success ? parsed.data : 'main';
   }
 
-  async function createRemoteFor(
-    row: RepoRow,
-  ): Promise<RemoteRepository> {
-    const remote = await deps.remote.create({
-      name: row.name,
-      description: row.description,
-    });
+  // The local id is the idempotency key: one local repository gets at most one remote, however
+  // often the request is retried. Folder names with spaces or accents become a valid remote name.
+  async function createRemoteFor(row: RepoRow): Promise<RemoteRepository> {
+    const name = repositoryNameSchema.safeParse(
+      row.name
+        .normalize('NFKD')
+        .replace(/[^A-Za-z0-9._-]+/g, '-')
+        .replace(/^[.-]+|-+$/g, ''),
+    );
+    if (!name.success)
+      throw new RepoError(
+        "This folder's name can't be used for a remote. Rename the folder first.",
+      );
+    const remote = await deps.remote.create(
+      { name: name.data, description: row.description },
+      row.id,
+    );
     store.setRemote(row.id, remote.id);
     changed();
     return remote;
@@ -298,7 +370,10 @@ export function createRepositoryService(deps: {
       if (root.kind === 'repository')
         return (await register(root.root, 'added')).repository;
       try {
-        await gitAt(dir).raw(['init', '-b', await defaultBranch(dir)]);
+        await gitAt(dir).raw([
+          'init',
+          `--initial-branch=${await defaultBranch(dir)}`,
+        ]);
       } catch (err) {
         throw new RepoError(describeGitError(err));
       }
@@ -321,14 +396,17 @@ export function createRepositoryService(deps: {
       if (owner && owner !== id)
         throw new RepoError('That folder is already in gitdesk.');
       unwatch(id);
+      generation.set(id, (generation.get(id) ?? 0) + 1);
       store.relocate(id, root.root, key);
       await enqueue([id]);
       return toSummary(rowOrThrow(id));
     },
 
-    refresh(id: string | null): Promise<void> {
-      const ids = id ? [rowOrThrow(id).id] : store.list().map((row) => row.id);
-      return enqueue(ids);
+    // One repository resolves when its check is done. All of them resolves once queued: with
+    // hundreds of repositories the caller should not hold an IPC call open for minutes.
+    async refresh(id: string | null): Promise<void> {
+      if (id) return enqueue([rowOrThrow(id).id]);
+      void enqueue(store.list().map((row) => row.id));
     },
 
     open(id: string): RepositorySummary {
@@ -358,10 +436,17 @@ export function createRepositoryService(deps: {
       changed();
     },
 
+    // Only ever a folder: openPath on a file would launch it with its default app.
     async reveal(id: string): Promise<void> {
       const row = rowOrThrow(id);
+      const isFolder = await stat(row.rootPath)
+        .then((info) => info.isDirectory())
+        .catch(() => false);
+      if (!isFolder)
+        throw new RepoError('The folder is gone. Locate it again.');
       const error = await deps.desktop.openPath(row.rootPath);
-      if (error) throw new RepoError("Couldn't open the folder. It may have moved.");
+      if (error)
+        throw new RepoError("Couldn't open the folder in your file manager.");
     },
 
     copyPath(id: string): void {
@@ -387,16 +472,23 @@ export function createRepositoryService(deps: {
       });
       if (!dir) return null;
       const canonical = await canonicalPath(dir);
-      return { token: issueToken(canonical), displayPath: displayPath(canonical) };
+      return {
+        token: issueToken(canonical),
+        displayPath: displayPath(canonical),
+      };
     },
 
     // Local first, then the remote. The local repository exists before any network call, so a
     // remote failure never leaves a half-made local folder, and it is reported apart with a retry.
-    async create(input: CreateRepositoryInput): Promise<CreateRepositoryResult> {
+    async create(
+      input: CreateRepositoryInput,
+    ): Promise<CreateRepositoryResult> {
       const parent = redeem(input.locationToken);
       const target = path.join(parent, input.name);
       if (path.dirname(target) !== parent)
         throw new RepoError("That name can't be used as a folder.");
+      // Checked before anything touches disk, so a refusal leaves nothing behind.
+      assertRoom();
       try {
         await mkdir(target);
       } catch (err) {
@@ -408,17 +500,26 @@ export function createRepositoryService(deps: {
       }
       const git = gitAt(target);
       try {
-        await git.raw(['init', '-b', await defaultBranch(parent)]);
+        await git.raw([
+          'init',
+          `--initial-branch=${await defaultBranch(parent)}`,
+        ]);
       } catch (err) {
         // Only the empty folder this call just made is removed; rmdir refuses anything non-empty.
         await rmdir(target).catch(() => undefined);
         throw new RepoError(describeGitError(err));
       }
 
+      // From here the folder holds a real repository, so a later failure names it instead of deleting it.
+      const leftAt = `The repository was created at ${displayPath(target)}; open it from there.`;
       let readmeCommitted: boolean | null = null;
       if (input.readme) {
         const body = `# ${input.name}\n${input.description ? `\n${input.description}\n` : ''}`;
-        await writeFile(path.join(target, 'README.md'), body, { flag: 'wx' });
+        try {
+          await writeFile(path.join(target, 'README.md'), body, { flag: 'wx' });
+        } catch {
+          throw new RepoError(`Couldn't write the README. ${leftAt}`);
+        }
         try {
           await git.raw(['add', '--', 'README.md']);
           await git.raw(['commit', '-m', 'Initial commit']);
@@ -428,11 +529,20 @@ export function createRepositoryService(deps: {
         }
       }
 
-      const { repository } = await register(
-        await canonicalPath(target),
-        'created',
-        { description: input.description || null },
-      );
+      let repository: RepositorySummary;
+      try {
+        ({ repository } = await register(
+          await canonicalPath(target),
+          'created',
+          {
+            description: input.description || null,
+          },
+        ));
+      } catch (err) {
+        throw new RepoError(
+          `${err instanceof UserError ? err.message : "Couldn't add it to gitdesk."} ${leftAt}`,
+        );
+      }
 
       if (!input.remote)
         return { repository, remote: { status: 'skipped' }, readmeCommitted };
@@ -448,7 +558,10 @@ export function createRepositoryService(deps: {
           repository,
           remote: {
             status: 'failed',
-            message: err instanceof Error ? err.message : 'The remote was not created.',
+            message:
+              err instanceof Error
+                ? err.message
+                : 'The remote was not created.',
           },
           readmeCommitted,
         };
@@ -457,8 +570,52 @@ export function createRepositoryService(deps: {
 
     async linkRemote(id: string): Promise<RemoteRepository> {
       const row = rowOrThrow(id);
-      if (row.remoteId) throw new RepoError('This repository already has a remote.');
+      if (row.remoteId)
+        throw new RepoError('This repository already has a remote.');
       return createRemoteFor(row);
+    },
+
+    // The URL is resolved before the folder token is spent, so an unavailable transport costs nothing.
+    async clone(input: CloneInput): Promise<CloneResult> {
+      const url = (await deps.resolveCloneUrl?.(input.remoteId)) ?? null;
+      if (!url) return { status: 'unavailable' };
+      if (clones.has(input.jobId))
+        throw new RepoError('That clone is already running.');
+      const parent = redeem(input.locationToken);
+      assertRoom();
+      const controller = new AbortController();
+      clones.set(input.jobId, controller);
+      try {
+        const target = await cloneInto({
+          url,
+          parent,
+          name: input.name,
+          signal: controller.signal,
+          protocols: deps.cloneProtocols,
+          onProgress: ({ stage, percent }) =>
+            deps.emitCloneProgress?.({ jobId: input.jobId, stage, percent }),
+        });
+        const { repository } = await register(
+          await canonicalPath(target),
+          'cloned',
+          {
+            remoteId: input.remoteId,
+          },
+        );
+        return { status: 'cloned', repository };
+      } finally {
+        clones.delete(input.jobId);
+      }
+    },
+
+    cancelClone(jobId: string): void {
+      clones.get(jobId)?.abort();
+    },
+
+    // After a remote is deleted, local repositories that pointed at it are simply unlinked.
+    forgetRemote(remoteId: string): void {
+      store.clearRemoteLink(remoteId);
+      changed();
     },
 
     activity: (): LocalActivity[] => store.activity(20),
@@ -491,10 +648,12 @@ export function createRepositoryService(deps: {
     // Stops timers, watchers and queued work; waiting callers are released, not left hanging.
     dispose(): void {
       disposed = true;
+      for (const controller of clones.values()) controller.abort();
       if (interval) clearInterval(interval);
       if (emitTimer) clearTimeout(emitTimer);
       for (const id of [...watchers.keys()]) unwatch(id);
-      for (const waiters of queued.values()) waiters.forEach((resolve) => resolve());
+      for (const waiters of queued.values())
+        waiters.forEach((resolve) => resolve());
       queued.clear();
       order.length = 0;
     },

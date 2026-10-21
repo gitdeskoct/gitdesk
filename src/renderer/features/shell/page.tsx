@@ -1,4 +1,7 @@
-import type { ReactNode } from 'react';
+import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { GitMissingArt } from '../../components/illustrations';
+import { Button } from '../../components/ui/button';
+import { EmptyState } from '../../components/ui/empty-state';
 import { cn } from '../../lib/cn';
 import { Breadcrumbs, type Crumb } from './breadcrumbs';
 import { ConnectionStatus } from './connection-status';
@@ -51,6 +54,41 @@ export function Page({
   );
 }
 
+// One page failing to render must not blank the window: the shell stays and the page says so.
+// Main records renderer console errors in the log, so console.error is the log path here.
+export class PageErrorBoundary extends Component<
+  { children: ReactNode },
+  { failed: boolean }
+> {
+  state = { failed: false };
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('Page failed to render', error.message, info.componentStack);
+  }
+
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <Page crumbs={[{ label: 'Error' }]}>
+        <EmptyState
+          art={<GitMissingArt />}
+          title="This page hit an error"
+          action={
+            <Button onClick={() => location.reload()}>Reload page</Button>
+          }
+        >
+          Your repositories are untouched; reloading usually brings the page
+          back.
+        </EmptyState>
+      </Page>
+    );
+  }
+}
+
 export function PageTitle({
   title,
   eyebrow,
@@ -65,7 +103,9 @@ export function PageTitle({
   return (
     <div className="mb-7 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
       <div className="min-w-0">
-        {eyebrow && <p className="mb-1.5 text-[0.8125rem] text-muted">{eyebrow}</p>}
+        {eyebrow && (
+          <p className="mb-1.5 text-[0.8125rem] text-muted">{eyebrow}</p>
+        )}
         <h1 className="text-xl font-semibold tracking-[-0.02em] text-ink">
           {title}
         </h1>

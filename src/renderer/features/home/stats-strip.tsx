@@ -6,8 +6,7 @@ import { Spinner } from '../../components/ui/spinner';
 import { cn } from '../../lib/cn';
 import { relativeTime } from '../../lib/format';
 import type { WorkspaceStats } from '../../lib/repo-status';
-
-export type StatFilter = 'all' | 'changed' | 'ahead' | 'remote';
+import { useNavigation } from '../../app/navigation';
 
 // The value keeps proportional figures at display size; only a changed value animates, once.
 function Value({ value, muted }: { value: string; muted?: boolean }) {
@@ -32,30 +31,25 @@ function Value({ value, muted }: { value: string; muted?: boolean }) {
   );
 }
 
+// Each statistic is a way in: it opens the view that lists exactly what it counts.
 function Stat({
   value,
   label,
   context,
-  selected,
   muted,
   onSelect,
 }: {
   value: string;
   label: string;
   context: ReactNode;
-  selected: boolean;
   muted?: boolean;
   onSelect: () => void;
 }) {
   return (
     <button
       type="button"
-      aria-pressed={selected}
       onClick={onSelect}
-      className={cn(
-        'relative grid content-start gap-1 border-l border-line px-5 pt-4.5 pb-4 text-left transition-colors first:border-l-0 first:pl-0 hover:bg-row-hover focus-visible:outline-offset-[-2px]',
-        'after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-accent after:opacity-0 after:transition-opacity aria-pressed:after:opacity-100 first:after:left-0',
-      )}
+      className="relative grid min-w-0 content-start gap-1 border-l border-line px-5 pt-4.5 pb-4 text-left transition-colors first:border-l-0 first:pl-0 hover:bg-row-hover focus-visible:outline-offset-[-2px]"
     >
       <Value value={value} muted={muted} />
       <span className="text-[0.8125rem] font-medium text-ink">{label}</span>
@@ -66,12 +60,20 @@ function Stat({
   );
 }
 
-function remoteContext(remote: RemoteOverview | undefined): {
+function remoteContext(
+  remote: RemoteOverview | undefined,
+  failed: boolean,
+): {
   value: string;
   context: ReactNode;
   muted: boolean;
 } {
-  if (!remote) return { value: '—', context: 'Loading…', muted: true };
+  if (!remote)
+    return {
+      value: '—',
+      context: failed ? 'Not loaded · try again' : 'Loading…',
+      muted: true,
+    };
   if (remote.state === 'signed-out')
     return { value: '—', context: 'Sign in to see your remote', muted: true };
   if (remote.state === 'never' || remote.total === null)
@@ -105,20 +107,23 @@ function remoteContext(remote: RemoteOverview | undefined): {
 }
 
 // One strip, hairline dividers, no tiles. Every number names where it came from and how old it is;
-// a number that can't be verified is a dash, never a stale value dressed up as current.
+// a number that can't be verified is a dash or says what is unknown, never a guess shown as fact.
 export function StatsStrip({
   stats,
   remote,
-  filter,
-  onFilter,
+  remoteFailed,
+  onRemote,
 }: {
   stats: WorkspaceStats;
   remote: RemoteOverview | undefined;
-  filter: StatFilter;
-  onFilter: (filter: StatFilter) => void;
+  remoteFailed: boolean;
+  onRemote: () => void;
 }) {
-  const remoteStat = remoteContext(remote);
-  const toggle = (next: StatFilter) => onFilter(filter === next ? 'all' : next);
+  const { navigate } = useNavigation();
+  const remoteStat = remoteContext(remote, remoteFailed);
+  const unknown = stats.unchecked > 0 && (
+    <span className="truncate">{stats.unchecked} not checked yet</span>
+  );
   return (
     <div
       role="group"
@@ -128,14 +133,18 @@ export function StatsStrip({
       <Stat
         value={String(stats.local)}
         label="Local repositories"
-        selected={filter === 'all'}
-        onSelect={() => onFilter('all')}
+        onSelect={() => navigate({ name: 'repositories' })}
         context={
           stats.checking > 0 ? (
             <>
               <Spinner className="size-3.5" />
               <span className="truncate">Checking {stats.checking}</span>
             </>
+          ) : stats.missing > 0 ? (
+            <span className="truncate">
+              {stats.missing} {stats.missing === 1 ? 'folder' : 'folders'}{' '}
+              missing
+            </span>
           ) : (
             <span className="truncate">
               {stats.oldestCheck
@@ -148,23 +157,28 @@ export function StatsStrip({
       <Stat
         value={String(stats.changed)}
         label="With changes"
-        selected={filter === 'changed'}
-        onSelect={() => toggle('changed')}
-        context={<span className="truncate">Uncommitted or untracked files</span>}
+        onSelect={() => navigate({ name: 'repositories', show: 'changed' })}
+        context={
+          unknown || (
+            <span className="truncate">Uncommitted or untracked files</span>
+          )
+        }
       />
       <Stat
         value={String(stats.ahead)}
         label="Branches ahead"
-        selected={filter === 'ahead'}
-        onSelect={() => toggle('ahead')}
-        context={<span className="truncate">Current branch, known upstream</span>}
+        onSelect={() => navigate({ name: 'repositories', show: 'ahead' })}
+        context={
+          unknown || (
+            <span className="truncate">Against the last fetched upstream</span>
+          )
+        }
       />
       <Stat
         value={remoteStat.value}
         label="Remote repositories"
         muted={remoteStat.muted}
-        selected={filter === 'remote'}
-        onSelect={() => toggle('remote')}
+        onSelect={onRemote}
         context={remoteStat.context}
       />
     </div>

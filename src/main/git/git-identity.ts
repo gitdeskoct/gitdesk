@@ -1,15 +1,17 @@
-import { simpleGit, type SimpleGit } from 'simple-git';
+import os from 'node:os';
+import type { SimpleGit } from 'simple-git';
 import type {
   GitDefaults,
   GitIdentity,
   GitIdentityInput,
 } from '../../shared/ipc';
+import { gitAt } from '../repos/git-inspector';
 
 const AUTOCRLF = ['true', 'input', 'false'] as const;
 
-// Global config only; repository-level overrides arrive with the repositories feature.
-// Values go to git as argv entries (no shell), and are validated before this point.
-export function createGitIdentity(git: SimpleGit = simpleGit()) {
+// Global config only. Values go to git as argv entries (no shell), and are validated before this
+// point. Runs from the home folder with the same environment allow-list and timeout as inspection.
+export function createGitIdentity(git: SimpleGit = gitAt(os.homedir())) {
   async function read(key: string): Promise<string | null> {
     const { value } = await git.getConfig(key, 'global');
     return value || null;
