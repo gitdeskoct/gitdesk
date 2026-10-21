@@ -15,7 +15,7 @@ export function AppShell({ status }: { status: AuthStatus }) {
 
   return (
     <div className="flex h-full flex-col bg-canvas">
-      <TitleBar sidebarToggle={!inSettings} />
+      <TitleBar sidebarToggle={!inSettings} inShell />
       <div className="flex min-h-0 flex-1">
         {route.name === 'settings' ? (
           <SettingsLayout status={status} section={route.section} />

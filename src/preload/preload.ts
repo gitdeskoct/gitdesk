@@ -6,6 +6,13 @@ const api: DesktopApi = {
   platform: process.platform as DesktopApi['platform'],
   app: {
     getInfo: () => ipcRenderer.invoke(IPC.appGetInfo),
+    setOpenAtLogin: (enabled) =>
+      ipcRenderer.invoke(IPC.appSetOpenAtLogin, enabled),
+    openLogs: () => ipcRenderer.invoke(IPC.appOpenLogs),
+    copyDiagnostics: () => ipcRenderer.invoke(IPC.appCopyDiagnostics),
+  },
+  window: {
+    command: (command) => ipcRenderer.invoke(IPC.windowCommand, command),
   },
   auth: {
     getStatus: () => ipcRenderer.invoke(IPC.authGetStatus),
@@ -30,6 +37,7 @@ const api: DesktopApi = {
   git: {
     getIdentity: () => ipcRenderer.invoke(IPC.gitGetIdentity),
     setIdentity: (input) => ipcRenderer.invoke(IPC.gitSetIdentity, input),
+    setDefaults: (input) => ipcRenderer.invoke(IPC.gitSetDefaults, input),
     openInstallPage: () => ipcRenderer.invoke(IPC.gitOpenInstallPage),
   },
 };

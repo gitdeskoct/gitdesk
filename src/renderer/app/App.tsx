@@ -4,27 +4,30 @@ import { WaitingForBrowser } from '../features/auth/waiting-for-browser';
 import { AppShell } from '../features/shell/app-shell';
 import { TitleBar } from '../features/shell/title-bar';
 import { useAuthStatus, useSettings } from '../lib/queries';
+import { useShortcutKeys } from './use-app-actions';
 
 // Local Git never depends on the account: the shell opens when signed in, offline, or in local-only mode.
 export function App() {
   const auth = useAuthStatus();
   const settings = useSettings();
+  const status = auth.data;
+  const screen =
+    !status || !settings.data
+      ? 'loading'
+      : status.status === 'authenticating'
+        ? 'waiting'
+        : status.status === 'signed-out' && !settings.data.localOnly
+          ? 'sign-in'
+          : 'shell';
+  useShortcutKeys(screen === 'shell');
 
-  if (!auth.data || !settings.data) {
+  if (screen === 'loading' || !status) {
     return (
       <div className="h-full bg-canvas">
         <TitleBar brand={false} sidebarToggle={false} />
       </div>
     );
   }
-
-  const status = auth.data;
-  const screen =
-    status.status === 'authenticating'
-      ? 'waiting'
-      : status.status === 'signed-out' && !settings.data.localOnly
-        ? 'sign-in'
-        : 'shell';
 
   return (
     <AnimatePresence mode="wait" initial={false}>

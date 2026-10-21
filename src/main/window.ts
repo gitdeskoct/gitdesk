@@ -25,6 +25,7 @@ export function applyChromeColors(win: BrowserWindow): void {
 
 export function createMainWindow(
   devServerUrl: string | undefined,
+  zoomLevel: () => number,
 ): BrowserWindow {
   const { background, symbol } = chromeColors();
   const win = new BrowserWindow({
@@ -51,6 +52,9 @@ export function createMainWindow(
   });
 
   win.once('ready-to-show', () => win.show());
+  win.webContents.on('did-finish-load', () =>
+    win.webContents.setZoomLevel(zoomLevel()),
+  );
   // Packaged builds have no DevTools; this is where CSP violations and renderer errors surface.
   win.webContents.on(
     'console-message',

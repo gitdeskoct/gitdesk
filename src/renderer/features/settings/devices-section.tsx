@@ -7,13 +7,19 @@ import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { formatDate, relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
-import { useRevokeSession, useSessions, useSignIn } from '../../lib/queries';
+import {
+  useRevokeOtherSessions,
+  useRevokeSession,
+  useSessions,
+  useSignIn,
+} from '../../lib/queries';
 import { PageTitle } from '../shell/page';
 
 export function DevicesSection({ status }: { status: AuthStatus }) {
   const signedIn = status.status === 'authenticated';
   const sessions = useSessions(signedIn);
   const revoke = useRevokeSession();
+  const revokeOthers = useRevokeOtherSessions();
   const signIn = useSignIn();
 
   if (status.status === 'signed-out') {
@@ -116,11 +122,28 @@ export function DevicesSection({ status }: { status: AuthStatus }) {
           ))}
         </SettingGroup>
       </div>
-      {revoke.isError && (
+      {list.length > 1 && (
+        <div className="mt-4 flex justify-end">
+          <Button
+            size="sm"
+            pending={revokeOthers.isPending}
+            onClick={() =>
+              revokeOthers.mutate(
+                list.filter((s) => !s.current).map((s) => s.id),
+              )
+            }
+          >
+            {revokeOthers.isPending
+              ? 'Signing out…'
+              : 'Sign out all other devices'}
+          </Button>
+        </div>
+      )}
+      {(revoke.isError || revokeOthers.isError) && (
         <InlineStatus tone="danger" className="mt-4">
           {ipcErrorMessage(
-            revoke.error,
-            "Couldn't sign out that device. Try again.",
+            revoke.error ?? revokeOthers.error,
+            "Couldn't sign out every device. Try again.",
           )}
         </InlineStatus>
       )}

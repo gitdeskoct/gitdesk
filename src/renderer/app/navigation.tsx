@@ -11,6 +11,7 @@ export type SettingsSection =
   | 'general'
   | 'appearance'
   | 'git'
+  | 'shortcuts'
   | 'account'
   | 'devices'
   | 'about';

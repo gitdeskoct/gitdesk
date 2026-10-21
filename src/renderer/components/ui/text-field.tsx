@@ -4,21 +4,29 @@ import { cn } from '../../lib/cn';
 
 export function TextField({
   label,
+  hideLabel,
   error,
   className,
   ...props
-}: ComponentProps<'input'> & { label: string; error?: string }) {
+}: ComponentProps<'input'> & {
+  label: string;
+  hideLabel?: boolean;
+  error?: string;
+}) {
   const id = useId();
   return (
     <div className={cn('grid gap-1.5', className)}>
-      <Label.Root htmlFor={id} className="text-sm font-medium text-ink">
+      <Label.Root
+        htmlFor={id}
+        className={cn('text-sm font-medium text-ink', hideLabel && 'sr-only')}
+      >
         {label}
       </Label.Root>
       <input
         id={id}
         aria-invalid={!!error}
         aria-describedby={error ? `${id}-error` : undefined}
-        className="h-9 rounded-sm border border-faint bg-surface px-3 text-sm text-ink placeholder:text-muted aria-invalid:border-danger"
+        className="h-9 w-full min-w-0 rounded-sm border border-faint bg-surface px-3 text-sm text-ink placeholder:text-muted aria-invalid:border-danger"
         {...props}
       />
       {error && (

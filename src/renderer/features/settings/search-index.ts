@@ -4,6 +4,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   appearance: 'Appearance',
   git: 'Git',
+  shortcuts: 'Shortcuts',
   account: 'Account',
   devices: 'Devices',
   about: 'About',
@@ -29,6 +30,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Collapse sidebar',
     section: 'general',
     keywords: 'navigation icons rail',
+  },
+  {
+    id: 'open-at-login',
+    label: 'Open at login',
+    section: 'general',
+    keywords: 'startup start launch boot',
   },
   {
     id: 'theme',
@@ -67,10 +74,28 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: 'layout wide compact',
   },
   {
+    id: 'zoom',
+    label: 'Zoom',
+    section: 'appearance',
+    keywords: 'scale bigger smaller magnify',
+  },
+  {
     id: 'git-identity',
     label: 'Commit identity',
     section: 'git',
     keywords: 'name email author user.name user.email config',
+  },
+  {
+    id: 'git-defaults',
+    label: 'Default branch and line endings',
+    section: 'git',
+    keywords: 'main master init.defaultBranch autocrlf crlf lf newline',
+  },
+  {
+    id: 'shortcuts',
+    label: 'Keyboard shortcuts',
+    section: 'shortcuts',
+    keywords: 'keys hotkeys keyboard',
   },
   {
     id: 'session-storage',
@@ -94,7 +119,7 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     id: 'version',
     label: 'Version',
     section: 'about',
-    keywords: 'electron platform release',
+    keywords: 'electron platform release logs diagnostics',
   },
 ];
 

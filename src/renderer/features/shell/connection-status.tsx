@@ -12,11 +12,13 @@ import { authNoticeMessages } from '../auth/messages';
 function Line({
   icon,
   tone,
+  column,
   children,
   action,
 }: {
   icon: ReactNode;
   tone: 'warning' | 'info';
+  column: string;
   children: ReactNode;
   action?: ReactNode;
 }) {
@@ -24,21 +26,27 @@ function Line({
     <div
       role="status"
       className={cn(
-        'flex flex-none items-center gap-2.5 border-b border-line px-7 py-2.5 text-[0.8125rem] text-ink [&>svg]:size-4 [&>svg]:shrink-0',
-        tone === 'warning'
-          ? 'bg-warning-soft [&>svg]:text-warning'
-          : 'bg-sunken [&>svg]:text-muted',
+        'flex-none border-b border-line px-6 py-2.5 text-[0.8125rem] text-ink min-[1100px]:px-10',
+        tone === 'warning' ? 'bg-warning-soft' : 'bg-sunken',
       )}
     >
-      {icon}
-      <span className="min-w-0 flex-1">{children}</span>
-      {action}
+      <div
+        className={cn(
+          column,
+          'flex items-center gap-2.5 [&>svg]:size-4 [&>svg]:shrink-0',
+          tone === 'warning' ? '[&>svg]:text-warning' : '[&>svg]:text-muted',
+        )}
+      >
+        {icon}
+        <span className="min-w-0 flex-1">{children}</span>
+        {action}
+      </div>
     </div>
   );
 }
 
 // One inline line under the page header: never a modal, never blocks local work.
-export function ConnectionStatus() {
+export function ConnectionStatus({ column }: { column: string }) {
   const { data: status } = useAuthStatus();
   const retry = useRetryConnection();
   const signIn = useSignIn();
@@ -47,6 +55,7 @@ export function ConnectionStatus() {
   if (status.status === 'offline') {
     return (
       <Line
+        column={column}
         icon={<CloudOff />}
         tone="warning"
         action={
@@ -66,7 +75,7 @@ export function ConnectionStatus() {
   }
   if (status.status === 'authenticated' && status.persistence === 'memory') {
     return (
-      <Line icon={<KeyRound />} tone="warning">
+      <Line icon={<KeyRound />} tone="warning" column={column}>
         No system keychain was found, so your sign-in is kept in memory. You'll
         sign in again after quitting.
       </Line>
@@ -76,6 +85,7 @@ export function ConnectionStatus() {
     const message = authNoticeMessages[status.notice];
     return (
       <Line
+        column={column}
         icon={<Info />}
         tone={message.tone === 'warning' ? 'warning' : 'info'}
         action={

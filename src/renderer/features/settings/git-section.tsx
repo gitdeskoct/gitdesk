@@ -1,14 +1,24 @@
 import { ExternalLink } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { z } from 'zod';
-import { gitIdentityInputSchema } from '../../../shared/ipc';
+import {
+  gitDefaultsSchema,
+  gitIdentityInputSchema,
+  type GitDefaults,
+} from '../../../shared/ipc';
 import { GitMissingArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
+import { Segmented } from '../../components/ui/segmented';
+import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { TextField } from '../../components/ui/text-field';
 import { ipcErrorMessage } from '../../lib/ipc-error';
-import { useGitIdentity, useSetGitIdentity } from '../../lib/queries';
+import {
+  useGitDefaultsMutation,
+  useGitIdentity,
+  useSetGitIdentity,
+} from '../../lib/queries';
 import { PageTitle } from '../shell/page';
 
 type FieldErrors = Partial<Record<'name' | 'email', string>>;
@@ -93,6 +103,108 @@ function IdentityForm({
   );
 }
 
+const LINE_ENDINGS = [
+  { value: 'true', label: 'Convert' },
+  { value: 'input', label: 'Input only' },
+  { value: 'false', label: 'Off' },
+] as const;
+
+// Unset values are shown as the usual choice for the platform, and the row says they aren't saved yet.
+function DefaultsForm({
+  defaultBranch,
+  autocrlf,
+}: {
+  defaultBranch: string | null;
+  autocrlf: GitDefaults['autocrlf'] | null;
+}) {
+  const save = useGitDefaultsMutation();
+  const fallbackCrlf = window.desktop.platform === 'win32' ? 'true' : 'input';
+  const [values, setValues] = useState<GitDefaults>({
+    defaultBranch: defaultBranch ?? 'main',
+    autocrlf: autocrlf ?? fallbackCrlf,
+  });
+  const [error, setError] = useState<string>();
+  const change = (patch: Partial<GitDefaults>) => {
+    setValues((current) => ({ ...current, ...patch }));
+    setError(undefined);
+    save.reset();
+  };
+
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const parsed = gitDefaultsSchema.safeParse(values);
+    if (!parsed.success) {
+      setError(z.flattenError(parsed.error).fieldErrors.defaultBranch?.[0]);
+      return;
+    }
+    save.mutate(parsed.data);
+  };
+
+  return (
+    <form
+      id="git-defaults"
+      onSubmit={submit}
+      noValidate
+      className="mt-12 scroll-mt-6"
+    >
+      <SettingGroup title="New repositories">
+        <SettingRow
+          label="Default branch name"
+          description={
+            defaultBranch
+              ? 'Used by git init. Saved as init.defaultBranch.'
+              : 'Used by git init. Not set yet, so Git falls back to its own default.'
+          }
+        >
+          <TextField
+            label="Default branch name"
+            hideLabel
+            className="w-44"
+            value={values.defaultBranch}
+            onChange={(event) => change({ defaultBranch: event.target.value })}
+            error={error}
+            placeholder="main"
+            spellCheck={false}
+          />
+        </SettingRow>
+        <SettingRow
+          label="Line endings"
+          description={
+            autocrlf
+              ? 'How Git converts line endings (core.autocrlf).'
+              : 'How Git converts line endings (core.autocrlf). Not set in your global config yet.'
+          }
+        >
+          <Segmented
+            label="Line endings"
+            value={values.autocrlf}
+            onChange={(next) => change({ autocrlf: next })}
+            options={LINE_ENDINGS}
+          />
+        </SettingRow>
+      </SettingGroup>
+      <div className="mt-4 flex flex-wrap items-center gap-3">
+        <Button type="submit" pending={save.isPending} className="min-w-30">
+          {save.isPending ? 'Saving…' : 'Save defaults'}
+        </Button>
+        {save.isSuccess && (
+          <InlineStatus tone="success">
+            Saved to your global Git config.
+          </InlineStatus>
+        )}
+        {save.isError && (
+          <InlineStatus tone="danger">
+            {ipcErrorMessage(
+              save.error,
+              "Git couldn't save these defaults. Try again.",
+            )}
+          </InlineStatus>
+        )}
+      </div>
+    </form>
+  );
+}
+
 export function GitSection() {
   const identity = useGitIdentity();
 
@@ -126,6 +238,10 @@ export function GitSection() {
           name: identity.data.name ?? '',
           email: identity.data.email ?? '',
         }}
+      />
+      <DefaultsForm
+        defaultBranch={identity.data.defaultBranch}
+        autocrlf={identity.data.autocrlf}
       />
     </>
   );

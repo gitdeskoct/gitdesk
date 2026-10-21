@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   app,
   BrowserWindow,
+  Menu,
   nativeTheme,
   net,
   safeStorage,
@@ -10,7 +11,8 @@ import {
 } from 'electron';
 import log from 'electron-log/main';
 import started from 'electron-squirrel-startup';
-import { accountSummarySchema, IPC, type AppInfo } from '../shared/ipc';
+import { accountSummarySchema, IPC } from '../shared/ipc';
+import { createAppService } from './app/app-service';
 import { createApiClient } from './auth/api-client';
 import { AuthService } from './auth/auth-service';
 import { CredentialStore } from './auth/credential-store';
@@ -34,7 +36,6 @@ const PLATFORM_NAMES: Partial<Record<NodeJS.Platform, string>> = {
   darwin: 'macOS',
   linux: 'Linux',
 };
-const GIT_DOWNLOAD_URL = 'https://git-scm.com/downloads';
 const devServerUrl = MAIN_WINDOW_VITE_DEV_SERVER_URL || undefined;
 const origins = allowedRendererOrigins(devServerUrl);
 let mainWindow: BrowserWindow | null = null;
@@ -81,9 +82,23 @@ function start() {
     );
 
   const db = openDatabase(path.join(userData, 'gitdesk.db'));
-  const settings = new SettingsService(db, () => {
-    if (mainWindow) applyChromeColors(mainWindow);
+  const settings = new SettingsService(db, (patch) => {
+    if (!mainWindow) return;
+    if (patch.theme) applyChromeColors(mainWindow);
+    if (patch.zoomLevel !== undefined)
+      mainWindow.webContents.setZoomLevel(patch.zoomLevel);
   });
+  // The in-window menu bar replaces the default menu, whose Reload and DevTools accelerators would
+  // otherwise stay live in production. macOS keeps a minimal native menu for its app and edit roles.
+  Menu.setApplicationMenu(
+    process.platform === 'darwin'
+      ? Menu.buildFromTemplate([
+          { role: 'appMenu' },
+          { role: 'editMenu' },
+          { role: 'windowMenu' },
+        ])
+      : null,
+  );
   nativeTheme.on('updated', () => {
     if (mainWindow) applyChromeColors(mainWindow);
   });
@@ -124,25 +139,23 @@ function start() {
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
     {
+      app: createAppService(() => mainWindow),
       auth,
       settings,
       git: createGitIdentity(),
-      appInfo: {
-        version: app.getVersion(),
-        electron: process.versions.electron,
-        platform: process.platform as AppInfo['platform'],
-      },
-      openGitInstallPage: () => shell.openExternal(GIT_DOWNLOAD_URL),
     },
   );
 
-  mainWindow = createMainWindow(devServerUrl);
-  mainWindow.on('closed', () => {
-    mainWindow = null;
-  });
+  const openWindow = () => {
+    mainWindow = createMainWindow(devServerUrl, () => settings.get().zoomLevel);
+    mainWindow.on('closed', () => {
+      mainWindow = null;
+    });
+  };
+  openWindow();
   void auth.restore();
 
   app.on('activate', () => {
-    if (!mainWindow) mainWindow = createMainWindow(devServerUrl);
+    if (!mainWindow) openWindow();
   });
 }

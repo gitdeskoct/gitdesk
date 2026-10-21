@@ -4,6 +4,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthErrorCode, DesktopApi } from '../../../shared/ipc';
 import { DEFAULT_SETTINGS } from '../../../shared/settings';
+import { NavigationProvider } from '../../app/navigation';
 import { authErrorMessages } from './messages';
 import { SignInScreen } from './sign-in-screen';
 
@@ -14,9 +15,12 @@ function renderScreen(status: Parameters<typeof SignInScreen>[0]['status']) {
     defaultOptions: { queries: { retry: false } },
   });
   client.setQueryData(['settings'], DEFAULT_SETTINGS);
+  client.setQueryData(['auth'], status);
   return render(
     <QueryClientProvider client={client}>
-      <SignInScreen status={status} />
+      <NavigationProvider>
+        <SignInScreen status={status} />
+      </NavigationProvider>
     </QueryClientProvider>,
   );
 }

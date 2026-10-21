@@ -4,6 +4,7 @@ import {
   Laptop,
   Palette,
   GitCommitHorizontal,
+  Keyboard,
   Search,
   SlidersHorizontal,
   User,
@@ -23,6 +24,7 @@ import { AppearanceSection } from './appearance-section';
 import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
+import { ShortcutsSection } from './shortcuts-section';
 import { SECTION_LABELS, searchSettings } from './search-index';
 
 const GROUPS: {
@@ -35,6 +37,7 @@ const GROUPS: {
       { id: 'general', icon: SlidersHorizontal },
       { id: 'appearance', icon: Palette },
       { id: 'git', icon: GitCommitHorizontal },
+      { id: 'shortcuts', icon: Keyboard },
     ],
   },
   {
@@ -109,6 +112,7 @@ export function SettingsLayout({
     general: <GeneralSection />,
     appearance: <AppearanceSection />,
     git: <GitSection />,
+    shortcuts: <ShortcutsSection />,
     account: <AccountSection status={status} />,
     devices: <DevicesSection status={status} />,
     about: <AboutSection />,
@@ -161,6 +165,7 @@ export function SettingsLayout({
         ))}
       </nav>
       <Page
+        width="narrow"
         crumbs={[
           {
             label: 'Settings',

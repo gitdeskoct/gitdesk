@@ -2,7 +2,15 @@ import * as RadioGroup from '@radix-ui/react-radio-group';
 import type { Settings } from '../../../shared/settings';
 import { Segmented } from '../../components/ui/segmented';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
+import { Minus, Plus } from 'lucide-react';
+import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/cn';
+import {
+  clampZoom,
+  shortcutText,
+  ZOOM_STEP,
+  zoomPercent,
+} from '../../lib/shortcuts';
 import { useSettings, useUpdateSettings } from '../../lib/queries';
 import { PageTitle } from '../shell/page';
 
@@ -194,6 +202,52 @@ export function AppearanceSection() {
               { value: 'wide', label: 'Wide' },
             ]}
           />
+        </SettingRow>
+        <SettingRow
+          id="zoom"
+          label="Zoom"
+          description={`Use ${shortcutText('zoomIn')} to zoom in and ${shortcutText('zoomOut')} to zoom out.`}
+        >
+          <div className="flex items-center gap-1.5">
+            <Button
+              size="icon"
+              aria-label="Zoom out"
+              disabled={settings.zoomLevel <= -3}
+              onClick={() =>
+                update.mutate({
+                  zoomLevel: clampZoom(settings.zoomLevel - ZOOM_STEP),
+                })
+              }
+            >
+              <Minus />
+            </Button>
+            <output
+              className="min-w-12 text-center text-[0.8125rem] text-ink tabular-nums"
+              aria-live="polite"
+            >
+              {zoomPercent(settings.zoomLevel)}%
+            </output>
+            <Button
+              size="icon"
+              aria-label="Zoom in"
+              disabled={settings.zoomLevel >= 3}
+              onClick={() =>
+                update.mutate({
+                  zoomLevel: clampZoom(settings.zoomLevel + ZOOM_STEP),
+                })
+              }
+            >
+              <Plus />
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={settings.zoomLevel === 0}
+              onClick={() => update.mutate({ zoomLevel: 0 })}
+            >
+              Reset
+            </Button>
+          </div>
         </SettingRow>
       </SettingGroup>
     </>

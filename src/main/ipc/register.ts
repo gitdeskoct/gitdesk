@@ -1,6 +1,12 @@
 import { z } from 'zod';
-import { gitIdentityInputSchema, IPC, type AppInfo } from '../../shared/ipc';
+import {
+  gitDefaultsSchema,
+  gitIdentityInputSchema,
+  IPC,
+  windowCommandSchema,
+} from '../../shared/ipc';
 import { settingsPatchSchema } from '../../shared/settings';
+import type { AppService } from '../app/app-service';
 import type { AuthService } from '../auth/auth-service';
 import type { createGitIdentity } from '../git/git-identity';
 import type { SettingsService } from '../settings/settings-service';
@@ -11,15 +17,22 @@ const none = z.undefined();
 export function registerIpc(
   handle: Handle,
   services: {
+    app: AppService;
     auth: AuthService;
     settings: SettingsService;
     git: ReturnType<typeof createGitIdentity>;
-    appInfo: AppInfo;
-    openGitInstallPage(): Promise<void>;
   },
 ): void {
-  const { auth, settings, git, appInfo } = services;
-  handle(IPC.appGetInfo, none, () => appInfo);
+  const { app, auth, settings, git } = services;
+  handle(IPC.appGetInfo, none, () => app.info());
+  handle(IPC.appSetOpenAtLogin, z.boolean(), (enabled) =>
+    app.setOpenAtLogin(enabled),
+  );
+  handle(IPC.appOpenLogs, none, () => app.openLogs());
+  handle(IPC.appCopyDiagnostics, none, () => app.copyDiagnostics());
+  handle(IPC.windowCommand, windowCommandSchema, (command) =>
+    app.command(command),
+  );
   handle(IPC.authGetStatus, none, () => auth.getStatus());
   handle(IPC.authRetry, none, () => auth.restore());
   handle(IPC.authSignIn, none, () => auth.signIn());
@@ -34,5 +47,8 @@ export function registerIpc(
   );
   handle(IPC.gitGetIdentity, none, () => git.get());
   handle(IPC.gitSetIdentity, gitIdentityInputSchema, (input) => git.set(input));
-  handle(IPC.gitOpenInstallPage, none, () => services.openGitInstallPage());
+  handle(IPC.gitSetDefaults, gitDefaultsSchema, (input) =>
+    git.setDefaults(input),
+  );
+  handle(IPC.gitOpenInstallPage, none, () => app.openGitInstallPage());
 }

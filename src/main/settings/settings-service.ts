@@ -13,7 +13,7 @@ export class SettingsService {
 
   constructor(
     private readonly db: AppDatabase,
-    private readonly onThemeApplied: () => void,
+    private readonly onApplied: (patch: SettingsPatch) => void,
   ) {
     this.current = mergeSettings(readState(db, KEY));
     nativeTheme.themeSource = this.current.theme;
@@ -26,10 +26,8 @@ export class SettingsService {
   update(patch: SettingsPatch): Settings {
     this.current = { ...this.current, ...patch };
     writeState(this.db, KEY, this.current);
-    if (patch.theme) {
-      nativeTheme.themeSource = patch.theme;
-      this.onThemeApplied();
-    }
+    if (patch.theme) nativeTheme.themeSource = patch.theme;
+    this.onApplied(patch);
     return this.current;
   }
 }

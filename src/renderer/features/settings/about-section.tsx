@@ -2,10 +2,16 @@ import { LogoMark } from '../../components/brand/logo';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { Loading } from '../../components/ui/status';
 import { PLATFORM_NAMES } from '../../lib/format';
-import { useAppInfo } from '../../lib/queries';
+import { Copy, FolderOpen } from 'lucide-react';
+import { Button } from '../../components/ui/button';
+import { InlineStatus } from '../../components/ui/status';
+import { ipcErrorMessage } from '../../lib/ipc-error';
+import { useAppInfo, useCopyDiagnostics, useOpenLogs } from '../../lib/queries';
 
 export function AboutSection() {
   const info = useAppInfo();
+  const openLogs = useOpenLogs();
+  const copy = useCopyDiagnostics();
   if (info.isPending) return <Loading label="Reading version details…" />;
   if (info.isError) return null;
 
@@ -40,7 +46,38 @@ export function AboutSection() {
             {PLATFORM_NAMES[info.data.platform]}
           </span>
         </SettingRow>
+        <SettingRow
+          label="Logs"
+          description="Diagnostic logs. They never contain tokens or sign-in codes."
+        >
+          <Button
+            size="sm"
+            pending={openLogs.isPending}
+            onClick={() => openLogs.mutate()}
+          >
+            {!openLogs.isPending && <FolderOpen />}
+            Open logs folder
+          </Button>
+        </SettingRow>
+        <SettingRow
+          label="Version details"
+          description="Copy these when you report a problem."
+        >
+          <Button
+            size="sm"
+            pending={copy.isPending}
+            onClick={() => copy.mutate()}
+          >
+            {!copy.isPending && <Copy />}
+            {copy.isSuccess ? 'Copied' : 'Copy'}
+          </Button>
+        </SettingRow>
       </SettingGroup>
+      {openLogs.isError && (
+        <InlineStatus tone="danger" className="mt-4">
+          {ipcErrorMessage(openLogs.error, "Couldn't open the logs folder.")}
+        </InlineStatus>
+      )}
     </>
   );
 }

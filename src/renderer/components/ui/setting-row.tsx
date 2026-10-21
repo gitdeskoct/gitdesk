@@ -40,13 +40,14 @@ export function SettingRow({
     <div
       id={id}
       className={cn(
-        'scroll-mt-6 py-4 target:bg-accent-soft',
+        // The highlight bleeds 12px to each side (without moving the hairlines) so the text never touches its edge.
+        'scroll-mt-6 py-4 target:bg-accent-soft target:shadow-[-12px_0_0_var(--accent-soft),12px_0_0_var(--accent-soft)]',
         stacked
           ? 'grid gap-3'
-          : 'flex flex-wrap items-center justify-between gap-x-8 gap-y-3',
+          : 'flex items-center justify-between gap-x-8 [&>*:last-child:not(:first-child)]:shrink-0',
       )}
     >
-      <div className="max-w-md min-w-0">
+      <div className="max-w-2xl min-w-0 flex-1">
         <div className="text-sm font-medium text-ink">{label}</div>
         {description && (
           <div className="mt-0.5 text-sm text-muted">{description}</div>

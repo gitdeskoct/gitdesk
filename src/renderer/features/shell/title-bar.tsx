@@ -3,6 +3,7 @@ import { Logo, LogoMark } from '../../components/brand/logo';
 import { Button } from '../../components/ui/button';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
+import { AppMenu } from './app-menu';
 import {
   useMotionAllowed,
   useSettings,
@@ -14,9 +15,11 @@ import {
 export function TitleBar({
   brand = true,
   sidebarToggle = true,
+  inShell = false,
 }: {
   brand?: boolean;
   sidebarToggle?: boolean;
+  inShell?: boolean;
 }) {
   const mac = window.desktop.platform === 'darwin';
   const { data: settings } = useSettings();
@@ -27,7 +30,7 @@ export function TitleBar({
   return (
     <header
       className={cn(
-        'drag flex h-11 flex-none items-center gap-3 bg-canvas',
+        'drag flex h-11 flex-none items-center gap-2 bg-canvas',
         mac ? 'pl-20' : 'pl-3',
         mac ? 'pr-3' : 'pr-36',
       )}
@@ -62,6 +65,7 @@ export function TitleBar({
           </Button>
         </Tooltip>
       )}
+      {!mac && <AppMenu inShell={inShell} />}
     </header>
   );
 }

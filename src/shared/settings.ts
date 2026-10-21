@@ -8,6 +8,8 @@ export const settingsSchema = z.object({
   fontFamily: z.enum(['inter', 'system']),
   motion: z.enum(['full', 'reduced', 'off']),
   contentWidth: z.enum(['compact', 'default', 'wide']),
+  // Chromium zoom level: each step of 0.5 is roughly 10%, so -3..3 is about 50% to 200%.
+  zoomLevel: z.number().min(-3).max(3).multipleOf(0.5),
   sidebarCollapsed: z.boolean(),
   localOnly: z.boolean(),
 });
@@ -24,6 +26,7 @@ export const DEFAULT_SETTINGS: Settings = {
   fontFamily: 'inter',
   motion: 'full',
   contentWidth: 'default',
+  zoomLevel: 0,
   sidebarCollapsed: false,
   localOnly: false,
 };

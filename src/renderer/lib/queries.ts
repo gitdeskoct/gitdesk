@@ -1,6 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useReducedMotion } from 'framer-motion';
-import type { AuthStatus, GitIdentityInput } from '../../shared/ipc';
+import type {
+  AuthStatus,
+  GitDefaults,
+  GitIdentityInput,
+} from '../../shared/ipc';
 import {
   DEFAULT_SETTINGS,
   type Settings,
@@ -111,3 +115,34 @@ export const useAppInfo = () =>
     queryFn: () => desktop().app.getInfo(),
     staleTime: Infinity,
   });
+
+export function useGitDefaultsMutation() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: GitDefaults) => desktop().git.setDefaults(input),
+    onSuccess: (identity) => qc.setQueryData(keys.gitIdentity, identity),
+  });
+}
+
+export function useSetOpenAtLogin() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (enabled: boolean) => desktop().app.setOpenAtLogin(enabled),
+    onSuccess: (info) => qc.setQueryData(keys.appInfo, info),
+  });
+}
+
+// Signs out every session except this one, one request each; the list refreshes when all settle.
+export function useRevokeOtherSessions() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (ids: string[]) =>
+      Promise.all(ids.map((id) => desktop().auth.revokeSession(id))),
+    onSettled: () => qc.invalidateQueries({ queryKey: keys.sessions }),
+  });
+}
+
+export const useOpenLogs = () =>
+  useMutation({ mutationFn: () => desktop().app.openLogs() });
+export const useCopyDiagnostics = () =>
+  useMutation({ mutationFn: () => desktop().app.copyDiagnostics() });

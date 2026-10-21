@@ -148,9 +148,12 @@ Hierarchy is **Page → Section → Component**. A page has one title. Sections 
 
 - **Shell.** The title bar and the sidebar share the `canvas` color, so they read as one frame.
 - **Title bar.** 44px tall (`TITLE_BAR_HEIGHT` in `src/main/window.ts`). The window uses a hidden title bar with native window controls overlaid in canvas colors, so the frame never flashes a different color on load.
+- **Menu bar.** On Windows and Linux the title bar carries an in-window File, Edit, View and Help menu (Radix Menubar). The native menu is removed there, which also removes its Reload and DevTools accelerators. macOS keeps a minimal native menu. Every menu item has real behavior, and its shortcut comes from the same list as Settings › Shortcuts. _Why: a desktop app is expected to have menus, and one shortcut list can't drift from what the menu says._
 - **Workspace surface.** The `surface` panel is flush to the right and bottom window edges and has a single 6px corner at the top left, where it meets the sidebar and title bar.
 - **Breadcrumb header.** 48px tall, at the top of the workspace surface.
 - **Content width.** Content is centered in the workspace up to `--content-max`: 840px (compact), 1020px (default) or 1160px (wide), from the `contentWidth` setting. _Why: long lines are hard to scan, and users on wide monitors can opt into more._
+- **One centered column.** The breadcrumb header, the status line and the page body share one centered column, so the breadcrumb always lines up with the content under it. Settings use a narrower column (at most 760px) because they read as a single list. Side padding is 24px, and 40px from 1100px wide. _Why: content pressed against the sidebar edge reads as unfinished._
+- **Rows.** A setting row's text column flexes and its control never shrinks, so controls stay on the right at every width instead of dropping under the text.
 - **Spacing.** A 6px scale: 6, 12, 18, 24, 30 and 36px (`--space-1` to `--space-6`). _Why: it lines up with the 6px radius, so edges and gaps share one rhythm._
 
 ## Shape
