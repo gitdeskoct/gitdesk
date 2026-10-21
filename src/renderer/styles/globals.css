@@ -1,0 +1,216 @@
+@import 'tailwindcss';
+@import '@fontsource-variable/inter';
+
+/* Owner tokens, exact values (DESIGN.md). faint is for icons, drawings and borders only, never text.
+   Amber's on-accent is dark because white on #ba7400 is 3.76:1. Ratios are in DESIGN.md. */
+:root {
+  --space-1: 6px;
+  --space-2: 12px;
+  --space-3: 18px;
+  --space-4: 24px;
+  --space-5: 30px;
+  --space-6: 36px;
+  --radius-sm: 6px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+
+  --canvas: #eef0f3;
+  --surface: #ffffff;
+  --sunken: #f5f6f8;
+  --line: #dde1e7;
+  --line-strong: #c6ccd5;
+  --ink: #14161a;
+  --muted: #5b6270;
+  --faint: #8a919c;
+  --accent: #2f5bea;
+  --accent-hover: #2549c4;
+  --accent-soft: #e6ecfd;
+  --on-accent: #ffffff;
+  --record: #d93a2b;
+  --record-soft: #fbe7e5;
+  --success: #1f8a4c;
+  --success-soft: #e3f3ea;
+  --warning: #a86a12;
+  --warning-soft: #fbf0dc;
+  --danger: #c4322b;
+  --danger-soft: #fbe6e5;
+  --app-font:
+    'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system,
+    'Segoe UI', Roboto, sans-serif;
+  --content-max: 1020px;
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --canvas: #0b0b0d;
+    --surface: #131316;
+    --sunken: #0f1012;
+    --line: #222327;
+    --line-strong: #32343a;
+    --ink: #f1f1f3;
+    --muted: #a8adb7;
+    --faint: #7e838f;
+    --accent: #7f95ff;
+    --accent-hover: #98a9ff;
+    --accent-soft: #1f2540;
+    --on-accent: #0d1020;
+    --record: #ff6f64;
+    --record-soft: #3a1d1b;
+    --success: #4fce87;
+    --success-soft: #143022;
+    --warning: #e7b45a;
+    --warning-soft: #32260f;
+    --danger: #ff6f64;
+    --danger-soft: #3a1d1b;
+    color-scheme: dark;
+  }
+}
+
+:root[data-accent-tone='violet'] {
+  --accent: #6148d8;
+  --accent-hover: #5038b8;
+  --accent-soft: #ece8ff;
+  --on-accent: #ffffff;
+}
+:root[data-accent-tone='green'] {
+  --accent: #1f8a4c;
+  --accent-hover: #267b47;
+  --accent-soft: #e3f3ea;
+  --on-accent: #ffffff;
+}
+:root[data-accent-tone='amber'] {
+  --accent: #ba7400;
+  --accent-hover: #9f6600;
+  --accent-soft: #f7edda;
+  --on-accent: #241603;
+}
+:root[data-accent-tone='rose'] {
+  --accent: #c14574;
+  --accent-hover: #a73b64;
+  --accent-soft: #f9e7ee;
+  --on-accent: #ffffff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root[data-accent-tone='violet'] {
+    --accent: #a28fff;
+    --accent-hover: #b7a8ff;
+    --accent-soft: #30254b;
+    --on-accent: #0f0820;
+  }
+  :root[data-accent-tone='green'] {
+    --accent: #4fce87;
+    --accent-hover: #6fdaa0;
+    --accent-soft: #153025;
+    --on-accent: #081d12;
+  }
+  :root[data-accent-tone='amber'] {
+    --accent: #e7b45a;
+    --accent-hover: #efc680;
+    --accent-soft: #38280f;
+    --on-accent: #241603;
+  }
+  :root[data-accent-tone='rose'] {
+    --accent: #ff83ad;
+    --accent-hover: #ff9fc0;
+    --accent-soft: #3c1d2b;
+    --on-accent: #260d17;
+  }
+}
+
+:root[data-font='system'] {
+  --app-font:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+:root[data-font-size='small'] {
+  font-size: 14px;
+}
+:root[data-font-size='large'] {
+  font-size: 18px;
+}
+:root[data-content-width='compact'] {
+  --content-max: 840px;
+}
+:root[data-content-width='wide'] {
+  --content-max: 1160px;
+}
+
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-sunken: var(--sunken);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-record: var(--record);
+  --color-record-soft: var(--record-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --font-sans: var(--app-font);
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: var(--app-font);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line-strong) transparent;
+  }
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+}
+
+@utility drag {
+  -webkit-app-region: drag;
+}
+@utility no-drag {
+  -webkit-app-region: no-drag;
+}
+
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+  animation: none !important;
+  transition: none !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root[data-motion='full'] * {
+    transition-duration: 0.01ms !important;
+  }
+  [data-spinner] {
+    animation: none !important;
+  }
+}
+:root[data-motion='reduced'] [data-spinner] {
+  animation: none;
+}

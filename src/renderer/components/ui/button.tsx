@@ -1,0 +1,69 @@
+import { Slot } from '@radix-ui/react-slot';
+import { cva, type VariantProps } from 'class-variance-authority';
+import type { ComponentProps } from 'react';
+import { cn } from '../../lib/cn';
+import { Spinner } from './spinner';
+
+export const buttonVariants = cva(
+  'inline-flex shrink-0 cursor-default items-center justify-center gap-2 rounded-sm text-sm font-medium whitespace-nowrap transition-colors select-none disabled:pointer-events-none disabled:opacity-50 aria-busy:cursor-progress [&_svg]:size-4 [&_svg]:shrink-0',
+  {
+    variants: {
+      variant: {
+        primary: 'bg-accent text-on-accent hover:bg-accent-hover',
+        secondary:
+          'border border-line-strong bg-surface text-ink hover:bg-sunken',
+        ghost: 'text-muted hover:bg-sunken hover:text-ink',
+        danger:
+          'border border-danger bg-surface text-danger hover:bg-danger-soft',
+        link: 'h-auto px-0 text-accent underline-offset-4 hover:underline',
+      },
+      size: {
+        sm: 'h-8 px-3',
+        md: 'h-9 px-3.5',
+        lg: 'h-11 px-4 text-[0.9375rem]',
+        icon: 'size-8',
+      },
+    },
+    defaultVariants: { variant: 'secondary', size: 'md' },
+  },
+);
+
+type ButtonProps = ComponentProps<'button'> &
+  VariantProps<typeof buttonVariants> & {
+    asChild?: boolean;
+    pending?: boolean;
+  };
+
+// While pending the button stays focusable (no `disabled`) so keyboard focus is not lost; clicks are ignored.
+export function Button({
+  className,
+  variant,
+  size,
+  asChild,
+  type,
+  pending = false,
+  onClick,
+  children,
+  ...props
+}: ButtonProps) {
+  const Comp = asChild ? Slot : 'button';
+  return (
+    <Comp
+      type={asChild ? undefined : (type ?? 'button')}
+      className={cn(buttonVariants({ variant, size }), className)}
+      aria-busy={pending || undefined}
+      aria-disabled={pending || props.disabled || undefined}
+      onClick={pending ? (event) => event.preventDefault() : onClick}
+      {...props}
+    >
+      {asChild ? (
+        children
+      ) : (
+        <>
+          {pending && <Spinner />}
+          {children}
+        </>
+      )}
+    </Comp>
+  );
+}

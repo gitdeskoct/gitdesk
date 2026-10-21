@@ -1,0 +1,175 @@
+# gitdesk-api
+
+The Cloudflare Worker behind gitdesk sign-in. It runs Google OAuth, hands a one-time code to the desktop app, and issues and rotates session tokens. Hono for routing, D1 with Drizzle for storage, jose for JWTs.
+
+See the [root README](../README.md) for how the desktop app and this Worker fit together.
+
+## What it serves
+
+All routes are under `/api/v1/auth` (`src/modules/auth/routes.ts`), plus `GET /health`.
+
+| Route | Purpose |
+| --- | --- |
+| `GET /google/start` | Called by the system browser. Stores an OAuth transaction and redirects to Google. |
+| `GET /google/callback` | Google's redirect target. Verifies the sign-in and redirects to the app's loopback with a one-time code. |
+| `POST /desktop/exchange` | The app trades the one-time code and its PKCE verifier for tokens. |
+| `POST /refresh` | Rotates the refresh token and issues a new access token. |
+| `POST /logout` | Revokes the session that owns a refresh token. |
+| `GET /me` | The signed-in account. |
+| `GET /sessions` | The account's active sessions. |
+| `DELETE /sessions/:id` | Revokes one of the account's sessions. |
+
+Access tokens are HS256 JWTs valid for 10 minutes. Refresh tokens are random and stored only as SHA-256 hashes. Sessions end after 30 days without a refresh or 90 days in total. A cron at 03:00 UTC daily (`src/jobs/cleanup.ts`) deletes expired transactions, codes and old sessions.
+
+## Configuration
+
+| Name | Kind | Where it is set | Used for |
+| --- | --- | --- | --- |
+| `PUBLIC_ORIGIN` | var | `wrangler.jsonc` (`http://localhost:8787`), overridden on deploy | Google redirect URI and JWT issuer |
+| `GOOGLE_CLIENT_ID` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
+| `GOOGLE_CLIENT_SECRET` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
+| `JWT_SIGNING_KEY` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Signing access tokens. At least 32 bytes, base64url. |
+| `DB` | D1 binding | `wrangler.jsonc`, database `gitdesk-db` | Accounts, identities, transactions, codes, sessions |
+| `AUTH_LIMITER`, `REFRESH_LIMITER`, `API_LIMITER` | rate limit bindings | `wrangler.jsonc` | 10, 20 and 120 requests per 60 seconds |
+
+`PUBLIC_ORIGIN` is an origin with no trailing slash, because the code appends `/api/v1/auth/google/callback` to it.
+
+## Setup
+
+Run everything in `backend/`.
+
+### 1. Install
+
+```bash
+npm install
+```
+
+### 2. Create a Google OAuth client
+
+In the Google Cloud console, under APIs & Services, Credentials, create an **OAuth client ID** of type **Web application**. The Worker, not the desktop app, is the OAuth client, which is why the type is Web application and not Desktop.
+
+Add one authorized redirect URI per origin the Worker runs on, in the form `<PUBLIC_ORIGIN>/api/v1/auth/google/callback`:
+
+- Local: `http://localhost:8787/api/v1/auth/google/callback`
+- Production: `https://<your-worker-origin>/api/v1/auth/google/callback`
+
+The Worker requests the `openid email profile` scopes, so the OAuth consent screen needs those. Copy the client ID and client secret for the next steps.
+
+### 3. Local secrets
+
+Copy the example file and fill it in. `.dev.vars` is gitignored.
+
+```bash
+cp .dev.vars.example .dev.vars
+```
+
+Generate `JWT_SIGNING_KEY` with:
+
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
+
+### 4. Local database and dev server
+
+```bash
+npm run db:migrate:local
+```
+
+```bash
+npm run dev
+```
+
+The Worker listens on `http://localhost:8787`. Point the desktop app at it with `VITE_API_ORIGIN=http://localhost:8787` in the root `.env`.
+
+### 5. Tests
+
+```bash
+npm test
+```
+
+Tests run inside the Workers runtime through `@cloudflare/vitest-plugin`. They apply the migrations to a fresh D1 database and use test secrets from `vitest.config.ts`, so they need neither `.dev.vars` nor a Cloudflare account. They expect `PUBLIC_ORIGIN` in `wrangler.jsonc` to stay `http://localhost:8787`.
+
+## Deploy
+
+### 1. Create the D1 database
+
+```bash
+npx wrangler d1 create gitdesk-db
+```
+
+Paste the `database_id` it prints into the existing `d1_databases` entry in `wrangler.jsonc`:
+
+```jsonc
+"d1_databases": [
+  {
+    "binding": "DB",
+    "database_name": "gitdesk-db",
+    "database_id": "<paste here>",
+    "migrations_dir": "drizzle/migrations"
+  }
+]
+```
+
+`wrangler.jsonc` has no `database_id` today, so remote migrations and deploys fail until this step is done.
+
+### 2. Apply migrations remotely
+
+```bash
+npm run db:migrate:remote
+```
+
+### 3. Set secrets
+
+Each command prompts for the value. Use a new `JWT_SIGNING_KEY`, not the one in `.dev.vars`.
+
+```bash
+npx wrangler secret put GOOGLE_CLIENT_ID
+```
+
+```bash
+npx wrangler secret put GOOGLE_CLIENT_SECRET
+```
+
+```bash
+npx wrangler secret put JWT_SIGNING_KEY
+```
+
+### 4. Deploy with the production origin
+
+`wrangler.jsonc` sets `PUBLIC_ORIGIN` to `http://localhost:8787` for local dev and tests. A plain deploy would send that value to production, and Google would reject the redirect URI. Pass the real origin on every deploy:
+
+```bash
+npm run deploy -- --var PUBLIC_ORIGIN:https://<your-worker-origin>
+```
+
+By default the origin is `https://gitdesk-api.<your-subdomain>.workers.dev`. It must match the production redirect URI registered with Google and the desktop app's `VITE_API_ORIGIN`.
+
+## Changing the schema
+
+1. Edit `src/db/schema.ts`.
+2. Generate a migration into `drizzle/migrations`:
+
+```bash
+npm run db:generate
+```
+
+3. Apply it with `npm run db:migrate:local`, and `npm run db:migrate:remote` before deploying code that depends on it.
+
+If you change bindings in `wrangler.jsonc`, regenerate the binding types in `worker-configuration.d.ts`:
+
+```bash
+npm run cf-typegen
+```
+
+## Scripts
+
+| Script | Command |
+| --- | --- |
+| `dev` | `wrangler dev` |
+| `test` | `vitest run` |
+| `typecheck` | `tsc --noEmit` |
+| `deploy` | `wrangler deploy --minify` |
+| `cf-typegen` | `wrangler types --env-interface CloudflareBindings` |
+| `db:generate` | `drizzle-kit generate` |
+| `db:migrate:local` | `wrangler d1 migrations apply DB --local` |
+| `db:migrate:remote` | `wrangler d1 migrations apply DB --remote` |

@@ -1,0 +1,5 @@
+# Copy to .dev.vars (gitignored) and fill in. Never commit real values.
+GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-client-secret
+# 32+ random bytes, base64url. Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+JWT_SIGNING_KEY=replace-with-random-base64url

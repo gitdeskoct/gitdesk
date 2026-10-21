@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "gitdesk-api",
+  "main": "src/index.ts",
+  // Newest date the bundled test runtime (@cloudflare/vitest-plugin 1.4.0) supports; bump with it.
+  "compatibility_date": "2026-10-06",
+  "upload_source_maps": true,
+  // Public origin of this Worker; used to build the Google redirect URI and JWT issuer.
+  // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY come from `wrangler secret put` (or .dev.vars locally).
+  "vars": {
+    "PUBLIC_ORIGIN": "http://localhost:8787"
+  },
+  "secrets": {
+    "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "gitdesk-db",
+      "migrations_dir": "drizzle/migrations"
+    }
+  ],
+  // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.
+  "ratelimits": [
+    { "name": "AUTH_LIMITER", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },
+    { "name": "REFRESH_LIMITER", "namespace_id": "4102", "simple": { "limit": 20, "period": 60 } },
+    { "name": "API_LIMITER", "namespace_id": "4103", "simple": { "limit": 120, "period": 60 } }
+  ],
+  "triggers": {
+    "crons": ["0 3 * * *"]
+  },
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true, "head_sampling_rate": 1 },
+    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+  }
+}
