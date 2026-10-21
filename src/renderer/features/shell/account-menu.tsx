@@ -70,7 +70,7 @@ export function AccountMenu({
       <DropdownMenu>
         <DropdownMenuTrigger
           className={cn(
-            'flex w-full items-center gap-2.5 rounded-sm text-left hover:bg-sunken',
+            'flex w-full items-center gap-2.5 rounded-sm text-left hover:bg-hover',
             collapsed ? 'justify-center py-1.5' : 'p-2',
           )}
           aria-label={`Account: ${account.displayName}`}

@@ -51,7 +51,7 @@ function Item({
   return (
     <Menubar.Item
       onSelect={onSelect}
-      className="flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-ink outline-none select-none data-[disabled]:opacity-50 data-[highlighted]:bg-sunken"
+      className="flex h-8 cursor-default items-center gap-2.5 rounded-sm px-2 text-ink outline-none select-none data-[disabled]:opacity-50 data-[highlighted]:bg-control"
     >
       <Icon className="size-4 text-muted" aria-hidden />
       <span className="flex-1">{label}</span>
@@ -73,7 +73,7 @@ function Menu({
 }) {
   return (
     <Menubar.Menu>
-      <Menubar.Trigger className="h-7 rounded-sm px-2.5 text-[0.8125rem] text-muted outline-none select-none hover:bg-sunken hover:text-ink focus-visible:outline-2 focus-visible:outline-accent data-[state=open]:bg-sunken data-[state=open]:text-ink">
+      <Menubar.Trigger className="h-7 rounded-sm px-2.5 text-[0.8125rem] text-muted outline-none select-none hover:bg-hover hover:text-ink focus-visible:outline-2 focus-visible:outline-accent data-[state=open]:bg-hover data-[state=open]:text-ink">
         {label}
       </Menubar.Trigger>
       <Menubar.Portal>

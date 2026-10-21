@@ -12,6 +12,14 @@ export const settingsSchema = z.object({
   zoomLevel: z.number().min(-3).max(3).multipleOf(0.5),
   sidebarCollapsed: z.boolean(),
   localOnly: z.boolean(),
+  // Workspace: how Home is laid out and how often repositories are checked.
+  dashboardLayout: z.enum(['auto', 'centered', 'split']),
+  dashboardDensity: z.enum(['comfortable', 'compact']),
+  watchRepositories: z.boolean(),
+  refreshOnFocus: z.boolean(),
+  // Minutes between background checks while the window is open; 0 turns them off.
+  backgroundRefresh: z.union([z.literal(0), z.literal(5), z.literal(15), z.literal(30)]),
+  remoteRefresh: z.enum(['auto', 'manual']),
 });
 
 export const settingsPatchSchema = settingsSchema.partial().strict();
@@ -29,9 +37,22 @@ export const DEFAULT_SETTINGS: Settings = {
   zoomLevel: 0,
   sidebarCollapsed: false,
   localOnly: false,
+  dashboardLayout: 'auto',
+  dashboardDensity: 'comfortable',
+  watchRepositories: true,
+  refreshOnFocus: true,
+  backgroundRefresh: 5,
+  remoteRefresh: 'auto',
 };
 
+// Field by field, so one bad or retired value falls back alone instead of resetting everything.
 export function mergeSettings(stored: unknown): Settings {
-  const parsed = settingsSchema.partial().safeParse(stored);
-  return { ...DEFAULT_SETTINGS, ...(parsed.success ? parsed.data : {}) };
+  const merged: Record<string, unknown> = { ...DEFAULT_SETTINGS };
+  if (stored && typeof stored === 'object') {
+    for (const [key, field] of Object.entries(settingsSchema.shape)) {
+      const parsed = field.safeParse((stored as Record<string, unknown>)[key]);
+      if (parsed.success) merged[key] = parsed.data;
+    }
+  }
+  return merged as Settings;
 }

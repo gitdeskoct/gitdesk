@@ -24,7 +24,9 @@
   "ratelimits": [
     { "name": "AUTH_LIMITER", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },
     { "name": "REFRESH_LIMITER", "namespace_id": "4102", "simple": { "limit": 20, "period": 60 } },
-    { "name": "API_LIMITER", "namespace_id": "4103", "simple": { "limit": 120, "period": 60 } }
+    { "name": "API_LIMITER", "namespace_id": "4103", "simple": { "limit": 120, "period": 60 } },
+    // Writes spend the free plan's 100,000 daily D1 row writes; one account gets 10 a minute.
+    { "name": "WRITE_LIMITER", "namespace_id": "4104", "simple": { "limit": 10, "period": 60 } }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]

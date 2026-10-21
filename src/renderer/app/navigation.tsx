@@ -10,6 +10,7 @@ import {
 export type SettingsSection =
   | 'general'
   | 'appearance'
+  | 'workspace'
   | 'git'
   | 'shortcuts'
   | 'account'
@@ -17,6 +18,8 @@ export type SettingsSection =
   | 'about';
 export type Route =
   | { name: 'home' | 'repositories' | 'pulls' | 'issues' }
+  // A registered repository, by gitdesk's id; the path stays in main.
+  | { name: 'repository'; id: string }
   | { name: 'settings'; section: SettingsSection; row?: string };
 
 type Navigation = { route: Route; navigate: (route: Route) => void };

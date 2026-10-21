@@ -82,3 +82,27 @@ export const sessions = sqliteTable(
     index('sessions_expires').on(t.expiresAt),
   ],
 );
+
+// Remote repository metadata only. Objects and refs are not stored here; the sync transport that
+// will put them in R2 is a later feature. Every query is scoped by owner_account_id.
+export const repositories = sqliteTable(
+  'repositories',
+  {
+    id: text('id').primaryKey(),
+    ownerAccountId: text('owner_account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    // Lower-cased name: one repository per name per account, regardless of case.
+    nameKey: text('name_key').notNull(),
+    description: text('description'),
+    visibility: text('visibility').notNull().default('private'),
+    defaultBranch: text('default_branch').notNull().default('main'),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('repositories_owner_name').on(t.ownerAccountId, t.nameKey),
+    index('repositories_owner_updated').on(t.ownerAccountId, t.updatedAt, t.id),
+  ],
+);

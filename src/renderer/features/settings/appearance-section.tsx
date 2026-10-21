@@ -2,7 +2,7 @@ import * as RadioGroup from '@radix-ui/react-radio-group';
 import type { Settings } from '../../../shared/settings';
 import { Segmented } from '../../components/ui/segmented';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
-import { Minus, Plus } from 'lucide-react';
+import { Check, Minus, Plus } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/cn';
 import {
@@ -16,21 +16,58 @@ import { PageTitle } from '../shell/page';
 
 // Previews show the fixed light and dark palettes, so these are literal values on purpose.
 const PALETTES = {
-  light: { canvas: '#eef0f3', surface: '#ffffff' },
-  dark: { canvas: '#0b0b0d', surface: '#131316' },
+  light: {
+    canvas: '#eef0f3',
+    surface: '#ffffff',
+    raised: '#ffffff',
+    line: '#dde1e7',
+    chrome: '#c6ccd5',
+    ink: '#14161a',
+    accent: '#2f5bea',
+  },
+  dark: {
+    canvas: '#0b0b0d',
+    surface: '#131316',
+    raised: '#1f2126',
+    line: '#222327',
+    chrome: '#32343a',
+    ink: '#f1f1f3',
+    accent: '#7f95ff',
+  },
 };
 
-function Pane({ palette }: { palette: keyof typeof PALETTES }) {
+// A miniature of the app in one palette: title bar, sidebar with the active item, and a page.
+function MiniApp({ palette }: { palette: keyof typeof PALETTES }) {
+  const c = PALETTES[palette];
+  const bar = (width: string, color: string, height = 5) => (
+    <span
+      className="block rounded-[2px]"
+      style={{ width, height, background: color }}
+    />
+  );
   return (
-    <div
-      className="flex pt-2 pr-2 pl-7"
-      style={{ background: PALETTES[palette].canvas }}
-    >
-      <div
-        className="flex-1 rounded-t-[4px]"
-        style={{ background: PALETTES[palette].surface }}
-      />
-    </div>
+    <span className="flex min-w-0 flex-1 flex-col" style={{ background: c.canvas }}>
+      <span className="flex h-[12%] items-center gap-1 px-2">
+        {bar('5px', c.chrome)}
+        {bar('5px', c.chrome)}
+      </span>
+      <span className="flex flex-1">
+        <span className="grid w-[26%] content-start gap-1.5 px-1.5 py-2">
+          {bar('100%', c.raised, 6)}
+          {bar('80%', c.line)}
+          {bar('70%', c.line)}
+        </span>
+        <span
+          className="grid flex-1 content-start gap-[7px] rounded-tl-[4px] p-2.5"
+          style={{ background: c.surface }}
+        >
+          {bar('45%', c.ink, 6)}
+          {bar('100%', c.line)}
+          {bar('80%', c.line)}
+          {bar('24%', c.accent, 9)}
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -40,29 +77,39 @@ const THEMES: { value: Settings['theme']; label: string }[] = [
   { value: 'dark', label: 'Dark' },
 ];
 
-// Light and dark values of each tone, matching globals.css, so a swatch shows what the accent will become.
+// Light and dark values of each tone, matching globals.css, so a swatch shows what the accent will
+// become. The check uses that tone's on-accent color so it stays readable on light amber.
 const ACCENTS: {
   value: Settings['accentTone'];
   label: string;
   className: string;
 }[] = [
-  { value: 'blue', label: 'Blue', className: 'bg-[#2f5bea] dark:bg-[#7f95ff]' },
+  {
+    value: 'blue',
+    label: 'Blue',
+    className: 'bg-[#2f5bea] text-white dark:bg-[#7f95ff] dark:text-[#0d1020]',
+  },
   {
     value: 'violet',
     label: 'Violet',
-    className: 'bg-[#6148d8] dark:bg-[#a28fff]',
+    className: 'bg-[#6148d8] text-white dark:bg-[#a28fff] dark:text-[#0f0820]',
   },
   {
     value: 'green',
     label: 'Green',
-    className: 'bg-[#1f8a4c] dark:bg-[#4fce87]',
+    className: 'bg-[#1f8a4c] text-white dark:bg-[#4fce87] dark:text-[#081d12]',
   },
   {
     value: 'amber',
     label: 'Amber',
-    className: 'bg-[#ba7400] dark:bg-[#e7b45a]',
+    className:
+      'bg-[#ba7400] text-[#241603] dark:bg-[#e7b45a] dark:text-[#241603]',
   },
-  { value: 'rose', label: 'Rose', className: 'bg-[#c14574] dark:bg-[#ff83ad]' },
+  {
+    value: 'rose',
+    label: 'Rose',
+    className: 'bg-[#c14574] text-white dark:bg-[#ff83ad] dark:text-[#260d17]',
+  },
 ];
 
 export function AppearanceSection() {
@@ -82,31 +129,33 @@ export function AppearanceSection() {
           description="System follows your computer's light or dark setting."
           stacked
         >
-          {/* The one place a card earns its border: it previews the palette being chosen. */}
           <RadioGroup.Root
             aria-label="Theme"
             value={settings.theme}
             onValueChange={(theme) =>
               update.mutate({ theme: theme as Settings['theme'] })
             }
-            className="grid max-w-[540px] grid-cols-3 gap-3"
+            orientation="horizontal"
+            className="grid grid-cols-3 gap-4 pt-1"
           >
             {THEMES.map((theme) => (
               <RadioGroup.Item
                 key={theme.value}
                 value={theme.value}
-                className="grid gap-2 rounded-sm border border-line p-2 text-left text-[0.8125rem] text-muted hover:border-line-strong data-[state=checked]:border-2 data-[state=checked]:border-accent data-[state=checked]:p-[7px] data-[state=checked]:font-medium data-[state=checked]:text-ink"
+                className="group grid gap-2.5 rounded-sm text-left text-[0.8125rem] text-muted focus-visible:outline-offset-4"
               >
-                <div
-                  className={cn(
-                    'grid h-18 overflow-hidden rounded-sm border border-line',
-                    theme.value === 'system' && 'grid-cols-2',
-                  )}
-                >
-                  {theme.value !== 'dark' && <Pane palette="light" />}
-                  {theme.value !== 'light' && <Pane palette="dark" />}
-                </div>
-                {theme.label}
+                {/* The preview is the one place a frame earns its keep: it shows the palette being chosen. */}
+                <span className="flex aspect-[16/10] overflow-hidden rounded-sm shadow-[0_0_0_1px_var(--line)] transition-shadow group-hover:shadow-[0_0_0_1px_var(--line-strong)] group-data-[state=checked]:shadow-[0_0_0_2px_var(--accent)]">
+                  {theme.value !== 'dark' && <MiniApp palette="light" />}
+                  {theme.value !== 'light' && <MiniApp palette="dark" />}
+                </span>
+                <span className="flex items-center justify-between group-data-[state=checked]:font-semibold group-data-[state=checked]:text-ink">
+                  {theme.label}
+                  <Check
+                    aria-hidden
+                    className="size-4 text-accent opacity-0 group-data-[state=checked]:opacity-100"
+                  />
+                </span>
               </RadioGroup.Item>
             ))}
           </RadioGroup.Root>
@@ -133,10 +182,16 @@ export function AppearanceSection() {
                 value={accent.value}
                 aria-label={accent.label}
                 className={cn(
-                  'size-5.5 rounded-sm data-[state=checked]:shadow-[0_0_0_2px_var(--surface),0_0_0_3.5px_var(--ink)]',
+                  'group grid size-6 place-items-center rounded-sm',
                   accent.className,
                 )}
-              />
+              >
+                <Check
+                  aria-hidden
+                  strokeWidth={3}
+                  className="size-3.5 opacity-0 group-data-[state=checked]:opacity-100"
+                />
+              </RadioGroup.Item>
             ))}
           </RadioGroup.Root>
         </SettingRow>

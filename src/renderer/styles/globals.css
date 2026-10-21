@@ -1,8 +1,13 @@
 @import 'tailwindcss';
 @import '@fontsource-variable/inter';
 
+/* `dark:` follows the resolved theme on <html>, the same switch as the tokens below. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
 /* Owner tokens, exact values (DESIGN.md). faint is for icons, drawings and borders only, never text.
-   Amber's on-accent is dark because white on #ba7400 is 3.76:1. Ratios are in DESIGN.md. */
+   Amber's on-accent is dark because white on #ba7400 is 3.76:1. Ratios are in DESIGN.md.
+   control/raised/hover are solid fills that replace outlined controls; field-line is the one border
+   a control keeps, because a text field needs a 3:1 boundary to be found. */
 :root {
   --space-1: 6px;
   --space-2: 12px;
@@ -17,6 +22,14 @@
   --canvas: #eef0f3;
   --surface: #ffffff;
   --sunken: #f5f6f8;
+  --control: #eceef2;
+  --control-hover: #e2e5ea;
+  --hover: #e3e6eb;
+  --raised: #ffffff;
+  --thumb: #ffffff;
+  --row-hover: #f5f6f8;
+  --field: #ffffff;
+  --field-line: #8a919c;
   --line: #dde1e7;
   --line-strong: #c6ccd5;
   --ink: #14161a;
@@ -41,30 +54,36 @@
   color-scheme: light;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --canvas: #0b0b0d;
-    --surface: #131316;
-    --sunken: #0f1012;
-    --line: #222327;
-    --line-strong: #32343a;
-    --ink: #f1f1f3;
-    --muted: #a8adb7;
-    --faint: #7e838f;
-    --accent: #7f95ff;
-    --accent-hover: #98a9ff;
-    --accent-soft: #1f2540;
-    --on-accent: #0d1020;
-    --record: #ff6f64;
-    --record-soft: #3a1d1b;
-    --success: #4fce87;
-    --success-soft: #143022;
-    --warning: #e7b45a;
-    --warning-soft: #32260f;
-    --danger: #ff6f64;
-    --danger-soft: #3a1d1b;
-    color-scheme: dark;
-  }
+:root[data-theme='dark'] {
+  --canvas: #0b0b0d;
+  --surface: #131316;
+  --sunken: #0f1012;
+  --control: #1d1e22;
+  --control-hover: #26282d;
+  --hover: #17181b;
+  --raised: #1f2126;
+  --thumb: #2c2e34;
+  --row-hover: #191a1e;
+  --field: #0f1012;
+  --field-line: #60646e;
+  --line: #222327;
+  --line-strong: #32343a;
+  --ink: #f1f1f3;
+  --muted: #a8adb7;
+  --faint: #7e838f;
+  --accent: #7f95ff;
+  --accent-hover: #98a9ff;
+  --accent-soft: #1f2540;
+  --on-accent: #0d1020;
+  --record: #ff6f64;
+  --record-soft: #3a1d1b;
+  --success: #4fce87;
+  --success-soft: #143022;
+  --warning: #e7b45a;
+  --warning-soft: #32260f;
+  --danger: #ff6f64;
+  --danger-soft: #3a1d1b;
+  color-scheme: dark;
 }
 
 :root[data-accent-tone='violet'] {
@@ -91,32 +110,29 @@
   --accent-soft: #f9e7ee;
   --on-accent: #ffffff;
 }
-
-@media (prefers-color-scheme: dark) {
-  :root[data-accent-tone='violet'] {
-    --accent: #a28fff;
-    --accent-hover: #b7a8ff;
-    --accent-soft: #30254b;
-    --on-accent: #0f0820;
-  }
-  :root[data-accent-tone='green'] {
-    --accent: #4fce87;
-    --accent-hover: #6fdaa0;
-    --accent-soft: #153025;
-    --on-accent: #081d12;
-  }
-  :root[data-accent-tone='amber'] {
-    --accent: #e7b45a;
-    --accent-hover: #efc680;
-    --accent-soft: #38280f;
-    --on-accent: #241603;
-  }
-  :root[data-accent-tone='rose'] {
-    --accent: #ff83ad;
-    --accent-hover: #ff9fc0;
-    --accent-soft: #3c1d2b;
-    --on-accent: #260d17;
-  }
+:root[data-theme='dark'][data-accent-tone='violet'] {
+  --accent: #a28fff;
+  --accent-hover: #b7a8ff;
+  --accent-soft: #30254b;
+  --on-accent: #0f0820;
+}
+:root[data-theme='dark'][data-accent-tone='green'] {
+  --accent: #4fce87;
+  --accent-hover: #6fdaa0;
+  --accent-soft: #153025;
+  --on-accent: #081d12;
+}
+:root[data-theme='dark'][data-accent-tone='amber'] {
+  --accent: #e7b45a;
+  --accent-hover: #efc680;
+  --accent-soft: #38280f;
+  --on-accent: #241603;
+}
+:root[data-theme='dark'][data-accent-tone='rose'] {
+  --accent: #ff83ad;
+  --accent-hover: #ff9fc0;
+  --accent-soft: #3c1d2b;
+  --on-accent: #260d17;
 }
 
 :root[data-font='system'] {
@@ -140,6 +156,14 @@
   --color-canvas: var(--canvas);
   --color-surface: var(--surface);
   --color-sunken: var(--sunken);
+  --color-control: var(--control);
+  --color-control-hover: var(--control-hover);
+  --color-hover: var(--hover);
+  --color-raised: var(--raised);
+  --color-thumb: var(--thumb);
+  --color-row-hover: var(--row-hover);
+  --color-field: var(--field);
+  --color-field-line: var(--field-line);
   --color-line: var(--line);
   --color-line-strong: var(--line-strong);
   --color-ink: var(--ink);
@@ -181,12 +205,36 @@
     scrollbar-width: thin;
     scrollbar-color: var(--line-strong) transparent;
   }
+  /* Keyboard focus only: a mouse click never draws this. Fields and the settings search draw
+     focus on their own border instead (the `field` utility), so nothing rings outside them. */
   :focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
   }
+  input:focus-visible,
+  textarea:focus-visible {
+    outline: none;
+  }
   ::selection {
     background: var(--accent-soft);
+  }
+}
+
+/* A text field: recessed fill, one 3:1 hairline, and focus or error on that same border. */
+@utility field {
+  background: var(--field);
+  border: 1px solid var(--field-line);
+  border-radius: var(--radius-sm);
+  color: var(--ink);
+  &:focus-within,
+  &:focus {
+    border-color: var(--accent);
+    box-shadow: inset 0 0 0 1px var(--accent);
+  }
+  &[aria-invalid='true'],
+  &:has([aria-invalid='true']) {
+    border-color: var(--danger);
+    box-shadow: inset 0 0 0 1px var(--danger);
   }
 }
 
@@ -195,6 +243,13 @@
 }
 @utility no-drag {
   -webkit-app-region: no-drag;
+}
+
+/* While the theme flips, transitions are held for one frame so every surface changes together. */
+:root[data-theme-switching] *,
+:root[data-theme-switching] *::before,
+:root[data-theme-switching] *::after {
+  transition: none !important;
 }
 
 :root[data-motion='off'] *,

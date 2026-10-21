@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ReposApi } from './repos';
 import type { Settings, SettingsPatch } from './settings';
 
 export const accountSummarySchema = z.object({
@@ -152,4 +153,5 @@ export interface DesktopApi {
     setDefaults(input: GitDefaults): Promise<GitIdentity>;
     openInstallPage(): Promise<void>;
   };
+  repos: ReposApi;
 }

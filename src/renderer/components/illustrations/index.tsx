@@ -94,6 +94,34 @@ export const NoResultsArt = () => (
   </Art>
 );
 
+export const FolderMissingArt = () => (
+  <Art viewBox="0 0 88 72" width={120} height={96}>
+    <path
+      d="M6 16a6 6 0 0 1 6-6h18l6 6h40a6 6 0 0 1 6 6v38a6 6 0 0 1-6 6H12a6 6 0 0 1-6-6V16z"
+      strokeDasharray="3 4"
+    />
+    <circle cx="44" cy="40" r="10" {...accent} />
+    <path d="m40 36 8 8M48 36l-8 8" {...accent} />
+  </Art>
+);
+
+export const ActivityArt = () => (
+  <Art viewBox="0 0 64 52" width={88} height={72} strokeWidth={1.4}>
+    <circle cx="14" cy="26" r="5" />
+    <path d="M19 26h24" />
+    <circle cx="48" cy="26" r="5" {...accent} />
+    <path d="M8 44h48" strokeDasharray="2 4" />
+  </Art>
+);
+
+export const RemoteArt = () => (
+  <Art viewBox="0 0 64 52" width={120} height={96} strokeWidth={1.1}>
+    <path d="M18 34h28a10 10 0 0 0 1-20 14 14 0 0 0-27-2 11 11 0 0 0-2 22z" />
+    <path d="M32 34v10M24 46h16" />
+    <circle cx="32" cy="22" r="3.5" {...accent} />
+  </Art>
+);
+
 // Bleeding drawings for the sign-in tiles: larger, on a solid tile color.
 export const CommitGraphArt = ({ className }: { className?: string }) => (
   <Art

@@ -6,9 +6,10 @@ import {
 import { MotionConfig } from 'framer-motion';
 import { useEffect, useState, type ReactNode } from 'react';
 import { TooltipProvider } from '../components/ui/tooltip';
-import { keys, useSettings } from '../lib/queries';
+import { keys, repoKeys, useSettings } from '../lib/queries';
 import { NavigationProvider } from './navigation';
 import { useAppearance } from './use-appearance';
+import { WorkspaceUiProvider } from './workspace-ui';
 
 function AuthSync() {
   const qc = useQueryClient();
@@ -18,6 +19,22 @@ function AuthSync() {
         qc.setQueryData(keys.auth, status);
         if (status.status !== 'authenticated')
           qc.removeQueries({ queryKey: keys.sessions });
+        // Main decides whether this actually reaches the server; usually it answers from cache.
+        void qc.invalidateQueries({ queryKey: repoKeys.remote });
+      }),
+    [qc],
+  );
+  return null;
+}
+
+// Main pushes the whole list after every inspection burst, so nothing here polls.
+function RepoSync() {
+  const qc = useQueryClient();
+  useEffect(
+    () =>
+      window.desktop.repos.onChanged((repositories) => {
+        qc.setQueryData(repoKeys.list, repositories);
+        void qc.invalidateQueries({ queryKey: repoKeys.activity });
       }),
     [qc],
   );
@@ -51,9 +68,12 @@ export function Providers({ children }: { children: ReactNode }) {
   return (
     <QueryClientProvider client={client}>
       <AuthSync />
+      <RepoSync />
       <Appearance>
         <TooltipProvider delayDuration={300}>
-          <NavigationProvider>{children}</NavigationProvider>
+          <NavigationProvider>
+            <WorkspaceUiProvider>{children}</WorkspaceUiProvider>
+          </NavigationProvider>
         </TooltipProvider>
       </Appearance>
     </QueryClientProvider>

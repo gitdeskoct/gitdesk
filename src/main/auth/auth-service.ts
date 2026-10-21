@@ -190,7 +190,9 @@ export class AuthService {
     await this.authorized((token) => this.deps.api.revokeSession(token, id));
   }
 
-  private async authorized<T>(call: (token: string) => Promise<T>): Promise<T> {
+  // Runs one authenticated API call, refreshing once on expiry. Other main-process services use
+  // this so the access token never leaves AuthService.
+  async authorized<T>(call: (token: string) => Promise<T>): Promise<T> {
     try {
       try {
         return await call(await this.accessToken());

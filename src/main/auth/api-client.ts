@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { accountSummarySchema, sessionInfoSchema } from '../../shared/ipc';
+import { remoteRepositorySchema } from '../../shared/repos';
 
 export class ApiRequestError extends Error {
   constructor(
@@ -23,6 +24,12 @@ const exchangeResponse = tokenResponse.extend({
 const meResponse = z.object({ account: accountSummarySchema });
 const sessionsResponse = z.object({ sessions: z.array(sessionInfoSchema) });
 const errorBody = z.object({ error: z.object({ code: z.string() }) });
+const overviewResponse = z.object({
+  total: z.number().int().nonnegative(),
+  recent: z.array(remoteRepositorySchema).max(20),
+  serverTime: z.number(),
+});
+const repositoryResponse = z.object({ repository: remoteRepositorySchema });
 
 export type TokenResponse = z.infer<typeof tokenResponse>;
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
@@ -84,6 +91,17 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
     me: (token: string) => request('/api/v1/auth/me', meResponse, { token }),
     sessions: (token: string) =>
       request('/api/v1/auth/sessions', sessionsResponse, { token }),
+    dashboardOverview: (token: string) =>
+      request('/api/v1/dashboard/overview', overviewResponse, { token }),
+    createRepository: (
+      token: string,
+      body: { name: string; description: string | null },
+    ) =>
+      request('/api/v1/repositories', repositoryResponse, {
+        method: 'POST',
+        body,
+        token,
+      }),
     revokeSession: (token: string, id: string) =>
       request(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, null, {
         method: 'DELETE',

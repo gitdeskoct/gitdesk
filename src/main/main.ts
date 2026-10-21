@@ -3,6 +3,8 @@ import path from 'node:path';
 import {
   app,
   BrowserWindow,
+  clipboard,
+  dialog,
   Menu,
   nativeTheme,
   net,
@@ -12,6 +14,7 @@ import {
 import log from 'electron-log/main';
 import started from 'electron-squirrel-startup';
 import { accountSummarySchema, IPC } from '../shared/ipc';
+import { REPOS_IPC } from '../shared/repos';
 import { createAppService } from './app/app-service';
 import { createApiClient } from './auth/api-client';
 import { AuthService } from './auth/auth-service';
@@ -27,6 +30,9 @@ import { createGitIdentity } from './git/git-identity';
 import { createHandle } from './ipc/handle';
 import { registerIpc } from './ipc/register';
 import { registerAppScheme, serveRendererFrom } from './protocol';
+import { createRemoteService, type RemoteService } from './remote/remote-service';
+import { createRepositoryService } from './repos/repository-service';
+import { createRepositoryStore } from './repos/repository-store';
 import { hardenApp } from './security';
 import { SettingsService } from './settings/settings-service';
 import { applyChromeColors, createMainWindow } from './window';
@@ -46,6 +52,11 @@ function focusMainWindow() {
   mainWindow.show();
   mainWindow.focus();
 }
+
+// Dev only: a separate profile so a second copy can run beside the one you use (screenshots, tests).
+// Must run before the single-instance lock, which is keyed to the profile folder.
+if (!app.isPackaged && process.env.GITDESK_USER_DATA)
+  app.setPath('userData', process.env.GITDESK_USER_DATA);
 
 if (started) {
   app.quit();
@@ -83,6 +94,11 @@ function start() {
 
   const db = openDatabase(path.join(userData, 'gitdesk.db'));
   const settings = new SettingsService(db, (patch) => {
+    if (
+      patch.watchRepositories !== undefined ||
+      patch.backgroundRefresh !== undefined
+    )
+      repos.applySettings();
     if (!mainWindow) return;
     if (patch.theme) applyChromeColors(mainWindow);
     if (patch.zoomLevel !== undefined)
@@ -103,8 +119,11 @@ function start() {
     if (mainWindow) applyChromeColors(mainWindow);
   });
 
+  const api = createApiClient(apiOrigin, (url, init) => net.fetch(url, init));
+  // Assigned right after auth exists; auth's emit only fires after start-up.
+  let remote: RemoteService | null = null;
   const auth = new AuthService({
-    api: createApiClient(apiOrigin, (url, init) => net.fetch(url, init)),
+    api,
     store: new CredentialStore(path.join(userData, 'session.bin'), safeStorage),
     cache: {
       get: () => {
@@ -132,9 +151,44 @@ function start() {
         0,
         100,
       ),
-    emit: (status) =>
-      mainWindow?.webContents.send(IPC.authStatusChanged, status),
+    emit: (status) => {
+      remote?.handleAuth(status);
+      mainWindow?.webContents.send(IPC.authStatusChanged, status);
+    },
   });
+
+  const store = createRepositoryStore(db);
+  remote = createRemoteService({
+    db,
+    api,
+    auth,
+    store,
+    settings: () => settings.get(),
+  });
+  const repos = createRepositoryService({
+    store,
+    remote,
+    settings: () => settings.get(),
+    emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
+    desktop: {
+      async pickDirectory({ title, create }) {
+        const options: Electron.OpenDialogOptions = {
+          title,
+          properties: create
+            ? ['openDirectory', 'createDirectory', 'dontAddToRecent']
+            : ['openDirectory', 'dontAddToRecent'],
+        };
+        const result = mainWindow
+          ? await dialog.showOpenDialog(mainWindow, options)
+          : await dialog.showOpenDialog(options);
+        return result.canceled ? null : (result.filePaths[0] ?? null);
+      },
+      // Paths come from gitdesk's own registry, never from the renderer.
+      openPath: (target) => shell.openPath(target),
+      copyText: (text) => clipboard.writeText(text),
+    },
+  });
+  app.on('before-quit', () => repos.dispose());
 
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
@@ -143,17 +197,21 @@ function start() {
       auth,
       settings,
       git: createGitIdentity(),
+      repos,
+      remote,
     },
   );
 
   const openWindow = () => {
     mainWindow = createMainWindow(devServerUrl, () => settings.get().zoomLevel);
+    mainWindow.on('focus', () => repos.windowFocused());
     mainWindow.on('closed', () => {
       mainWindow = null;
     });
   };
   openWindow();
   void auth.restore();
+  repos.start();
 
   app.on('activate', () => {
     if (!mainWindow) openWindow();

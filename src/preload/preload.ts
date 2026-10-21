@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
 import { IPC, type AuthStatus, type DesktopApi } from '../shared/ipc';
+import { REPOS_IPC as R, type RepositorySummary } from '../shared/repos';
 
 // Each method maps to one fixed channel. No generic invoke, no raw ipcRenderer, no token access.
 const api: DesktopApi = {
@@ -39,6 +40,33 @@ const api: DesktopApi = {
     setIdentity: (input) => ipcRenderer.invoke(IPC.gitSetIdentity, input),
     setDefaults: (input) => ipcRenderer.invoke(IPC.gitSetDefaults, input),
     openInstallPage: () => ipcRenderer.invoke(IPC.gitOpenInstallPage),
+  },
+  repos: {
+    list: () => ipcRenderer.invoke(R.list),
+    add: () => ipcRenderer.invoke(R.add),
+    initialize: (token) => ipcRenderer.invoke(R.initialize, { token }),
+    locate: (id) => ipcRenderer.invoke(R.locate, id),
+    refresh: (id) => ipcRenderer.invoke(R.refresh, id),
+    open: (id) => ipcRenderer.invoke(R.open, id),
+    pin: (id, pinned) => ipcRenderer.invoke(R.pin, { id, pinned }),
+    remove: (id) => ipcRenderer.invoke(R.remove, id),
+    forgetAll: () => ipcRenderer.invoke(R.forgetAll),
+    reveal: (id) => ipcRenderer.invoke(R.reveal, id),
+    copyPath: (id) => ipcRenderer.invoke(R.copyPath, id),
+    changes: (id) => ipcRenderer.invoke(R.changes, id),
+    chooseLocation: () => ipcRenderer.invoke(R.chooseLocation),
+    create: (input) => ipcRenderer.invoke(R.create, input),
+    linkRemote: (id) => ipcRenderer.invoke(R.linkRemote, id),
+    activity: () => ipcRenderer.invoke(R.activity),
+    remoteOverview: (force) => ipcRenderer.invoke(R.remoteOverview, { force }),
+    onChanged(callback) {
+      const listener = (
+        _event: IpcRendererEvent,
+        repositories: RepositorySummary[],
+      ) => callback(repositories);
+      ipcRenderer.on(R.changed, listener);
+      return () => ipcRenderer.removeListener(R.changed, listener);
+    },
   },
 };
 

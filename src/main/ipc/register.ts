@@ -5,7 +5,20 @@ import {
   IPC,
   windowCommandSchema,
 } from '../../shared/ipc';
+import {
+  createRepositoryInputSchema,
+  initializeInputSchema,
+  pinInputSchema,
+  refreshInputSchema,
+  remoteOverviewInputSchema,
+  repoIdSchema,
+  REPOS_IPC,
+} from '../../shared/repos';
 import { settingsPatchSchema } from '../../shared/settings';
+import log from 'electron-log/main';
+import { UserError } from '../errors';
+import type { RemoteService } from '../remote/remote-service';
+import type { RepositoryService } from '../repos/repository-service';
 import type { AppService } from '../app/app-service';
 import type { AuthService } from '../auth/auth-service';
 import type { createGitIdentity } from '../git/git-identity';
@@ -14,6 +27,19 @@ import type { Handle } from './handle';
 
 const none = z.undefined();
 
+// Repository work touches the filesystem, so only messages written for people cross IPC.
+function userFacing<I, R>(fn: (input: I) => R | Promise<R>) {
+  return async (input: I): Promise<R> => {
+    try {
+      return await fn(input);
+    } catch (err) {
+      if (err instanceof UserError) throw err;
+      log.error('repository operation failed', err instanceof Error ? err.name : 'unknown');
+      throw new Error('Something went wrong. Check the logs for details.');
+    }
+  };
+}
+
 export function registerIpc(
   handle: Handle,
   services: {
@@ -21,9 +47,11 @@ export function registerIpc(
     auth: AuthService;
     settings: SettingsService;
     git: ReturnType<typeof createGitIdentity>;
+    repos: RepositoryService;
+    remote: RemoteService;
   },
 ): void {
-  const { app, auth, settings, git } = services;
+  const { app, auth, settings, git, repos, remote } = services;
   handle(IPC.appGetInfo, none, () => app.info());
   handle(IPC.appSetOpenAtLogin, z.boolean(), (enabled) =>
     app.setOpenAtLogin(enabled),
@@ -51,4 +79,24 @@ export function registerIpc(
     git.setDefaults(input),
   );
   handle(IPC.gitOpenInstallPage, none, () => app.openGitInstallPage());
+
+  const id = repoIdSchema;
+  const r = REPOS_IPC;
+  handle(r.list, none, () => repos.list());
+  handle(r.add, none, userFacing(() => repos.add()));
+  handle(r.initialize, initializeInputSchema, userFacing(({ token }) => repos.initialize(token)));
+  handle(r.locate, id, userFacing((repoId) => repos.locate(repoId)));
+  handle(r.refresh, refreshInputSchema, userFacing((repoId) => repos.refresh(repoId)));
+  handle(r.open, id, userFacing((repoId) => repos.open(repoId)));
+  handle(r.pin, pinInputSchema, userFacing(({ id: repoId, pinned }) => repos.pin(repoId, pinned)));
+  handle(r.remove, id, userFacing((repoId) => repos.remove(repoId)));
+  handle(r.forgetAll, none, userFacing(() => repos.forgetAll()));
+  handle(r.reveal, id, userFacing((repoId) => repos.reveal(repoId)));
+  handle(r.copyPath, id, userFacing((repoId) => repos.copyPath(repoId)));
+  handle(r.changes, id, userFacing((repoId) => repos.changes(repoId)));
+  handle(r.chooseLocation, none, userFacing(() => repos.chooseLocation()));
+  handle(r.create, createRepositoryInputSchema, userFacing((input) => repos.create(input)));
+  handle(r.linkRemote, id, userFacing((repoId) => repos.linkRemote(repoId)));
+  handle(r.activity, none, () => repos.activity());
+  handle(r.remoteOverview, remoteOverviewInputSchema, ({ force }) => remote.overview(force));
 }

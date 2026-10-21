@@ -9,6 +9,8 @@ const STATUS = {
   RATE_LIMITED: 429,
   VALIDATION_FAILED: 400,
   NOT_FOUND: 404,
+  NAME_TAKEN: 409,
+  LIMIT_REACHED: 403,
   INTERNAL: 500,
 } satisfies Record<string, ContentfulStatusCode>;
 

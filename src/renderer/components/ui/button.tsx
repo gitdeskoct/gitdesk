@@ -9,12 +9,12 @@ export const buttonVariants = cva(
   {
     variants: {
       variant: {
+        // Solid fills, no outlines: the label and the fill say "button"; only keyboard focus draws a ring.
         primary: 'bg-accent text-on-accent hover:bg-accent-hover',
-        secondary:
-          'border border-line-strong bg-surface text-ink hover:bg-sunken',
-        ghost: 'text-muted hover:bg-sunken hover:text-ink',
+        secondary: 'bg-control text-ink hover:bg-control-hover',
+        ghost: 'text-muted hover:bg-control hover:text-ink',
         danger:
-          'border border-danger bg-surface text-danger hover:bg-danger-soft',
+          'bg-danger-soft text-danger hover:bg-danger hover:text-on-accent',
         link: 'h-auto px-0 text-accent underline-offset-4 hover:underline',
       },
       size: {

@@ -76,7 +76,7 @@ function SearchResults({
         <li key={entry.id}>
           <button
             type="button"
-            className="flex w-full items-center justify-between gap-6 py-3.5 text-left hover:bg-sunken"
+            className="flex w-full items-center justify-between gap-6 py-3.5 text-left hover:bg-row-hover"
             onClick={() => {
               onClear();
               navigate({
@@ -122,7 +122,7 @@ export function SettingsLayout({
     <>
       <nav
         aria-label="Settings"
-        className="flex w-58 flex-none flex-col gap-0.5 px-2.5 pt-1 pb-2.5"
+        className="flex w-58 flex-none flex-col gap-0.5 overflow-y-auto px-2.5 pt-3 pb-2.5"
       >
         <NavItem
           label="Back to app"
@@ -131,7 +131,7 @@ export function SettingsLayout({
           collapsed={false}
           onSelect={() => navigate({ name: 'home' })}
         />
-        <label className="mt-2 mb-0.5 flex h-8 items-center gap-2 rounded-sm border border-faint bg-surface px-2.5 text-muted focus-within:outline-2 focus-within:outline-accent">
+        <label className="field mt-2 mb-0.5 flex h-8 items-center gap-2 px-2.5 text-muted">
           <Search className="size-4 shrink-0" aria-hidden />
           <span className="sr-only">Search settings</span>
           <input

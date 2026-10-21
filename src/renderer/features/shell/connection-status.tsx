@@ -12,13 +12,11 @@ import { authNoticeMessages } from '../auth/messages';
 function Line({
   icon,
   tone,
-  column,
   children,
   action,
 }: {
   icon: ReactNode;
   tone: 'warning' | 'info';
-  column: string;
   children: ReactNode;
   action?: ReactNode;
 }) {
@@ -26,13 +24,12 @@ function Line({
     <div
       role="status"
       className={cn(
-        'flex-none border-b border-line px-6 py-2.5 text-[0.8125rem] text-ink min-[1100px]:px-10',
+        'flex-none border-b border-line px-6 py-2.5 text-[0.8125rem] text-ink',
         tone === 'warning' ? 'bg-warning-soft' : 'bg-sunken',
       )}
     >
       <div
         className={cn(
-          column,
           'flex items-center gap-2.5 [&>svg]:size-4 [&>svg]:shrink-0',
           tone === 'warning' ? '[&>svg]:text-warning' : '[&>svg]:text-muted',
         )}
@@ -46,7 +43,7 @@ function Line({
 }
 
 // One inline line under the page header: never a modal, never blocks local work.
-export function ConnectionStatus({ column }: { column: string }) {
+export function ConnectionStatus() {
   const { data: status } = useAuthStatus();
   const retry = useRetryConnection();
   const signIn = useSignIn();
@@ -55,7 +52,6 @@ export function ConnectionStatus({ column }: { column: string }) {
   if (status.status === 'offline') {
     return (
       <Line
-        column={column}
         icon={<CloudOff />}
         tone="warning"
         action={
@@ -75,7 +71,7 @@ export function ConnectionStatus({ column }: { column: string }) {
   }
   if (status.status === 'authenticated' && status.persistence === 'memory') {
     return (
-      <Line icon={<KeyRound />} tone="warning" column={column}>
+      <Line icon={<KeyRound />} tone="warning">
         No system keychain was found, so your sign-in is kept in memory. You'll
         sign in again after quitting.
       </Line>
@@ -85,7 +81,6 @@ export function ConnectionStatus({ column }: { column: string }) {
     const message = authNoticeMessages[status.notice];
     return (
       <Line
-        column={column}
         icon={<Info />}
         tone={message.tone === 'warning' ? 'warning' : 'info'}
         action={

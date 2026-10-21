@@ -6,6 +6,7 @@ interface __BaseEnv_CloudflareBindings {
 	AUTH_LIMITER: RateLimit;
 	REFRESH_LIMITER: RateLimit;
 	API_LIMITER: RateLimit;
+	WRITE_LIMITER: RateLimit;
 	PUBLIC_ORIGIN: "http://localhost:8787";
 	GOOGLE_CLIENT_ID: string;
 	GOOGLE_CLIENT_SECRET: string;

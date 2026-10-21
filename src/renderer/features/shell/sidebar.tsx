@@ -49,11 +49,12 @@ export function NavItem({
         onClick={onSelect}
         aria-current={active ? 'page' : undefined}
         aria-label={collapsed ? label : undefined}
+        // Active is a solid raised fill and an accent icon, no outline; hover is a step darker than the canvas.
         className={cn(
-          'flex h-8 shrink-0 items-center gap-2.5 rounded-sm text-[0.84375rem] text-muted transition-colors hover:bg-sunken hover:text-ink',
+          'flex h-8 shrink-0 items-center gap-2.5 rounded-sm text-[0.84375rem] text-muted transition-colors hover:bg-hover hover:text-ink',
           collapsed ? 'w-8.5 justify-center' : 'w-full px-2.5',
           active &&
-            'bg-surface font-medium text-ink shadow-[0_0_0_1px_var(--line)] hover:bg-surface [&>svg]:text-accent',
+            'bg-raised font-medium text-ink hover:bg-raised [&>svg]:text-accent',
         )}
       >
         <Icon className="size-4 shrink-0" aria-hidden />
@@ -83,7 +84,7 @@ export function Sidebar({
       animate={{ width: collapsed ? 52 : 232 }}
       transition={{ duration: motionAllowed ? 0.18 : 0, ease: 'easeOut' }}
       className={cn(
-        'flex flex-none flex-col gap-0.5 overflow-hidden pt-1 pb-2.5',
+        'flex flex-none flex-col gap-0.5 overflow-hidden pt-3 pb-2.5',
         collapsed ? 'items-center px-2' : 'px-2.5',
       )}
     >

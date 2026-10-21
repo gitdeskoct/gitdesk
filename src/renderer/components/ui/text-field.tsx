@@ -6,14 +6,19 @@ export function TextField({
   label,
   hideLabel,
   error,
+  hint,
   className,
   ...props
 }: ComponentProps<'input'> & {
   label: string;
   hideLabel?: boolean;
   error?: string;
+  hint?: string;
 }) {
   const id = useId();
+  const describedBy =
+    [error && `${id}-error`, hint && `${id}-hint`].filter(Boolean).join(' ') ||
+    undefined;
   return (
     <div className={cn('grid gap-1.5', className)}>
       <Label.Root
@@ -25,10 +30,15 @@ export function TextField({
       <input
         id={id}
         aria-invalid={!!error}
-        aria-describedby={error ? `${id}-error` : undefined}
-        className="h-9 w-full min-w-0 rounded-sm border border-faint bg-surface px-3 text-sm text-ink placeholder:text-muted aria-invalid:border-danger"
+        aria-describedby={describedBy}
+        className="field h-9 w-full min-w-0 px-3 text-sm placeholder:text-muted"
         {...props}
       />
+      {hint && !error && (
+        <p id={`${id}-hint`} className="text-[0.8125rem] text-muted">
+          {hint}
+        </p>
+      )}
       {error && (
         <p id={`${id}-error`} className="text-sm text-danger">
           {error}

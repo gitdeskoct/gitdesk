@@ -7,6 +7,7 @@ import { ApiError } from './lib/errors';
 import { notFound, onError } from './middleware/error-handler';
 import type { GoogleProvider } from './modules/auth/google';
 import { authRoutes } from './modules/auth/routes';
+import { dashboardRoutes, repositoryRoutes } from './modules/repositories/routes';
 
 export type AppDeps = { google: GoogleProvider };
 
@@ -35,6 +36,8 @@ export function createApp(deps: AppDeps) {
 
   app.get('/health', (c) => c.json({ ok: true }));
   app.route('/api/v1/auth', authRoutes(deps.google));
+  app.route('/api/v1/dashboard', dashboardRoutes());
+  app.route('/api/v1/repositories', repositoryRoutes());
 
   app.onError(onError);
   app.notFound(notFound);

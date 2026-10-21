@@ -5,6 +5,7 @@ import type {
   GitDefaults,
   GitIdentityInput,
 } from '../../shared/ipc';
+import type { CreateRepositoryInput } from '../../shared/repos';
 import {
   DEFAULT_SETTINGS,
   type Settings,
@@ -146,3 +147,115 @@ export const useOpenLogs = () =>
   useMutation({ mutationFn: () => desktop().app.openLogs() });
 export const useCopyDiagnostics = () =>
   useMutation({ mutationFn: () => desktop().app.copyDiagnostics() });
+
+// Repositories: main owns the list and pushes every change (see RepoSync), so the cache is only
+// read here. Remote metadata is throttled in main as well; these hooks never poll.
+export const repoKeys = {
+  list: ['repos'] as const,
+  activity: ['repo-activity'] as const,
+  changes: (id: string, inspectedAt: number | null) =>
+    ['repo-changes', id, inspectedAt] as const,
+  remote: ['remote-overview'] as const,
+};
+
+const repos = () => desktop().repos;
+
+export const useRepositories = () =>
+  useQuery({
+    queryKey: repoKeys.list,
+    queryFn: () => repos().list(),
+    staleTime: Infinity,
+  });
+
+export const useRepositoryActivity = () =>
+  useQuery({
+    queryKey: repoKeys.activity,
+    queryFn: () => repos().activity(),
+    staleTime: Infinity,
+  });
+
+export const useRepositoryChanges = (
+  id: string,
+  inspectedAt: number | null,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: repoKeys.changes(id, inspectedAt),
+    queryFn: () => repos().changes(id),
+    enabled,
+    staleTime: Infinity,
+  });
+
+// Asking is cheap: main answers from its cache unless a refresh is due, so this can run on mount.
+export const useRemoteOverview = () =>
+  useQuery({
+    queryKey: repoKeys.remote,
+    queryFn: () => repos().remoteOverview(false),
+    staleTime: 5 * 60_000,
+  });
+
+export function useRefreshRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => repos().remoteOverview(true),
+    onSuccess: (overview) => qc.setQueryData(repoKeys.remote, overview),
+  });
+}
+
+function useRepoMutation<I, R>(fn: (input: I) => Promise<R>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: repoKeys.list });
+      void qc.invalidateQueries({ queryKey: repoKeys.activity });
+    },
+  });
+}
+
+export const useAddRepository = () => useRepoMutation(() => repos().add());
+export const useInitializeRepository = () =>
+  useRepoMutation((token: string) => repos().initialize(token));
+export const useLocateRepository = () =>
+  useRepoMutation((id: string) => repos().locate(id));
+export const useRefreshRepositories = () =>
+  useRepoMutation((id: string | null) => repos().refresh(id));
+export const useOpenRepository = () =>
+  useRepoMutation((id: string) => repos().open(id));
+export const usePinRepository = () =>
+  useRepoMutation((input: { id: string; pinned: boolean }) =>
+    repos().pin(input.id, input.pinned),
+  );
+export const useRemoveRepository = () =>
+  useRepoMutation((id: string) => repos().remove(id));
+export const useForgetRepositories = () =>
+  useRepoMutation(() => repos().forgetAll());
+export const useRevealRepository = () =>
+  useMutation({ mutationFn: (id: string) => repos().reveal(id) });
+export const useCopyRepositoryPath = () =>
+  useMutation({ mutationFn: (id: string) => repos().copyPath(id) });
+export const useChooseLocation = () =>
+  useMutation({ mutationFn: () => repos().chooseLocation() });
+
+export function useCreateRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CreateRepositoryInput) => repos().create(input),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: repoKeys.list });
+      void qc.invalidateQueries({ queryKey: repoKeys.activity });
+      void qc.invalidateQueries({ queryKey: repoKeys.remote });
+    },
+  });
+}
+
+export function useLinkRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => repos().linkRemote(id),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: repoKeys.list });
+      void qc.invalidateQueries({ queryKey: repoKeys.remote });
+    },
+  });
+}
