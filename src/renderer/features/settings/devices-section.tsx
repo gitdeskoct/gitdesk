@@ -148,15 +148,23 @@ export function DevicesSection({ status }: { status: AuthStatus }) {
         </InlineStatus>
       )}
       {list.length === 1 && (
-        <div className="mt-7 flex items-center gap-4.5 text-faint">
-          <DevicesArt />
-          <div>
-            <p className="font-semibold text-ink">Only this device</p>
-            <p className="mt-0.5 text-sm text-muted">
-              Other computers appear here after you sign in on them.
-            </p>
-          </div>
-        </div>
+        <EmptyState
+          compact
+          art={<DevicesArt />}
+          title="Only this device"
+          className="mt-4"
+          action={
+            <Button
+              size="sm"
+              pending={sessions.isFetching}
+              onClick={() => void sessions.refetch()}
+            >
+              Check again
+            </Button>
+          }
+        >
+          Other computers appear here after you sign in on them.
+        </EmptyState>
       )}
     </>
   );

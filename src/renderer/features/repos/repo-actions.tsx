@@ -27,8 +27,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import { useToast } from '../../components/ui/toast';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
+import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useAuthStatus,
   useCopyRepositoryPath,
@@ -57,46 +59,69 @@ export const fileManagerLabel = () =>
       : 'Open folder';
 
 // One list of actions for the overflow menu and the right-click menu, so they never disagree.
-// Removing is the caller's job: it asks for an inline confirmation first.
-export function useRepoActions(
-  repo: RepositorySummary,
-  onRemove: () => void,
-) {
+// Removing is the caller's job: it asks for an inline confirmation first. A menu closes as soon
+// as an item is chosen, so the row shows `busy` while the work runs and a toast reports how it
+// ended; nothing finishes silently.
+export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
   const pin = usePinRepository();
   const reveal = useRevealRepository();
   const copy = useCopyRepositoryPath();
   const refresh = useRefreshRepositories();
   const locate = useLocateRepository();
   const link = useLinkRemote();
+  const toast = useToast();
   const { data: auth } = useAuthStatus();
   const present = repo.availability === 'available';
+  const failed = (title: string) => (err: unknown) =>
+    toast({
+      tone: 'danger',
+      title,
+      description: ipcErrorMessage(err, 'Try again in a moment.'),
+    });
 
   const actions: Action[] = [
     {
       key: 'pin',
-      label: repo.pinned ? 'Unpin' : 'Pin to sidebar',
+      label: repo.pinned ? 'Unpin' : 'Pin to top',
       icon: repo.pinned ? PinOff : Pin,
-      onSelect: () => pin.mutate({ id: repo.id, pinned: !repo.pinned }),
+      disabled: pin.isPending,
+      onSelect: () =>
+        pin.mutate(
+          { id: repo.id, pinned: !repo.pinned },
+          {
+            onError: failed(
+              `Couldn't ${repo.pinned ? 'unpin' : 'pin'} ${repo.name}`,
+            ),
+          },
+        ),
     },
     {
       key: 'reveal',
       label: fileManagerLabel(),
       icon: FolderOpen,
-      disabled: !present,
-      onSelect: () => reveal.mutate(repo.id),
+      disabled: !present || reveal.isPending,
+      onSelect: () =>
+        reveal.mutate(repo.id, { onError: failed("Couldn't open the folder") }),
     },
     {
       key: 'copy',
       label: 'Copy path',
       icon: Copy,
-      onSelect: () => copy.mutate(repo.id),
+      onSelect: () =>
+        copy.mutate(repo.id, {
+          onSuccess: () => toast({ tone: 'success', title: 'Path copied' }),
+          onError: failed("Couldn't copy the path"),
+        }),
     },
     {
       key: 'refresh',
       label: 'Refresh status',
       icon: RefreshCw,
-      disabled: repo.inspecting,
-      onSelect: () => refresh.mutate(repo.id),
+      disabled: repo.inspecting || refresh.isPending,
+      onSelect: () =>
+        refresh.mutate(repo.id, {
+          onError: failed(`Couldn't check ${repo.name}`),
+        }),
     },
   ];
   if (!present)
@@ -104,7 +129,14 @@ export function useRepoActions(
       key: 'locate',
       label: 'Locate folder…',
       icon: FolderSearch,
-      onSelect: () => locate.mutate(repo.id),
+      disabled: locate.isPending,
+      onSelect: () =>
+        locate.mutate(repo.id, {
+          onSuccess: (found) =>
+            found &&
+            toast({ tone: 'success', title: `${found.name} found again` }),
+          onError: failed("Couldn't use that folder"),
+        }),
     });
   if (present && !repo.remoteId && auth?.status === 'authenticated')
     actions.push({
@@ -112,7 +144,15 @@ export function useRepoActions(
       label: 'Create private remote',
       icon: CloudUpload,
       disabled: link.isPending,
-      onSelect: () => link.mutate(repo.id),
+      onSelect: () =>
+        link.mutate(repo.id, {
+          onSuccess: () =>
+            toast({
+              tone: 'success',
+              title: `Private remote created for ${repo.name}`,
+            }),
+          onError: failed("The remote wasn't created"),
+        }),
     });
   actions.push({
     key: 'remove',
@@ -123,8 +163,20 @@ export function useRepoActions(
     onSelect: onRemove,
   });
 
-  const error = [reveal, locate, link, refresh].find((m) => m.isError)?.error;
-  return { actions, error };
+  const busy = pin.isPending
+    ? repo.pinned
+      ? 'Unpinning…'
+      : 'Pinning…'
+    : reveal.isPending
+      ? 'Opening folder…'
+      : locate.isPending
+        ? 'Waiting for a folder…'
+        : link.isPending
+          ? 'Creating remote…'
+          : refresh.isPending
+            ? 'Checking…'
+            : null;
+  return { actions, busy, reveal };
 }
 
 export function RepoMenuButton({

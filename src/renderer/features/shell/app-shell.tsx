@@ -1,11 +1,36 @@
 import type { AuthStatus } from '../../../shared/ipc';
 import { useSettings } from '../../lib/queries';
-import { useNavigation } from '../../app/navigation';
+import { useNavigation, type Route } from '../../app/navigation';
 import { HomePage } from '../home/home-page';
 import { NotBuiltPage } from '../not-built/not-built-page';
+import { RepositoriesPage } from '../repos/repositories-page';
+import { RepositoryPage } from '../repository/repository-page';
 import { SettingsLayout } from '../settings/settings-layout';
+import { PageErrorBoundary } from './page';
 import { Sidebar } from './sidebar';
 import { TitleBar } from './title-bar';
+
+function routeKey(route: Route): string {
+  if (route.name === 'repository') return `repository:${route.id}`;
+  if (route.name === 'repositories')
+    return `repositories:${route.show ?? 'all'}`;
+  return route.name;
+}
+
+function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
+  switch (route.name) {
+    case 'home':
+      return <HomePage status={status} />;
+    case 'repositories':
+      return <RepositoriesPage initialShow={route.show ?? 'all'} />;
+    case 'repository':
+      return <RepositoryPage id={route.id} />;
+    case 'settings':
+      return <SettingsLayout status={status} section={route.section} />;
+    default:
+      return <NotBuiltPage name={route.name} />;
+  }
+}
 
 // Full height, no gaps: title bar and navigation share the canvas; the page surface runs to the window edges.
 export function AppShell({ status }: { status: AuthStatus }) {
@@ -17,18 +42,11 @@ export function AppShell({ status }: { status: AuthStatus }) {
     <div className="flex h-full flex-col bg-canvas">
       <TitleBar sidebarToggle={!inSettings} inShell />
       <div className="flex min-h-0 flex-1">
-        {route.name === 'settings' ? (
-          <SettingsLayout status={status} section={route.section} />
-        ) : (
-          <>
-            <Sidebar status={status} collapsed={collapsed} />
-            {route.name === 'home' ? (
-              <HomePage status={status} />
-            ) : (
-              <NotBuiltPage name={route.name} />
-            )}
-          </>
-        )}
+        {!inSettings && <Sidebar status={status} collapsed={collapsed} />}
+        {/* Keyed by route so a page that crashed recovers once you navigate away. */}
+        <PageErrorBoundary key={inSettings ? 'settings' : routeKey(route)}>
+          <RoutePage route={route} status={status} />
+        </PageErrorBoundary>
       </div>
     </div>
   );

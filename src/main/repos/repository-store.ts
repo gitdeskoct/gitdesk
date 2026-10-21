@@ -19,6 +19,7 @@ export type RepoRow = {
   status: RepoStatus | null;
   error: string | null;
   inspectedAt: number | null;
+  statusAt: number | null;
 };
 
 type RawRow = {
@@ -34,10 +35,12 @@ type RawRow = {
   status_json: string | null;
   error: string | null;
   inspected_at: number | null;
+  status_at: number | null;
 };
 
 const SELECT = `SELECT r.id, r.root_path, r.display_name, r.description, r.created_at,
-  r.last_opened_at, r.is_pinned, r.remote_id, c.availability, c.status_json, c.error, c.inspected_at
+  r.last_opened_at, r.is_pinned, r.remote_id, c.availability, c.status_json, c.error, c.inspected_at,
+  c.status_at
   FROM local_repositories r LEFT JOIN repository_cache c ON c.repository_id = r.id`;
 
 const ACTIVITY_KEEP = 200;
@@ -64,6 +67,7 @@ const toRow = (raw: RawRow): RepoRow => ({
   status: parseStatus(raw.status_json),
   error: raw.error,
   inspectedAt: raw.inspected_at,
+  statusAt: raw.status_at,
 });
 
 // Every statement is prepared with bound parameters; no value is ever spliced into SQL.
@@ -72,7 +76,9 @@ export function createRepositoryStore(db: AppDatabase) {
     list(): RepoRow[] {
       return (
         db
-          .prepare(`${SELECT} ORDER BY r.is_pinned DESC, r.last_opened_at DESC, r.created_at DESC`)
+          .prepare(
+            `${SELECT} ORDER BY r.is_pinned DESC, r.last_opened_at DESC, r.created_at DESC`,
+          )
           .all() as RawRow[]
       ).map(toRow);
     },
@@ -120,7 +126,8 @@ export function createRepositoryStore(db: AppDatabase) {
       });
     },
 
-    // Called after every inspection. A new HEAD commit becomes a local activity entry.
+    // Called after every inspection. A newer HEAD commit is a "commit" entry; any other HEAD move
+    // (checkout, reset, pull of older work) is a "checkout", dated now rather than by the commit.
     saveInspection(
       id: string,
       inspection: {
@@ -134,10 +141,11 @@ export function createRepositoryStore(db: AppDatabase) {
         const previous = this.get(id);
         if (!previous) return;
         db.prepare(
-          `INSERT INTO repository_cache (repository_id, availability, status_json, error, inspected_at)
-           VALUES (?, ?, ?, ?, ?)
+          `INSERT INTO repository_cache (repository_id, availability, status_json, error, inspected_at, status_at)
+           VALUES (?, ?, ?, ?, ?, ?)
            ON CONFLICT(repository_id) DO UPDATE SET availability = excluded.availability,
              status_json = COALESCE(excluded.status_json, repository_cache.status_json),
+             status_at = COALESCE(excluded.status_at, repository_cache.status_at),
              error = excluded.error, inspected_at = excluded.inspected_at`,
         ).run(
           id,
@@ -145,14 +153,25 @@ export function createRepositoryStore(db: AppDatabase) {
           inspection.status ? JSON.stringify(inspection.status) : null,
           inspection.error,
           now,
+          inspection.status ? now : null,
         );
         db.prepare(
           'UPDATE local_repositories SET last_inspected_at = ? WHERE id = ?',
         ).run(now, id);
-        const before = previous.status?.lastCommit?.oid;
+        const before = previous.status?.lastCommit;
         const after = inspection.status?.lastCommit;
-        if (before && after && after.oid !== before)
-          this.addActivity(id, 'commit', after.subject, after.at);
+        if (before && after && after.oid !== before.oid) {
+          // shortcut: commit time, not ancestry; a checkout onto a newer commit reads as a commit.
+          if (after.at >= before.at)
+            this.addActivity(id, 'commit', after.subject, after.at);
+          else
+            this.addActivity(
+              id,
+              'checkout',
+              inspection.status?.branch ?? after.oid.slice(0, 7),
+              now,
+            );
+        }
       });
     },
 
@@ -178,10 +197,15 @@ export function createRepositoryStore(db: AppDatabase) {
     },
 
     setRemote(id: string, remoteId: string | null): void {
-      db.prepare('UPDATE local_repositories SET remote_id = ? WHERE id = ?').run(
-        remoteId,
-        id,
-      );
+      db.prepare(
+        'UPDATE local_repositories SET remote_id = ? WHERE id = ?',
+      ).run(remoteId, id);
+    },
+
+    clearRemoteLink(remoteId: string): void {
+      db.prepare(
+        'UPDATE local_repositories SET remote_id = NULL WHERE remote_id = ?',
+      ).run(remoteId);
     },
 
     // Only the registration and its cached data; files on disk are never touched from here.

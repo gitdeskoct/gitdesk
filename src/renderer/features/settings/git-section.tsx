@@ -17,6 +17,7 @@ import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useGitDefaultsMutation,
   useGitIdentity,
+  useOpenGitInstallPage,
   useSetGitIdentity,
 } from '../../lib/queries';
 import { PageTitle } from '../shell/page';
@@ -207,22 +208,44 @@ function DefaultsForm({
 
 export function GitSection() {
   const identity = useGitIdentity();
+  const install = useOpenGitInstallPage();
 
   if (identity.isPending) return <Loading label="Reading your Git config…" />;
-  if (identity.isError || !identity.data.available) {
+  // A failed check is not the same as Git missing: offer to check again instead of a download.
+  if (identity.isError)
+    return (
+      <EmptyState
+        art={<GitMissingArt />}
+        title="Couldn't read your Git setup"
+        action={
+          <Button
+            pending={identity.isFetching}
+            onClick={() => void identity.refetch()}
+          >
+            Check again
+          </Button>
+        }
+      >
+        {ipcErrorMessage(
+          identity.error,
+          'Git did not answer when gitdesk asked for its config.',
+        )}
+      </EmptyState>
+    );
+  if (!identity.data.available) {
     return (
       <EmptyState
         art={<GitMissingArt />}
         title="Git is not installed"
         action={
-          <Button onClick={() => void window.desktop.git.openInstallPage()}>
-            <ExternalLink />
+          <Button pending={install.isPending} onClick={() => install.mutate()}>
+            {!install.isPending && <ExternalLink />}
             Download Git
           </Button>
         }
       >
-        gitdesk uses the Git on your computer for every commit. Install it, then
-        reopen this page.
+        gitdesk uses the Git on your computer for every commit, so install it
+        and reopen this page.
       </EmptyState>
     );
   }

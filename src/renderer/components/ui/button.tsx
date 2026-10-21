@@ -5,7 +5,8 @@ import { cn } from '../../lib/cn';
 import { Spinner } from './spinner';
 
 export const buttonVariants = cva(
-  'inline-flex shrink-0 cursor-default items-center justify-center gap-2 rounded-sm text-sm font-medium whitespace-nowrap transition-colors select-none disabled:pointer-events-none disabled:opacity-50 aria-busy:cursor-progress [&_svg]:size-4 [&_svg]:shrink-0',
+  // aria-disabled fades like disabled but keeps focus; a pending button keeps full strength beside its spinner.
+  'inline-flex shrink-0 cursor-default items-center justify-center gap-2 rounded-sm text-sm font-medium whitespace-nowrap transition-colors select-none disabled:pointer-events-none disabled:opacity-50 aria-disabled:not-aria-busy:opacity-50 aria-busy:cursor-progress [&_svg]:size-4 [&_svg]:shrink-0',
   {
     variants: {
       variant: {

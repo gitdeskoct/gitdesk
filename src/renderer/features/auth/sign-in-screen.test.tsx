@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AuthErrorCode, DesktopApi } from '../../../shared/ipc';
 import { DEFAULT_SETTINGS } from '../../../shared/settings';
 import { NavigationProvider } from '../../app/navigation';
+import { ToastProvider } from '../../components/ui/toast';
 import { authErrorMessages } from './messages';
 import { SignInScreen } from './sign-in-screen';
 
@@ -18,9 +19,11 @@ function renderScreen(status: Parameters<typeof SignInScreen>[0]['status']) {
   client.setQueryData(['auth'], status);
   return render(
     <QueryClientProvider client={client}>
-      <NavigationProvider>
-        <SignInScreen status={status} />
-      </NavigationProvider>
+      <ToastProvider>
+        <NavigationProvider>
+          <SignInScreen status={status} />
+        </NavigationProvider>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }

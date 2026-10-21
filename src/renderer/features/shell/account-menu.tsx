@@ -10,8 +10,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
+import { useToast } from '../../components/ui/toast';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
+import { ipcErrorMessage } from '../../lib/ipc-error';
 import { useSignIn, useSignOut } from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
 
@@ -40,6 +42,7 @@ export function AccountMenu({
   const { navigate } = useNavigation();
   const signIn = useSignIn();
   const signOut = useSignOut();
+  const toast = useToast();
   const account = accountOf(status);
 
   if (!account) {
@@ -119,7 +122,16 @@ export function AccountMenu({
           <DropdownMenuSeparator />
           <DropdownMenuItem
             disabled={signOut.isPending}
-            onSelect={() => signOut.mutate()}
+            onSelect={() =>
+              signOut.mutate(undefined, {
+                onError: (err) =>
+                  toast({
+                    tone: 'danger',
+                    title: "Couldn't sign out",
+                    description: ipcErrorMessage(err, 'Try again in a moment.'),
+                  }),
+              })
+            }
           >
             <LogOut />
             Sign out

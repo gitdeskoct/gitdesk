@@ -1,11 +1,23 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import { useReducedMotion } from 'framer-motion';
+import { useEffect, useState } from 'react';
 import type {
   AuthStatus,
   GitDefaults,
   GitIdentityInput,
 } from '../../shared/ipc';
-import type { CreateRepositoryInput } from '../../shared/repos';
+import type {
+  CloneInput,
+  CloneProgressEvent,
+  CreateRepositoryInput,
+  RemoteListInput,
+  RemoteUpdateInput,
+} from '../../shared/repos';
 import {
   DEFAULT_SETTINGS,
   type Settings,
@@ -145,6 +157,8 @@ export function useRevokeOtherSessions() {
 
 export const useOpenLogs = () =>
   useMutation({ mutationFn: () => desktop().app.openLogs() });
+export const useOpenGitInstallPage = () =>
+  useMutation({ mutationFn: () => desktop().git.openInstallPage() });
 export const useCopyDiagnostics = () =>
   useMutation({ mutationFn: () => desktop().app.copyDiagnostics() });
 
@@ -153,9 +167,10 @@ export const useCopyDiagnostics = () =>
 export const repoKeys = {
   list: ['repos'] as const,
   activity: ['repo-activity'] as const,
-  changes: (id: string, inspectedAt: number | null) =>
-    ['repo-changes', id, inspectedAt] as const,
+  changes: (id: string, statusAt: number | null) =>
+    ['repo-changes', id, statusAt] as const,
   remote: ['remote-overview'] as const,
+  remoteList: (sort: RemoteListInput['sort']) => ['remote-list', sort] as const,
 };
 
 const repos = () => desktop().repos;
@@ -174,13 +189,14 @@ export const useRepositoryActivity = () =>
     staleTime: Infinity,
   });
 
+// Keyed by the snapshot time, so a new status check fetches the file list again and nothing else does.
 export const useRepositoryChanges = (
   id: string,
-  inspectedAt: number | null,
+  statusAt: number | null,
   enabled: boolean,
 ) =>
   useQuery({
-    queryKey: repoKeys.changes(id, inspectedAt),
+    queryKey: repoKeys.changes(id, statusAt),
     queryFn: () => repos().changes(id),
     enabled,
     staleTime: Infinity,
@@ -253,9 +269,72 @@ export function useLinkRemote() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (id: string) => repos().linkRemote(id),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+// A confirmed remote change refreshes everything that shows remote data, and nothing else.
+function invalidateRemote(qc: ReturnType<typeof useQueryClient>) {
+  void qc.invalidateQueries({ queryKey: repoKeys.list });
+  void qc.invalidateQueries({ queryKey: repoKeys.remote });
+  void qc.invalidateQueries({ queryKey: ['remote-list'] });
+}
+
+// Pages come straight from the server; main spaces and counts the requests.
+export const useRemoteList = (
+  sort: RemoteListInput['sort'],
+  enabled: boolean,
+) =>
+  useInfiniteQuery({
+    queryKey: repoKeys.remoteList(sort),
+    queryFn: ({ pageParam }) => repos().remoteList({ sort, cursor: pageParam }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor,
+    enabled,
+    staleTime: 60_000,
+  });
+
+export function useUpdateRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RemoteUpdateInput) => repos().remoteUpdate(input),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+export function useDeleteRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => repos().remoteDelete(id),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+export function useCloneRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: CloneInput) => repos().clone(input),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: repoKeys.list });
-      void qc.invalidateQueries({ queryKey: repoKeys.remote });
+      void qc.invalidateQueries({ queryKey: repoKeys.activity });
     },
   });
+}
+
+export const useCancelClone = () =>
+  useMutation({ mutationFn: (jobId: string) => repos().cancelClone(jobId) });
+
+// The latest progress main reported for one clone job.
+export function useCloneProgress(
+  jobId: string | null,
+): CloneProgressEvent | null {
+  const [progress, setProgress] = useState<CloneProgressEvent | null>(null);
+  useEffect(() => {
+    setProgress(null);
+    if (!jobId) return;
+    return repos().onCloneProgress((event) => {
+      if (event.jobId === jobId) setProgress(event);
+    });
+  }, [jobId]);
+  return progress;
 }

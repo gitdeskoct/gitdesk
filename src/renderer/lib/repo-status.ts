@@ -36,7 +36,17 @@ export function syncState(repo: RepositorySummary): SyncState {
 
 export type Attention = {
   repo: RepositorySummary;
-  kind: 'missing' | 'not-a-repo' | 'error' | 'conflict' | 'operation' | 'changed' | 'diverged' | 'behind' | 'ahead';
+  kind:
+    | 'missing'
+    | 'not-a-repo'
+    | 'error'
+    | 'conflict'
+    | 'operation'
+    | 'changed'
+    | 'diverged'
+    | 'behind'
+    | 'ahead'
+    | 'no-upstream';
 };
 
 // Ordered by how much it blocks work: a missing folder before a merge before unpushed commits.
@@ -50,6 +60,7 @@ const ORDER: Attention['kind'][] = [
   'behind',
   'changed',
   'ahead',
+  'no-upstream',
 ];
 
 export function attentionOf(repo: RepositorySummary): Attention['kind'] | null {
@@ -64,8 +75,23 @@ export function attentionOf(repo: RepositorySummary): Attention['kind'] | null {
   if (sync === 'behind') return 'behind';
   if (tree === 'changed') return 'changed';
   if (sync === 'ahead') return 'ahead';
+  // A remote exists but this branch tracks nothing, so pushes and pulls have no target.
+  // A repository with no remote at all is a choice, not a problem, and stays out of this list.
+  if (sync === 'no-upstream' && repo.status?.branch) return 'no-upstream';
   return null;
 }
+
+// What the Problems filter means: the repository can't be worked with until this is fixed.
+export const isProblem = (repo: RepositorySummary): boolean => {
+  const kind = attentionOf(repo);
+  return (
+    kind === 'missing' ||
+    kind === 'not-a-repo' ||
+    kind === 'error' ||
+    kind === 'conflict' ||
+    kind === 'operation'
+  );
+};
 
 export function needsAttention(repos: RepositorySummary[]): Attention[] {
   return repos
@@ -76,20 +102,26 @@ export function needsAttention(repos: RepositorySummary[]): Attention[] {
 
 export type WorkspaceStats = {
   local: number;
+  // Registered but not found on disk; not counted as local.
+  missing: number;
   changed: number;
   ahead: number;
+  // Available repositories with no snapshot yet: their changes and sync are unknown, not zero.
+  unchecked: number;
   checking: number;
-  // The oldest successful check among available repositories: the strip's honest freshness.
+  // The oldest snapshot among available repositories: the strip's honest freshness.
   oldestCheck: number | null;
 };
 
 export function workspaceStats(repos: RepositorySummary[]): WorkspaceStats {
   const available = repos.filter((repo) => repo.availability === 'available');
   const checks = available
-    .map((repo) => repo.inspectedAt)
+    .map((repo) => repo.statusAt)
     .filter((at): at is number => at !== null);
   return {
     local: available.length,
+    missing: repos.length - available.length,
+    unchecked: available.filter((repo) => !repo.status).length,
     changed: available.filter((repo) => {
       const tree = treeState(repo);
       return tree === 'changed' || tree === 'conflict';

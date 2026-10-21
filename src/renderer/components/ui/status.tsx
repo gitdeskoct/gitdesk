@@ -1,12 +1,7 @@
-import {
-  CircleAlert,
-  CircleCheck,
-  Info,
-  LoaderCircle,
-  TriangleAlert,
-} from 'lucide-react';
+import { CircleAlert, CircleCheck, Info, TriangleAlert } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { cn } from '../../lib/cn';
+import { Spinner } from './spinner';
 
 const tones = {
   info: { icon: Info, className: 'text-muted' },
@@ -46,7 +41,8 @@ export function Loading({ label }: { label: string }) {
       role="status"
       className="flex items-center gap-2 py-4 text-sm text-muted"
     >
-      <LoaderCircle aria-hidden className="size-4 animate-spin" />
+      {/* The shared spinner, so the Motion setting and reduced-motion rules reach it too. */}
+      <Spinner />
       {label}
     </div>
   );

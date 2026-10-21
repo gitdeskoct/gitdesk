@@ -3,6 +3,7 @@ import type { SettingsSection } from '../../app/navigation';
 export const SECTION_LABELS: Record<SettingsSection, string> = {
   general: 'General',
   appearance: 'Appearance',
+  workspace: 'Workspace',
   git: 'Git',
   shortcuts: 'Shortcuts',
   account: 'Account',
@@ -78,6 +79,42 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Zoom',
     section: 'appearance',
     keywords: 'scale bigger smaller magnify',
+  },
+  {
+    id: 'dashboard-layout',
+    label: 'Home layout',
+    section: 'workspace',
+    keywords: 'dashboard split centered columns attention activity',
+  },
+  {
+    id: 'dashboard-density',
+    label: 'Home density',
+    section: 'workspace',
+    keywords: 'compact comfortable rows dense',
+  },
+  {
+    id: 'watch-repositories',
+    label: 'Watch repositories for changes',
+    section: 'workspace',
+    keywords: 'watcher status refresh files',
+  },
+  {
+    id: 'refresh-on-focus',
+    label: 'Check when gitdesk comes to the front',
+    section: 'workspace',
+    keywords: 'focus window status refresh',
+  },
+  {
+    id: 'background-refresh',
+    label: 'Background check',
+    section: 'workspace',
+    keywords: 'interval timer minutes status refresh',
+  },
+  {
+    id: 'remote-refresh',
+    label: 'Refresh remote details',
+    section: 'workspace',
+    keywords: 'remote account sync automatic manual',
   },
   {
     id: 'git-identity',

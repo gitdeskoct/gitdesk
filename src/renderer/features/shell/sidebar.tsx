@@ -22,7 +22,7 @@ type Item = {
 };
 
 const code: Item[] = [
-  { route: 'repositories', label: 'Repositories', icon: Folder, soon: true },
+  { route: 'repositories', label: 'Repositories', icon: Folder },
   { route: 'pulls', label: 'Pull requests', icon: GitPullRequest, soon: true },
   { route: 'issues', label: 'Issues', icon: CircleDot, soon: true },
 ];
@@ -107,7 +107,10 @@ export function Sidebar({
           key={item.route}
           label={item.label}
           icon={item.icon}
-          active={route.name === item.route}
+          active={
+            route.name === item.route ||
+            (item.route === 'repositories' && route.name === 'repository')
+          }
           collapsed={collapsed}
           trailing={item.soon ? 'Soon' : undefined}
           onSelect={() => navigate({ name: item.route } as Route)}

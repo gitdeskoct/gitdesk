@@ -129,6 +129,7 @@ export function SignInScreen({
             <Button
               variant="ghost"
               className="mt-1.5 w-full"
+              pending={update.isPending}
               onClick={() => update.mutate({ localOnly: true })}
             >
               Continue without an account
