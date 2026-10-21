@@ -1,4 +1,6 @@
+import { sql } from 'drizzle-orm';
 import {
+  check,
   index,
   integer,
   sqliteTable,
@@ -96,13 +98,40 @@ export const repositories = sqliteTable(
     // Lower-cased name: one repository per name per account, regardless of case.
     nameKey: text('name_key').notNull(),
     description: text('description'),
-    visibility: text('visibility').notNull().default('private'),
+    visibility: text('visibility', { enum: ['private'] }).notNull().default('private'),
     defaultBranch: text('default_branch').notNull().default('main'),
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
+    // Client-chosen uuid that makes a retried create return the first result.
+    idempotencyKey: text('idempotency_key'),
   },
   (t) => [
     uniqueIndex('repositories_owner_name').on(t.ownerAccountId, t.nameKey),
+    uniqueIndex('repositories_owner_idempotency').on(t.ownerAccountId, t.idempotencyKey),
     index('repositories_owner_updated').on(t.ownerAccountId, t.updatedAt, t.id),
+    index('repositories_owner_name_key').on(t.ownerAccountId, t.nameKey, t.id),
+    check('repositories_visibility', sql`visibility in ('private')`),
+  ],
+);
+
+export const ACTIVITY_TYPES = ['repository.created', 'repository.updated', 'repository.deleted'] as const;
+
+// The name is copied so a deleted repository's history still reads; its id goes null on delete.
+export const activity = sqliteTable(
+  'activity',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    repositoryId: text('repository_id').references(() => repositories.id, { onDelete: 'set null' }),
+    repositoryName: text('repository_name').notNull(),
+    type: text('type', { enum: ACTIVITY_TYPES }).notNull(),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    index('activity_account_created').on(t.accountId, t.createdAt, t.id),
+    // Without it, every repository delete scans activity to null out the reference.
+    index('activity_repository').on(t.repositoryId),
   ],
 );

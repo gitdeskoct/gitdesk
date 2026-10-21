@@ -15,6 +15,13 @@
       "when": 1792604180722,
       "tag": "0001_repositories",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792616182828,
+      "tag": "0002_activity",
+      "breakpoints": true
     }
   ]
 }
