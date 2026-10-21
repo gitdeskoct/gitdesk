@@ -6,8 +6,15 @@ import { logEvent } from '../../lib/log';
 import { rateLimit } from '../../middleware/rate-limit';
 import { requireAuth } from '../../middleware/require-auth';
 import { validate } from '../../middleware/validate';
-import { createRepository, getOwned, listPage, overview } from './repositories';
-import { createBody, listQuery, repositoryParams } from './schemas';
+import {
+  createRepository,
+  deleteRepository,
+  getOwned,
+  listPage,
+  overview,
+  updateRepository,
+} from './repositories';
+import { createBody, createHeaders, listQuery, repositoryParams, updateBody } from './schemas';
 
 // Writes spend the free plan's daily D1 row writes, so they get a tighter limit than reads.
 const writeLimit = rateLimit('WRITE_LIMITER', (c) => c.get('auth').accountId);
@@ -29,21 +36,65 @@ export function repositoryRoutes() {
     return c.json({ repository });
   });
 
-  app.post('/', writeLimit, validate('json', createBody), async (c) => {
+  app.post(
+    '/',
+    writeLimit,
+    validate('header', createHeaders),
+    validate('json', createBody),
+    async (c) => {
+      const { accountId } = c.get('auth');
+      const body = c.req.valid('json');
+      const result = await createRepository(
+        getDb(c.env.DB),
+        accountId,
+        {
+          name: body.name,
+          description: body.description || null,
+          idempotencyKey: c.req.valid('header')['idempotency-key'] ?? null,
+        },
+        Date.now(),
+      );
+      if (result.status === 'name_taken')
+        throw new ApiError('NAME_TAKEN', 'A repository with that name already exists.');
+      if (result.status === 'limit')
+        throw new ApiError('LIMIT_REACHED', 'This account has reached its repository limit.');
+      logEvent('repository_created', { requestId: c.get('requestId'), accountId });
+      return c.json({ repository: result.repository }, 201);
+    },
+  );
+
+  app.patch(
+    '/:id',
+    writeLimit,
+    validate('param', repositoryParams),
+    validate('json', updateBody),
+    async (c) => {
+      const { accountId } = c.get('auth');
+      const body = c.req.valid('json');
+      const result = await updateRepository(
+        getDb(c.env.DB),
+        accountId,
+        c.req.valid('param').id,
+        {
+          name: body.name,
+          description: body.description === undefined ? undefined : body.description || null,
+        },
+        Date.now(),
+      );
+      if (result.status === 'not_found') throw new ApiError('NOT_FOUND', 'Not found.');
+      if (result.status === 'name_taken')
+        throw new ApiError('NAME_TAKEN', 'A repository with that name already exists.');
+      return c.json({ repository: result.repository });
+    },
+  );
+
+  app.delete('/:id', writeLimit, validate('param', repositoryParams), async (c) => {
     const { accountId } = c.get('auth');
-    const body = c.req.valid('json');
-    const result = await createRepository(
-      getDb(c.env.DB),
-      accountId,
-      { name: body.name, description: body.description || null },
-      Date.now(),
-    );
-    if (result.status === 'name_taken')
-      throw new ApiError('NAME_TAKEN', 'A repository with that name already exists.');
-    if (result.status === 'limit')
-      throw new ApiError('LIMIT_REACHED', 'This account has reached its repository limit.');
-    logEvent('repository_created', { requestId: c.get('requestId'), accountId });
-    return c.json({ repository: result.repository }, 201);
+    const id = c.req.valid('param').id;
+    if (!(await deleteRepository(getDb(c.env.DB), accountId, id, Date.now())))
+      throw new ApiError('NOT_FOUND', 'Not found.');
+    logEvent('repository_deleted', { requestId: c.get('requestId'), accountId });
+    return c.body(null, 204);
   });
 
   return app;
