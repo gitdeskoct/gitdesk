@@ -22,6 +22,10 @@ import type {
   RepositorySummary,
 } from '../../shared/repos';
 import { DEFAULT_SETTINGS, type Settings } from '../../shared/settings';
+import {
+  DEFAULT_REPO_PREFERENCES,
+  type RepositoryAnalytics,
+} from '../../shared/workspace';
 import { Providers } from '../app/providers';
 import { AppShell } from './shell/app-shell';
 
@@ -92,6 +96,30 @@ const signedOut: RemoteOverview = {
 };
 
 let repos: Record<string, ReturnType<typeof vi.fn>>;
+let workspace: Record<string, ReturnType<typeof vi.fn>>;
+
+const emptyAnalytics = (
+  overrides: Partial<RepositoryAnalytics> = {},
+): RepositoryAnalytics => ({
+  branch: 'main',
+  headOid: 'a'.repeat(40),
+  range: '12w',
+  since: Date.now() - 84 * 86_400_000,
+  totalCommits: 0,
+  commits: 0,
+  activeDays: 0,
+  added: 0,
+  removed: 0,
+  filesTouched: 0,
+  bucket: 'week',
+  buckets: [],
+  heat: Array.from({ length: 7 }, () => Array.from({ length: 24 }, () => 0)),
+  topFiles: [],
+  authors: [],
+  truncated: false,
+  skippedLarge: [],
+  ...overrides,
+});
 
 function install(list: () => Promise<RepositorySummary[]>) {
   repos = {
@@ -106,6 +134,24 @@ function install(list: () => Promise<RepositorySummary[]>) {
     refresh: vi.fn(async () => undefined),
     onChanged: vi.fn(() => () => {}),
     onProgress: vi.fn(() => () => {}),
+  };
+  workspace = {
+    watch: vi.fn(async () => undefined),
+    unwatch: vi.fn(async () => undefined),
+    preferences: vi.fn(async () => DEFAULT_REPO_PREFERENCES),
+    remotes: vi.fn(async () => []),
+    editors: vi.fn(async () => []),
+    branches: vi.fn(async () => ({
+      current: 'main',
+      detached: false,
+      headOid: 'a'.repeat(40),
+      local: [],
+      remote: [],
+      truncated: false,
+    })),
+    analytics: vi.fn(async () => emptyAnalytics()),
+    log: vi.fn(async () => ({ snapshot: null, commits: [], nextSkip: null })),
+    diff: vi.fn(never),
   };
   window.desktop = {
     platform: 'win32',
@@ -130,6 +176,7 @@ function install(list: () => Promise<RepositorySummary[]>) {
       })),
     },
     repos,
+    workspace,
   } as unknown as DesktopApi;
 }
 
@@ -166,9 +213,15 @@ describe('workspace', () => {
       await screen.findByRole('heading', { level: 1, name: 'desktop-git' }),
     ).toBeInTheDocument();
     expect(repos.open).toHaveBeenCalledWith(repo().id);
+    expect(screen.getByRole('tab', { name: /Changes/ })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
+    // Waits on the repository list, then the change list; under a full parallel run that can pass 3 s.
     expect(
-      screen.getByRole('heading', { name: 'Changes' }),
+      await screen.findByText('Working tree is clean', {}, { timeout: 10_000 }),
     ).toBeInTheDocument();
+    expect(workspace.watch).toHaveBeenCalledWith(repo().id);
   });
 
   it('routes the sidebar Repositories item to the real page', async () => {
@@ -490,44 +543,54 @@ describe('repository management', () => {
     });
   });
 
-  it('charts weekly commits from Git and shows an empty state before the first commit', async () => {
+  it('charts commits from local history on Overview, and says so before the first commit', async () => {
     const monday = new Date();
     monday.setHours(0, 0, 0, 0);
-    repos.history = vi.fn(async () => ({
-      ...noHistory,
-      commitCount: 4,
-      weeks: [
-        { start: monday.getTime() - 7 * 86_400_000, commits: 1 },
-        { start: monday.getTime(), commits: 3 },
-      ],
-      recent: [
-        {
-          oid: 'b'.repeat(40),
-          at: Date.now(),
-          author: 'Test',
-          subject: 'Latest work',
-        },
-      ],
-    }));
+    workspace.analytics = vi.fn(async () =>
+      emptyAnalytics({
+        totalCommits: 4,
+        commits: 4,
+        activeDays: 2,
+        added: 12,
+        removed: 3,
+        filesTouched: 2,
+        buckets: [
+          {
+            start: monday.getTime() - 7 * 86_400_000,
+            commits: 1,
+            added: 2,
+            removed: 1,
+          },
+          { start: monday.getTime(), commits: 3, added: 10, removed: 2 },
+        ],
+        topFiles: [{ path: 'src/app.ts', commits: 3 }],
+        authors: [{ name: 'Test', email: 'test@example.com', commits: 4 }],
+      }),
+    );
     renderApp();
     await userEvent.click(
       await screen.findByRole('button', { name: 'Open local-only' }),
     );
+    await userEvent.click(await screen.findByRole('tab', { name: 'Overview' }));
     expect(
-      await screen.findByRole('button', { name: /so far: 3 commits/ }),
+      await screen.findByRole('heading', {
+        name: 'How often was main committed to?',
+      }),
     ).toBeInTheDocument();
-    expect(screen.getByText('Latest work')).toBeInTheDocument();
-    expect(screen.getByText(/4 commits in 2 weeks/)).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /: 3 commits$/ }),
+    ).toBeInTheDocument();
+    expect(screen.getByText('src/app.ts')).toBeInTheDocument();
+    expect(screen.getByText(/Busiest: 3 commits/)).toBeInTheDocument();
 
     cleanupRender();
-    repos.history = vi.fn(async () => noHistory);
+    workspace.analytics = vi.fn(async () => emptyAnalytics({ headOid: null }));
     renderApp();
     await userEvent.click(
       await screen.findByRole('button', { name: 'Open local-only' }),
     );
-    expect(
-      await screen.findByText('No commits on main yet'),
-    ).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('tab', { name: 'Overview' }));
+    expect(await screen.findByText('No commits yet')).toBeInTheDocument();
   });
 
   it('shows the list beside the selected repository in the split layout, and moves with the arrow keys', async () => {
@@ -556,5 +619,44 @@ describe('repository management', () => {
     expect(
       within(inspector).getByRole('heading', { level: 2 }).textContent,
     ).not.toBe(first);
+  });
+
+  it('pages the repository list twenty at a time, and selects only the page on screen', async () => {
+    status = signedOutStatus;
+    install(async () =>
+      Array.from({ length: 25 }, (_, i) =>
+        repo({
+          id: `00000000-0000-4000-8000-0000000000${String(i).padStart(2, '0')}`,
+          name: `repo-${String(i).padStart(2, '0')}`,
+          lastOpenedAt: Date.now() - i * 1000,
+        }),
+      ),
+    );
+    renderApp();
+    await openRepositories();
+    const pager = await screen.findByRole('navigation', {
+      name: 'Repository pages',
+    });
+    expect(within(pager).getByText('1–20 of 25')).toBeInTheDocument();
+    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(
+      21,
+    );
+
+    await userEvent.click(
+      screen.getByRole('checkbox', { name: 'Select all shown' }),
+    );
+    expect(await screen.findByText('20 selected')).toBeInTheDocument();
+
+    await userEvent.click(
+      within(pager).getByRole('button', { name: 'Next page' }),
+    );
+    expect(within(pager).getByText('21–25 of 25')).toBeInTheDocument();
+    expect(rowNames()).toEqual([
+      'repo-20',
+      'repo-21',
+      'repo-22',
+      'repo-23',
+      'repo-24',
+    ]);
   });
 });

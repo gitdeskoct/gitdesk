@@ -20,6 +20,8 @@ export default defineConfig({
           environment: 'jsdom',
           include: ['src/renderer/**/*.test.tsx'],
           setupFiles: ['src/renderer/test/setup.ts'],
+          // Whole-app renders share the CPU with the Git tests in a full run; alone they take ~2 s.
+          testTimeout: 15_000,
         },
       },
     ],

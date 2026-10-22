@@ -55,6 +55,8 @@ function gitEnv(): Record<string, string> {
     ...env,
     GIT_OPTIONAL_LOCKS: '0',
     GIT_TERMINAL_PROMPT: '0',
+    // A file named `*.ts` or `:(top)x` is that file, never a glob or pathspec magic.
+    GIT_LITERAL_PATHSPECS: '1',
     GCM_INTERACTIVE: 'never',
     LC_ALL: 'C',
   };
@@ -62,8 +64,21 @@ function gitEnv(): Record<string, string> {
 
 // A repository's own .git/config can name programs Git runs during ordinary reads: core.fsmonitor
 // runs on `git status` and gpg.program on `git log` when log.showSignature is set. Command-line -c
-// beats repository config, so these are turned off for every command gitdesk runs.
-export const SAFE_CONFIG = ['core.fsmonitor=false', 'log.showSignature=false'];
+// beats repository config, so these are turned off for every command gitdesk runs. Color is off so
+// a repository's color.ui=always can't put escape codes into parsed output.
+export const SAFE_CONFIG = [
+  'core.fsmonitor=false',
+  'log.showSignature=false',
+  'color.ui=false',
+  'core.quotePath=false',
+];
+
+// The Git gitdesk runs: the one on PATH, or one picked in Settings › Git and checked to answer as Git.
+let gitBinary: string | null = null;
+export function useGitBinary(binary: string | null): void {
+  gitBinary = binary;
+}
+export const customGitBinary = (): string | null => gitBinary;
 
 // Read-only and non-interactive: optional locks off so a background status never blocks your
 // editor's commit on index.lock, no credential prompts, a hard timeout, no shell. Arguments are
@@ -73,26 +88,32 @@ export function gitAt(
   options: Pick<SimpleGitOptions, 'abort' | 'progress'> & {
     config?: string[];
     allowProtocolOverride?: boolean;
+    // Inactivity limit; commits get longer because hooks such as linters can run for a while.
+    timeoutMs?: number;
   } = {},
 ): SimpleGit {
   return simpleGit({
     baseDir: dir,
+    binary: gitBinary ?? 'git',
     maxConcurrentProcesses: 2,
-    timeout: { block: TIMEOUT_MS },
+    timeout: { block: options.timeoutMs ?? TIMEOUT_MS },
     trimmed: false,
     config: [...SAFE_CONFIG, ...(options.config ?? [])],
     abort: options.abort,
     progress: options.progress,
     // simple-git refuses any core.fsmonitor or protocol.* override; these opt-ins only admit the
-    // fixed values gitdesk sets itself, which switch those features off or narrow them.
+    // fixed values gitdesk sets itself, which switch those features off or narrow them. A custom
+    // binary is a path main picked through a dialog and verified, never a renderer value.
     unsafe: {
       allowUnsafeFsMonitor: true,
       allowUnsafeProtocolOverride: options.allowProtocolOverride ?? false,
+      allowUnsafeCustomBinary: gitBinary !== null,
     },
     // simple-git blocks GIT_* variables unless named; these are the only ones gitdesk sets.
     allowEnvironment: [
       'GIT_OPTIONAL_LOCKS',
       'GIT_TERMINAL_PROMPT',
+      'GIT_LITERAL_PATHSPECS',
       'GIT_AUTHOR_NAME',
       'GIT_AUTHOR_EMAIL',
       'GIT_COMMITTER_NAME',
@@ -168,12 +189,20 @@ const OPERATION_FILES = [
   ['REVERT_HEAD', 'revert'],
 ] as const;
 
-const STATUS_ARGS = [
+export const STATUS_ARGS = [
   'status',
   '--porcelain=v2',
   '--branch',
   '-z',
   '--untracked-files=normal',
+];
+// The workspace lists every untracked file, not just its new folder, so each can be staged alone.
+export const WORKSPACE_STATUS_ARGS = [
+  'status',
+  '--porcelain=v2',
+  '--branch',
+  '-z',
+  '--untracked-files=all',
 ];
 
 export async function inspect(root: string): Promise<Inspection> {
@@ -206,18 +235,26 @@ export async function inspect(root: string): Promise<Inspection> {
       .raw([
         'rev-parse',
         ...OPERATION_FILES.flatMap(([file]) => ['--git-path', file]),
+        '--git-path',
+        'FETCH_HEAD',
       ])
       .catch(() => ''),
   ]);
-  const found = gitPaths
-    .split('\n')
-    .map((line) => line.trim())
+  const lines = gitPaths.split('\n').map((line) => line.trim());
+  const found = lines
+    .slice(0, OPERATION_FILES.length)
     .map((line, index) =>
       line && existsSync(path.resolve(root, line))
         ? OPERATION_FILES[index]?.[1]
         : undefined,
     )
     .find(Boolean);
+  const fetchHead = lines[OPERATION_FILES.length];
+  const fetchedAt = fetchHead
+    ? await stat(path.resolve(root, fetchHead))
+        .then((info) => info.mtimeMs)
+        .catch(() => null)
+    : null;
 
   const { files: _files, truncated: _truncated, ...counts } = parsed;
   return {
@@ -228,6 +265,7 @@ export async function inspect(root: string): Promise<Inspection> {
       operation: found ?? null,
       hasRemotes: remotes.trim().length > 0,
       lastCommit: parseLastCommit(log),
+      fetchedAt,
     },
   };
 }
@@ -319,7 +357,13 @@ export async function history(
         '--format=%ct',
         'HEAD',
       ]),
-      git.raw(['log', '-n', '10', '--format=%H%x00%ct%x00%an%x00%s', 'HEAD']),
+      git.raw([
+        'log',
+        '-n',
+        '10',
+        '--format=%H%x00%ct%x00%an%x00%ae%x00%s',
+        'HEAD',
+      ]),
     ]);
     const stamps = times
       .split('\n')
@@ -334,10 +378,11 @@ export async function history(
         .split('\n')
         .map((line) => line.split('\0'))
         .filter(([oid, at]) => OID.test(oid ?? '') && Number(at) > 0)
-        .map(([oid, at, author, subject]) => ({
+        .map(([oid, at, author, email, subject]) => ({
           oid: oid!,
           at: Number(at) * 1000,
           author: (author ?? '').slice(0, 100),
+          email: (email ?? '').slice(0, 254),
           subject: (subject ?? '').slice(0, 200),
         })),
     };
@@ -350,7 +395,7 @@ export async function history(
 export async function listChanges(root: string): Promise<RepositoryChanges> {
   try {
     const { files, truncated } = parseStatus(
-      await gitAt(root).raw(STATUS_ARGS),
+      await gitAt(root).raw(WORKSPACE_STATUS_ARGS),
     );
     return { files, truncated };
   } catch (err) {

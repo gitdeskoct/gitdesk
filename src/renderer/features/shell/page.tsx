@@ -24,6 +24,7 @@ export function Page({
   actions,
   width = 'page',
   aside,
+  fill = false,
   children,
 }: {
   crumbs: Crumb[];
@@ -31,6 +32,8 @@ export function Page({
   width?: keyof typeof columnWidth;
   /** A non-modal side panel docked to the right of the body (create, clone). */
   aside?: ReactNode;
+  /** The body is a full-height frame and its panes scroll on their own (the repository workspace). */
+  fill?: boolean;
   children: ReactNode;
 }) {
   return (
@@ -43,11 +46,15 @@ export function Page({
       </header>
       <ConnectionStatus />
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-auto px-6 py-8 min-[1100px]:px-10">
-          <div className={cn('mx-auto h-full w-full', columnWidth[width])}>
-            {children}
+        {fill ? (
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>
+        ) : (
+          <div className="min-w-0 flex-1 overflow-auto px-6 py-8 min-[1100px]:px-10">
+            <div className={cn('mx-auto h-full w-full', columnWidth[width])}>
+              {children}
+            </div>
           </div>
-        </div>
+        )}
         {aside}
       </div>
     </section>

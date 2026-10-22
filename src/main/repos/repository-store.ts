@@ -4,6 +4,11 @@ import type {
   RepoAvailability,
   RepoStatus,
 } from '../../shared/repos';
+import {
+  DEFAULT_REPO_PREFERENCES,
+  repoPreferencesInputSchema,
+  type RepoPreferences,
+} from '../../shared/workspace';
 import { transaction, type AppDatabase } from '../db/database';
 
 export type RepoRow = {
@@ -345,6 +350,38 @@ export function createRepositoryStore(db: AppDatabase) {
 
     clearRemote(): void {
       db.exec('DELETE FROM remote_repository_cache');
+    },
+
+    // Stored as JSON and read back field by field, so one bad value falls back alone.
+    preferences(id: string): RepoPreferences {
+      const row = db
+        .prepare(
+          'SELECT value FROM repository_preferences WHERE repository_id = ?',
+        )
+        .get(id) as { value: string } | undefined;
+      let stored: Record<string, unknown> = {};
+      try {
+        stored = row ? (JSON.parse(row.value) as Record<string, unknown>) : {};
+      } catch {
+        stored = {};
+      }
+      const merged: Record<string, unknown> = { ...DEFAULT_REPO_PREFERENCES };
+      for (const [key, field] of Object.entries(
+        repoPreferencesInputSchema.shape,
+      )) {
+        if (key === 'id') continue;
+        const parsed = field.safeParse(stored[key]);
+        if (parsed.success && parsed.data !== undefined)
+          merged[key] = parsed.data;
+      }
+      return merged as RepoPreferences;
+    },
+
+    savePreferences(id: string, value: RepoPreferences, now: number): void {
+      db.prepare(
+        `INSERT INTO repository_preferences (repository_id, value, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(repository_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`,
+      ).run(id, JSON.stringify(value), now);
     },
   };
 }

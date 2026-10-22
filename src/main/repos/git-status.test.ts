@@ -61,7 +61,7 @@ describe('parseStatus', () => {
       untracked: 1,
       conflicts: 1,
     });
-    expect(status.files).toEqual([
+    expect(status.files).toMatchObject([
       { path: 'src/staged.ts', kind: 'staged', code: 'M' },
       { path: 'src/edited file.ts', kind: 'modified', code: 'M' },
       { path: 'src/both.ts', kind: 'staged', code: 'M' },
@@ -86,6 +86,24 @@ describe('parseStatus', () => {
       'new-name.ts',
       'after.txt',
     ]);
+    expect(status.files[0]?.origPath).toBe('1 looks-like-a-record.ts');
+  });
+
+  it('keeps full-length paths, unusual names and submodule entries', () => {
+    const long = `${'deep/'.repeat(80)}file.ts`;
+    const status = parseStatus(
+      z(
+        `1 .M N... 100644 100644 100644 ${OID} ${OID} ${long}`,
+        `1 .M SC.. 160000 160000 160000 ${OID} ${OID} vendor/lib`,
+        '? -leading dash ünïcode.txt',
+      ),
+    );
+    expect(status.files[0]?.path).toBe(long);
+    expect(status.files[1]).toMatchObject({
+      path: 'vendor/lib',
+      submodule: true,
+    });
+    expect(status.files[2]?.path).toBe('-leading dash ünïcode.txt');
   });
 
   it('caps the file list and says so', () => {

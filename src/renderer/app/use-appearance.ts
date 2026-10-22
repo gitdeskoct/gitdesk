@@ -43,5 +43,17 @@ export function useAppearance(settings: Settings | undefined): void {
     root.fontSize = settings.fontSize;
     root.contentWidth = settings.contentWidth;
     root.motion = settings.motion;
+    root.codeSize = String(settings.codeSize);
+    root.codeLine = settings.codeLineHeight;
+    root.codeTab = String(settings.codeTabWidth);
+    root.codeLigatures = settings.codeLigatures ? 'on' : 'off';
+    // CSSOM, not a style attribute: the CSP allows it, and the setting only holds name characters.
+    const style = document.documentElement.style;
+    if (settings.codeFont.trim())
+      style.setProperty(
+        '--code-font',
+        `"${settings.codeFont.trim()}", ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace`,
+      );
+    else style.removeProperty('--code-font');
   }, [settings]);
 }

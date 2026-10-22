@@ -9,6 +9,7 @@ import {
 } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
+import { Pager, usePage } from '../../components/ui/pager';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { formatDate, relativeTime, useNow } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
@@ -147,6 +148,7 @@ function RemoteView({
   const query = useRemoteRepository(id, true);
   const remote = query.data!;
   const activity = useRemoteActivity(id, true);
+  const activityPage = usePage(activity.data ?? [], 10);
   const provision = useProvisionRemote();
   const openRepo = useOpenRepo();
   const local = useRepositories().data?.find((r) => r.remoteId === id);
@@ -318,21 +320,28 @@ function RemoteView({
             {ipcErrorMessage(activity.error, 'The server did not answer.')}
           </EmptyState>
         ) : activity.data.length ? (
-          <ul className="border-t border-line">
-            {activity.data.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center gap-3 border-b border-line py-2.5 text-[0.84375rem]"
-              >
-                <span className="min-w-0 flex-1 truncate font-medium text-ink">
-                  {REMOTE_ACTIVITY[item.type]}
-                </span>
-                <span className="shrink-0 text-xs text-muted">
-                  {relativeTime(item.createdAt)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="border-t border-line">
+              {activityPage.items.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex items-center gap-3 border-b border-line py-2.5 text-[0.84375rem]"
+                >
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink">
+                    {REMOTE_ACTIVITY[item.type]}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted">
+                    {relativeTime(item.createdAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <Pager
+              label="Activity pages"
+              onPage={activityPage.setPage}
+              {...activityPage}
+            />
+          </>
         ) : (
           <EmptyState
             compact

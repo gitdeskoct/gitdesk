@@ -10,12 +10,21 @@ import {
 export type SettingsSection =
   | 'general'
   | 'appearance'
+  | 'code'
   | 'workspace'
+  | 'editor'
   | 'git'
   | 'shortcuts'
   | 'account'
   | 'devices'
   | 'about';
+export type RepoTab =
+  | 'changes'
+  | 'history'
+  | 'branches'
+  | 'remotes'
+  | 'overview'
+  | 'settings';
 export type RepoShow = 'all' | 'changed' | 'ahead' | 'behind' | 'problems';
 // Where a repository lives. Counts overlap: a linked repository is local and remote at once.
 export type RepoScope = 'all' | 'local' | 'remote' | 'linked';
@@ -23,8 +32,9 @@ export type Route =
   | { name: 'home' | 'pulls' | 'issues' }
   // `show` and `scope` let Home's statistics open the list already filtered.
   | { name: 'repositories'; show?: RepoShow; scope?: RepoScope }
-  // A registered repository, by gitdesk's id; the path stays in main.
-  | { name: 'repository'; id: string }
+  // A registered repository, by gitdesk's id; the path stays in main. Without a tab it opens on
+  // the repository's own "opens on" choice.
+  | { name: 'repository'; id: string; tab?: RepoTab }
   // A repository in the account with no registration on this computer, by its remote id.
   | { name: 'remote-repository'; id: string }
   | { name: 'settings'; section: SettingsSection; row?: string };

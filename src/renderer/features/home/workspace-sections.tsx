@@ -241,6 +241,8 @@ const LOCAL: Record<
   checkout: { icon: GitBranch, label: 'Switched to' },
   renamed: { icon: Pencil, label: 'Renamed to' },
   unlinked: { icon: Unlink, label: 'Disconnected from its remote' },
+  fetched: { icon: CloudDownload, label: 'Fetched from' },
+  'branch-created': { icon: GitBranch, label: 'New branch' },
 };
 
 export const REMOTE_ACTIVITY: Record<RemoteActivity['type'], string> = {

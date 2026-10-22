@@ -258,7 +258,6 @@ export function createRepositoryService(deps: {
       row.availability === 'available';
     if (!wanted) return unwatch(id);
     if (watchers.has(id) || watchers.size >= MAX_WATCHERS) return;
-    const gitDir = path.join(row.rootPath, '.git');
     const schedule = () => {
       clearTimeout(watchTimers.get(id));
       watchTimers.set(
@@ -266,18 +265,26 @@ export function createRepositoryService(deps: {
         setTimeout(() => void enqueue([id]), WATCH_DEBOUNCE_MS),
       );
     };
-    void stat(gitDir)
-      .then((info) => {
-        // A worktree's .git is a file pointing elsewhere; those rely on focus and interval checks.
-        if (!info.isDirectory() || watchers.has(id)) return;
-        const top = watch(gitDir, { persistent: false }, (_event, file) => {
-          if (!file || WATCHED.test(String(file))) schedule();
-        });
-        const opened = [top];
+    // Git reports where its data lives: a linked worktree or submodule has a .git file that points
+    // elsewhere, and its refs live in the shared common directory.
+    void gitAt(row.rootPath)
+      .raw(['rev-parse', '--absolute-git-dir', '--git-common-dir'])
+      .then(async (output) => {
+        const [own, common] = output.split('\n').map((line) => line.trim());
+        if (!own || !common || watchers.has(id)) return;
+        const gitDir = path.resolve(row.rootPath, own);
+        const commonDir = path.resolve(row.rootPath, common);
+        if (!(await stat(gitDir)).isDirectory() || watchers.has(id)) return;
+        const shallow = (dir: string) =>
+          watch(dir, { persistent: false }, (_event, file) => {
+            if (!file || WATCHED.test(String(file))) schedule();
+          });
+        const opened = [shallow(gitDir)];
+        if (commonDir !== gitDir) opened.push(shallow(commonDir));
         try {
           opened.push(
             watch(
-              path.join(gitDir, 'refs'),
+              path.join(commonDir, 'refs'),
               { persistent: false, recursive: true },
               schedule,
             ),

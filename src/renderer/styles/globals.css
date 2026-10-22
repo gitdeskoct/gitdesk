@@ -51,6 +51,28 @@
     'Inter Variable', 'Inter', ui-sans-serif, system-ui, -apple-system,
     'Segoe UI', Roboto, sans-serif;
   --content-max: 1020px;
+  /* Diff rows: solid tints for added and removed lines, a stronger step for changed words.
+     The +/− column and underline or strike-through carry the meaning without color. */
+  --diff-add: #eaf6ee;
+  --diff-del: #fdeceb;
+  --diff-add-word: #c6e9d2;
+  --diff-del-word: #f7cdc9;
+  --diff-hunk: #f5f6f8;
+  /* Charts: fixed series colors checked with the dataviz validator, independent of the accent tone.
+     The heat ramp is five steps of chart-1. */
+  --chart-1: #2f5bea;
+  --chart-2: #c8641a;
+  --heat-0: #f5f6f8;
+  --heat-1: #e6ecfd;
+  --heat-2: #b9c8f8;
+  --heat-3: #8aa3f3;
+  --heat-4: #5c7eee;
+  --heat-5: #2f5bea;
+  --code-font: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
+  --code-size: 0.8125rem;
+  --code-line: 1.25rem;
+  --code-tab: 4;
+  --code-ligatures: none;
   color-scheme: light;
 }
 
@@ -83,6 +105,19 @@
   --warning-soft: #32260f;
   --danger: #ff6f64;
   --danger-soft: #3a1d1b;
+  --diff-add: #10241a;
+  --diff-del: #2b1615;
+  --diff-add-word: #1d4a2f;
+  --diff-del-word: #5a2522;
+  --diff-hunk: #0f1012;
+  --chart-1: #6f86f0;
+  --chart-2: #c97436;
+  --heat-0: #0f1012;
+  --heat-1: #1f2540;
+  --heat-2: #2c3a78;
+  --heat-3: #3d52ad;
+  --heat-4: #566ed6;
+  --heat-5: #6f86f0;
   color-scheme: dark;
 }
 
@@ -151,6 +186,31 @@
 :root[data-content-width='wide'] {
   --content-max: 1160px;
 }
+/* Settings › Code. The font family itself arrives as --code-font, set through CSSOM. */
+:root[data-code-size='12'] {
+  --code-size: 0.75rem;
+}
+:root[data-code-size='14'] {
+  --code-size: 0.875rem;
+}
+:root[data-code-size='15'] {
+  --code-size: 0.9375rem;
+}
+:root[data-code-line='compact'] {
+  --code-line: 1.125rem;
+}
+:root[data-code-line='relaxed'] {
+  --code-line: 1.5rem;
+}
+:root[data-code-tab='2'] {
+  --code-tab: 2;
+}
+:root[data-code-tab='8'] {
+  --code-tab: 8;
+}
+:root[data-code-ligatures='on'] {
+  --code-ligatures: normal;
+}
 
 @theme inline {
   --color-canvas: var(--canvas);
@@ -181,6 +241,13 @@
   --color-warning-soft: var(--warning-soft);
   --color-danger: var(--danger);
   --color-danger-soft: var(--danger-soft);
+  --color-diff-add: var(--diff-add);
+  --color-diff-del: var(--diff-del);
+  --color-diff-add-word: var(--diff-add-word);
+  --color-diff-del-word: var(--diff-del-word);
+  --color-diff-hunk: var(--diff-hunk);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
   --font-sans: var(--app-font);
   --font-mono: ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, monospace;
   --radius-sm: var(--radius-sm);
@@ -236,6 +303,24 @@
     border-color: var(--danger);
     box-shadow: inset 0 0 0 1px var(--danger);
   }
+}
+
+/* Code and diffs: the user's code font, size, line height, tab width and ligatures. */
+@utility code-text {
+  font-family: var(--code-font);
+  font-size: var(--code-size);
+  line-height: var(--code-line);
+  tab-size: var(--code-tab);
+  font-variant-ligatures: var(--code-ligatures);
+}
+
+/* Shiki tokens carry both theme colors as variables; the app theme picks one. Colors were
+   adjusted to 4.5:1 against the diff backgrounds before they got here. */
+.code-token {
+  color: var(--shiki-light);
+}
+:root[data-theme='dark'] .code-token {
+  color: var(--shiki-dark);
 }
 
 @utility drag {

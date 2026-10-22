@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 // The repository contract between main and the renderer. The renderer gets ids and display
-// strings only: it never sends a filesystem path, a Git argument or a command.
+// strings only: it never sends a filesystem path, a Git argument or a command. The one exception,
+// repository-relative paths for diffs and staging, lives in workspace.ts and is checked in main.
 
 // Local working-tree and upstream state from `git status --porcelain=v2 --branch`. Local change
 // state and synchronization are separate fields on purpose: a clean tree can still be behind.
@@ -20,6 +21,8 @@ export type RepoStatus = {
   operation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
   hasRemotes: boolean;
   lastCommit: { oid: string; at: number; subject: string } | null;
+  // When any fetch last wrote FETCH_HEAD, from this app or a terminal. Missing in older snapshots.
+  fetchedAt?: number | null;
 };
 
 export type RepoAvailability = 'available' | 'missing' | 'not-a-repo';
@@ -49,6 +52,9 @@ export type ChangedFile = {
   kind: 'staged' | 'modified' | 'untracked' | 'conflict';
   // Git's one-letter status for this side: M, A, D, R, C, T, ? or U.
   code: string;
+  // The path before a rename or copy.
+  origPath?: string | null;
+  submodule?: boolean;
 };
 
 export type RepositoryChanges = { files: ChangedFile[]; truncated: boolean };
@@ -65,7 +71,9 @@ export type LocalActivity = {
     | 'checkout'
     | 'cloned'
     | 'renamed'
-    | 'unlinked';
+    | 'unlinked'
+    | 'fetched'
+    | 'branch-created';
   at: number;
   detail: string | null;
 };
@@ -145,7 +153,13 @@ export type RepositoryHistory = {
   // More commits fell in the window than were read, so the weekly counts are a lower bound.
   weeksTruncated: boolean;
   // Author names come from Git config and are not verified identities.
-  recent: { oid: string; at: number; author: string; subject: string }[];
+  recent: {
+    oid: string;
+    at: number;
+    author: string;
+    email: string;
+    subject: string;
+  }[];
 };
 
 export const createRepositoryInputSchema = z.object({

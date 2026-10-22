@@ -1,5 +1,7 @@
 import {
+  AppWindow,
   ArrowLeft,
+  Braces,
   Info,
   Laptop,
   Palette,
@@ -22,6 +24,8 @@ import { NavItem } from '../shell/sidebar';
 import { AboutSection } from './about-section';
 import { AccountSection } from './account-section';
 import { AppearanceSection } from './appearance-section';
+import { CodeSection } from './code-section';
+import { EditorSection } from './editor-section';
 import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
@@ -38,7 +42,9 @@ const GROUPS: {
     items: [
       { id: 'general', icon: SlidersHorizontal },
       { id: 'appearance', icon: Palette },
+      { id: 'code', icon: Braces },
       { id: 'workspace', icon: LayoutDashboard },
+      { id: 'editor', icon: AppWindow },
       { id: 'git', icon: GitCommitHorizontal },
       { id: 'shortcuts', icon: Keyboard },
     ],
@@ -114,7 +120,9 @@ export function SettingsLayout({
   const sections: Record<SettingsSection, ReactNode> = {
     general: <GeneralSection />,
     appearance: <AppearanceSection />,
+    code: <CodeSection />,
     workspace: <WorkspaceSection />,
+    editor: <EditorSection />,
     git: <GitSection />,
     shortcuts: <ShortcutsSection />,
     account: <AccountSection status={status} />,

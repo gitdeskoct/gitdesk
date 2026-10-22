@@ -6,8 +6,10 @@ export type ParsedStatus = Omit<
 > & { files: ChangedFile[]; truncated: boolean };
 
 // Paths and branch names come from the repository, so they are capped and kept as plain text.
+// Paths keep their full length: staging and diffs act on them, and a clipped path names nothing.
 const MAX_FILES = 500;
 const MAX_TEXT = 255;
+const MAX_PATH = 4096;
 const clip = (text: string) => text.slice(0, MAX_TEXT);
 
 // Space-separated fields before the path in each porcelain v2 record type.
@@ -39,9 +41,21 @@ export function parseStatus(output: string): ParsedStatus {
     files: [],
     truncated: false,
   };
-  const add = (path: string, kind: ChangedFile['kind'], code: string) => {
+  const add = (
+    path: string,
+    kind: ChangedFile['kind'],
+    code: string,
+    extra: { origPath?: string | null; submodule?: boolean } = {},
+  ) => {
+    if (path.length > MAX_PATH) return;
     if (status.files.length < MAX_FILES)
-      status.files.push({ path: clip(path), kind, code });
+      status.files.push({
+        path,
+        kind,
+        code,
+        origPath: extra.origPath ?? null,
+        submodule: extra.submodule ?? false,
+      });
     else status.truncated = true;
   };
 
@@ -85,15 +99,17 @@ export function parseStatus(output: string): ParsedStatus {
     if (type === '1' || type === '2') {
       const [x, y] = [record[2], record[3]];
       const path = pathOf(record, FIELDS_BEFORE_PATH[type]);
+      // The original path of a rename or copy is the next NUL-terminated field.
+      const origPath = type === '2' ? (records[++i] ?? null) : null;
+      const submodule = record.slice(5, 6) === 'S';
       if (x && x !== '.') {
         status.staged++;
-        add(path, 'staged', x);
+        add(path, 'staged', x, { origPath, submodule });
       }
       if (y && y !== '.') {
         status.unstaged++;
-        add(path, 'modified', y);
+        add(path, 'modified', y, { submodule });
       }
-      if (type === '2') i++; // skip the original path of the rename or copy
     }
   }
   return status;

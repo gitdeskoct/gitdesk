@@ -19,6 +19,7 @@ How the boundaries are enforced:
 - **Renderer to main.** `src/preload/preload.ts` exposes one method per fixed IPC channel (no generic invoke, no raw `ipcRenderer`). Every handler goes through `createHandle` in `src/main/ipc/handle.ts`, which rejects calls from any sender other than the main window's top frame on an allowed origin, then parses the input with a zod schema.
 - **Window hardening.** `src/main/security.ts` blocks navigation and redirects away from the app origin, denies `window.open` and webviews, and refuses every permission request. `src/main/window.ts` sets `contextIsolation`, `sandbox` and `nodeIntegration: false`.
 - **Renderer content.** Packaged builds load from the `app://gitdesk` scheme (`src/main/protocol.ts`), which serves only files inside the renderer build directory and sets a strict CSP.
+- **Local Git workspace.** `src/main/repos/workspace-service.ts` runs every Git command for diffs, staging, commits, branches, fetch, history and analytics. The renderer sends a repository id and, for file actions only, a repository-relative path. Main acts on a path only when a fresh `git status` reports it, resolves it inside the registered root, and runs Git with literal pathspecs, so a crafted name can't read or touch anything else. Reads never run repository programs: `core.fsmonitor`, external diff and textconv drivers and colors are off. Commits, switches and fetches run hooks as a terminal would. Fetch only allows HTTPS, SSH and local paths. Editors are found by main (registry, app bundles, known paths) and started without a shell; the renderer only names an editor id.
 - **Main to Worker.** `src/main/auth/api-client.ts` validates every Worker response with zod, because a misconfigured or compromised server is still untrusted input. The Worker origin comes from `VITE_API_ORIGIN` and must be https in packaged builds (`src/main/config.ts`).
 - **Worker inputs.** Every route validates its query, params or body with zod (`backend/src/modules/auth/schemas.ts`). Bodies are capped at 8 KiB and auth routes are rate limited.
 
@@ -63,8 +64,10 @@ src/
   main/              privileged Electron main process
     auth/            sign-in, tokens, credential store, loopback
     db/              local SQLite (node:sqlite) for app state, never credentials
-    git/             Git access through simple-git
+    editors/         code editor detection and launch
+    git/             Git identity and which Git binary runs
     ipc/             handle() guard and channel registration
+    repos/           registry, status, watchers and the local Git workspace
     settings/        user settings and theme
     config.ts        API origin and allowed renderer origins
     protocol.ts      app:// scheme and CSP

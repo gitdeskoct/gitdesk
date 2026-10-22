@@ -243,6 +243,35 @@ Lists on Home show 6 items per page by default (Settings › Workspace offers 10
 - **Charts answer a question.** The details chart is titled with the question it answers, counts commits reachable from the current branch per local-time week by commit date, and has a text summary and a hidden table for screen readers. Bars are focusable and name their week. No scores, no percentages of health.
 - **Words, not zeros.** A number that has nothing to compare against says so (Not connected), and an unchecked folder is never called safe to delete.
 
+## Repository workspace
+
+- **Tabs, not pages.** A repository opens on Changes (or its own "Opens on" choice) with History, Branches, Remotes, Overview and Settings beside it. Switching tabs never remounts the shell; the header with the branch picker, status and Fetch stays put.
+- **Two layouts, one set of components.** Split puts the changed files beside the diff and History beside the commit detail. Centered is one reading column where a file opens its diff in place. Auto splits from 960px of workspace; Split asks for 700px and below that becomes one column where a file replaces the list until "All changed files". The choice is global (Settings › Workspace) and each repository can override it (its Settings tab).
+- **Git's states stay apart.** Conflicts, Staged, Not staged and Untracked are separate groups, and a file with staged and unstaged edits appears in both. Ignored files never appear and Stage all never stages them.
+- **Local means local.** The commit button names the branch and says the commit stays on this computer until you push. Fetch updates remote-tracking branches only and says so.
+- **Git decides what is safe.** A switch that would overwrite edits is refused by Git; gitdesk lists the files in a warning band and never forces or stashes. Discard confirms inline in a `danger-soft` band that names the files; untracked files go to the system trash.
+
+## Code and diffs
+
+- **Syntax colors are the one place color is not state.** Recorded against R-37: the owner asked for Shiki highlighting. Themes come in light and dark pairs (GitHub is the default), and every token color is moved toward ink or white until it reaches 4.5:1 on all of the backgrounds below, so no theme ships unreadable tokens.
+- **Meaning never rests on a tint.** Every diff line has a `+`, `−` or blank glyph column with a screen-reader label. Changed words are tinted and underlined when added, struck through when removed. Conflict markers carry a label ("Your side starts").
+- **Tints are solid tokens.** `--diff-add`, `--diff-del`, `--diff-add-word`, `--diff-del-word`, `--diff-hunk`, with dark values in `globals.css`.
+- **Code text follows Settings › Code.** Font (`--code-font`, set through CSSOM), size, line height, tab width and ligatures, through the `code-text` utility.
+
+| Pairing (light / dark)              | Ratio              |
+| ----------------------------------- | ------------------ |
+| ink on diff-add / diff-del          | 16.31 / 15.85      |
+| ink on add-word / del-word          | 13.79 / 12.53      |
+| muted on diff-add / diff-del / hunk | 5.52 / 5.36 / 5.67 |
+| dark ink on diff-add / diff-del     | 14.44 / 15.16      |
+| dark ink on add-word / del-word     | 8.98 / 10.81       |
+| dark muted on diff-add / diff-del   | 7.23 / 7.59        |
+
+## Charts
+
+- **Series colors are fixed, not the accent.** `--chart-1` (#2f5bea, dark #6f86f0) and `--chart-2` (#c8641a, dark #c97436) passed the dataviz validator for color-blind separation in both themes, and reach 3:1 as marks (5.52 / 3.97 light, 5.60 / 5.33 dark). The heat ramp is five steps of chart-1.
+- **Every chart answers a question** in its title, says the answer in a sentence under it, has a tooltip per mark and a table view ("Show as tables"). Author names are labelled as Git settings, not verified identities. Lockfile-sized changes are left out of line counts and named.
+
 ## Destructive confirmations
 
 Removing a repository from gitdesk, removing several, disconnecting a remote, moving a folder to the system trash and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Each names the one thing it touches. Moving a folder to the trash and deleting a remote also ask for the name to be typed: the first shows the folder path and any uncommitted changes, the second can't be undone. A folder is only ever moved to the trash, never deleted outright.
