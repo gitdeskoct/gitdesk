@@ -5,13 +5,20 @@
   // Newest date the bundled test runtime (@cloudflare/vitest-plugin 1.4.0) supports; bump with it.
   "compatibility_date": "2026-10-06",
   "upload_source_maps": true,
+  // Served at https://gitdesk-api.telvinteum.workers.dev. Preview URLs stay off: an uploaded but
+  // undeployed version must not be reachable with production data and secrets.
+  "workers_dev": true,
+  "preview_urls": false,
   // Public origin of this Worker; used to build the Google redirect URI and JWT issuer.
+  // Production here; .dev.vars sets http://localhost:8787 for `wrangler dev`.
   // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY come from `wrangler secret put` (or .dev.vars locally).
-  // GIT_HOSTING "artifacts" gives linked repositories a Git URL through the ARTIFACTS binding
-  // (Workers Paid). "off" keeps them metadata only; .dev.vars sets it for `wrangler dev --local`.
+  // GIT_HOSTING "artifacts" gives linked repositories a Git URL through the ARTIFACTS binding,
+  // which needs Workers Paid. "off" keeps them metadata only. This account is on the free plan, so
+  // it is "off" and the binding below is commented out; to turn hosting on, upgrade, uncomment the
+  // binding, set "artifacts" here, run `npm run cf-typegen` and deploy.
   "vars": {
-    "PUBLIC_ORIGIN": "http://localhost:8787",
-    "GIT_HOSTING": "artifacts"
+    "PUBLIC_ORIGIN": "https://gitdesk-api.telvinteum.workers.dev",
+    "GIT_HOSTING": "off"
   },
   "secrets": {
     "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
@@ -20,12 +27,14 @@
     {
       "binding": "DB",
       "database_name": "gitdesk-db",
+      "database_id": "81f9ddcc-9066-4157-a757-36691bea4620",
       "migrations_dir": "drizzle/migrations"
     }
   ],
   // One Git repository per account repository, named by its id. No local simulator exists, so it
   // is always the remote service: `npm run dev` passes --local to leave it unreachable.
-  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
+  // Workers Paid only (deploys on the free plan are refused with code 10403):
+  // "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
   // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
   "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
   // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.

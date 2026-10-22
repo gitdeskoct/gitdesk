@@ -1,4 +1,6 @@
 # Copy to .dev.vars (gitignored) and fill in. Never commit real values.
+# wrangler.jsonc holds the production origin; local development uses this one.
+PUBLIC_ORIGIN=http://localhost:8787
 GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 # 32+ random bytes, base64url. Generate: node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"

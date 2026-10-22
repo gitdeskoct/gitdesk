@@ -29,6 +29,14 @@ export function createApp(deps: AppDeps) {
       referrerPolicy: 'no-referrer',
     }),
   );
+  // workers.dev also answers plain http. A token sent that way is already exposed, so the request
+  // is refused rather than redirected; local development (wrangler dev, tests) stays on http.
+  app.use(async (c, next) => {
+    const { protocol, hostname } = new URL(c.req.url);
+    if (protocol === 'http:' && hostname !== 'localhost' && hostname !== '127.0.0.1')
+      throw new ApiError('HTTPS_REQUIRED', 'Use https.');
+    await next();
+  });
   app.use(async (c, next) => {
     await next();
     c.header('Cache-Control', 'no-store');

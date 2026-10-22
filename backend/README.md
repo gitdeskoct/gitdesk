@@ -109,13 +109,13 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 
 | Name | Kind | Where it is set | Used for |
 | --- | --- | --- | --- |
-| `PUBLIC_ORIGIN` | var | `wrangler.jsonc` (`http://localhost:8787`), overridden on deploy | Google redirect URI and JWT issuer |
-| `GIT_HOSTING` | var | `wrangler.jsonc` (`artifacts`), `off` in `.dev.vars` | Whether repositories get a Git URL |
-| `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, namespace `gitdesk`, always remote | Git repositories and their tokens. Workers Paid only. |
+| `PUBLIC_ORIGIN` | var | `wrangler.jsonc` (production, `https://gitdesk-api.telvinteum.workers.dev`), `http://localhost:8787` in `.dev.vars` and `vitest.config.ts` | Google redirect URI and JWT issuer |
+| `GIT_HOSTING` | var | `wrangler.jsonc` (`off`, because the account is on the free plan), `off` in `.dev.vars` | Whether repositories get a Git URL |
+| `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, commented out until the account is on Workers Paid (a free-plan deploy with it is refused, code 10403) | Git repositories and their tokens |
 | `GOOGLE_CLIENT_ID` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
 | `JWT_SIGNING_KEY` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Signing access tokens. At least 32 bytes, base64url. |
-| `DB` | D1 binding | `wrangler.jsonc`, database `gitdesk-db` | Accounts, identities, transactions, codes, sessions |
+| `DB` | D1 binding | `wrangler.jsonc`, database `gitdesk-db` (`81f9ddcc-9066-4157-a757-36691bea4620`, Western Europe) | Accounts, identities, transactions, codes, sessions, repositories, pull requests |
 | `REPO_STORAGE` | R2 binding | `wrangler.jsonc`, bucket `gitdesk-repositories` | Each repository's stored data under `repositories/<id>/`. Create the bucket with `npx wrangler r2 bucket create gitdesk-repositories` before deploying. |
 | `AUTH_LIMITER` | rate limit binding | `wrangler.jsonc` | Sign-in routes, 10 requests per 60 seconds per IP and route |
 | `REFRESH_LIMITER` | rate limit binding | `wrangler.jsonc` | Token refresh and logout, 20 requests per 60 seconds per IP |
@@ -179,40 +179,27 @@ The Worker listens on `http://localhost:8787`. Point the desktop app at it with 
 npm test
 ```
 
-Tests run inside the Workers runtime through `@cloudflare/vitest-plugin`. They apply the migrations to a fresh D1 database and use test secrets from `vitest.config.ts`, so they need neither `.dev.vars` nor a Cloudflare account. They expect `PUBLIC_ORIGIN` in `wrangler.jsonc` to stay `http://localhost:8787`.
+Tests run inside the Workers runtime through `@cloudflare/vitest-plugin`. They apply the migrations to a fresh D1 database and use test secrets from `vitest.config.ts`, so they need neither `.dev.vars` nor a Cloudflare account. They set `PUBLIC_ORIGIN` to `http://localhost:8787` themselves, whatever production uses.
 
 ## Deploy
 
-### 1. Create the D1 database
+Production runs at **`https://gitdesk-api.telvinteum.workers.dev`** on account `5b14dbcfcd4e8acdb4bad6aff07ce149`. The D1 database `gitdesk-db`, the R2 bucket `gitdesk-repositories`, the six rate limiters and the daily cleanup cron (`0 3 * * *`) are all in `wrangler.jsonc`. `workers.dev` is on; preview URLs are off, so an uploaded but undeployed version is never reachable. Plain `http://` is refused with 403 `HTTPS_REQUIRED` everywhere but `localhost`.
 
-```bash
-npx wrangler d1 create gitdesk-db
-```
+### Deploying a change
 
-Paste the `database_id` it prints into the existing `d1_databases` entry in `wrangler.jsonc`:
-
-```jsonc
-"d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "gitdesk-db",
-    "database_id": "<paste here>",
-    "migrations_dir": "drizzle/migrations"
-  }
-]
-```
-
-`wrangler.jsonc` has no `database_id` today, so remote migrations and deploys fail until this step is done.
-
-### 2. Apply migrations remotely
+Apply any new migration first, then deploy. Secrets carry over between deploys.
 
 ```bash
 npm run db:migrate:remote
 ```
 
-### 3. Set secrets
+```bash
+npm run deploy
+```
 
-Each command prompts for the value. Use a new `JWT_SIGNING_KEY`, not the one in `.dev.vars`.
+### Secrets
+
+The first deploy set `JWT_SIGNING_KEY` to a fresh random 32-byte key and the Google pair to placeholders (`replace-me.apps.googleusercontent.com`, `replace-me`). Until the real Google values are in, sign-in reaches Google and stops there with an invalid client error; everything that needs no sign-in works. Each command prompts for the value:
 
 ```bash
 npx wrangler secret put GOOGLE_CLIENT_ID
@@ -222,19 +209,27 @@ npx wrangler secret put GOOGLE_CLIENT_ID
 npx wrangler secret put GOOGLE_CLIENT_SECRET
 ```
 
+Register `https://gitdesk-api.telvinteum.workers.dev/api/v1/auth/google/callback` as an authorized redirect URI on that Google client. Rotating `JWT_SIGNING_KEY` signs everyone out at their next request, which is the point of rotating it:
+
 ```bash
 npx wrangler secret put JWT_SIGNING_KEY
 ```
 
-### 4. Deploy with the production origin
+### Turning on Git hosting
 
-`wrangler.jsonc` sets `PUBLIC_ORIGIN` to `http://localhost:8787` for local dev and tests. A plain deploy would send that value to production, and Google would reject the redirect URI. Pass the real origin on every deploy:
+Artifacts needs Workers Paid. After upgrading: uncomment the `artifacts` binding in `wrangler.jsonc`, set `GIT_HOSTING` to `artifacts`, run `npm run cf-typegen` and deploy. Repositories created while hosting was off get their Git URL from the backfill on their next read.
 
-```bash
-npm run deploy -- --var PUBLIC_ORIGIN:https://<your-worker-origin>
-```
+### Pointing the desktop app at it
 
-By default the origin is `https://gitdesk-api.<your-subdomain>.workers.dev`. It must match the production redirect URI registered with Google and the desktop app's `VITE_API_ORIGIN`.
+Set `VITE_API_ORIGIN=https://gitdesk-api.telvinteum.workers.dev` in the root `.env`. Packaged builds accept only an https origin.
+
+### Setting up a new account from scratch
+
+1. `npx wrangler d1 create gitdesk-db`, and put the `database_id` it prints in `wrangler.jsonc`.
+2. `npx wrangler r2 bucket create gitdesk-repositories`.
+3. Set `PUBLIC_ORIGIN` in `wrangler.jsonc` to `https://gitdesk-api.<your-subdomain>.workers.dev`.
+4. `npm run db:migrate:remote`.
+5. Deploy once with all three secrets, so the required-secrets check passes: `npx wrangler deploy --minify --secrets-file <file>` with a JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `JWT_SIGNING_KEY`. Delete the file afterwards.
 
 ## Changing the schema
 
