@@ -5,10 +5,10 @@ import {
 } from '@tanstack/react-query';
 import { MotionConfig } from 'framer-motion';
 import { useEffect, useState, type ReactNode } from 'react';
-import { ToastProvider } from '../components/ui/toast';
+import { ToastProvider, useToast } from '../components/ui/toast';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { keys, repoKeys, useSettings } from '../lib/queries';
-import { NavigationProvider } from './navigation';
+import { NavigationProvider, useNavigation } from './navigation';
 import { useAppearance } from './use-appearance';
 import { WorkspaceUiProvider } from './workspace-ui';
 
@@ -39,6 +39,39 @@ function RepoSync() {
       }),
     [qc],
   );
+  return null;
+}
+
+// News from main while the window is in front becomes a toast; a clicked system notification
+// opens its repository. The id is only used as a route key; the page looks it up itself.
+function NoticeSync() {
+  const toast = useToast();
+  const { navigate } = useNavigation();
+  useEffect(() => {
+    const offNotice = window.desktop.app.onNotice((notice) =>
+      toast({
+        title: notice.title,
+        description: notice.body,
+        tone: notice.tone,
+        background: true,
+        action: notice.repositoryId
+          ? {
+              label: 'Open',
+              altText: 'Open the repository from Home or Repositories',
+              onClick: () =>
+                navigate({ name: 'repository', id: notice.repositoryId! }),
+            }
+          : undefined,
+      }),
+    );
+    const offOpen = window.desktop.app.onOpenRepository((id) => {
+      if (/^[0-9a-f-]{36}$/i.test(id)) navigate({ name: 'repository', id });
+    });
+    return () => {
+      offNotice();
+      offOpen();
+    };
+  }, [toast, navigate]);
   return null;
 }
 
@@ -74,6 +107,7 @@ export function Providers({ children }: { children: ReactNode }) {
         <TooltipProvider delayDuration={300}>
           <ToastProvider>
             <NavigationProvider>
+              <NoticeSync />
               <WorkspaceUiProvider>{children}</WorkspaceUiProvider>
             </NavigationProvider>
           </ToastProvider>

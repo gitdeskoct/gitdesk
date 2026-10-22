@@ -1,6 +1,7 @@
 import type { AuthStatus } from '../../shared/ipc';
 import type {
   RemoteActivity,
+  RemoteDeleteResult,
   RemoteListInput,
   RemoteOverview,
   RemotePage,
@@ -52,6 +53,10 @@ function userError(err: unknown, fallback: string): UserError {
       );
     if (err.code === 'NOT_FOUND')
       return new UserError('That remote repository no longer exists.');
+    if (err.code === 'INVALID_STATE')
+      return new UserError(
+        'That remote repository is being deleted, so it takes no changes.',
+      );
     if (err.status === 429)
       return new UserError('Too many requests. Try again in a minute.');
   }
@@ -292,18 +297,73 @@ export function createRemoteService(deps: {
       }
     },
 
-    // Deletes the remote only. The caller unlinks local registrations; folders stay untouched.
-    async remove(id: string): Promise<void> {
+    async get(id: string): Promise<RemoteRepository> {
       const accountId = signedInAccount();
       try {
-        await call((token) => deps.api.deleteRepository(token, id));
+        const { repository } = await call((token) =>
+          deps.api.getRepository(token, id),
+        );
+        patchCache(
+          accountId,
+          (list) => list.map((r) => (r.id === id ? repository : r)),
+          0,
+        );
+        return repository;
+      } catch (err) {
+        throw userError(err, "Couldn't load that remote repository.");
+      }
+    },
+
+    async provision(id: string): Promise<RemoteRepository> {
+      const accountId = signedInAccount();
+      try {
+        const { repository } = await call((token) =>
+          deps.api.provisionRepository(token, id),
+        );
+        patchCache(
+          accountId,
+          (list) => list.map((r) => (r.id === id ? repository : r)),
+          0,
+        );
+        return repository;
+      } catch (err) {
+        throw userError(err, "The server couldn't set up storage.");
+      }
+    },
+
+    async activity(id: string): Promise<RemoteActivity[]> {
+      signedInAccount();
+      try {
+        return (await call((token) => deps.api.repositoryActivity(token, id)))
+          .activity;
+      } catch (err) {
+        throw userError(err, "Couldn't load this repository's activity.");
+      }
+    },
+
+    // Deletes the remote only. The caller unlinks local registrations; folders stay untouched.
+    async remove(id: string): Promise<RemoteDeleteResult> {
+      const accountId = signedInAccount();
+      let result;
+      try {
+        result = await call((token) => deps.api.deleteRepository(token, id));
       } catch (err) {
         throw userError(
           err,
           "The server couldn't delete the remote repository.",
         );
       }
+      if (result) {
+        const { repository } = result;
+        patchCache(
+          accountId,
+          (list) => list.map((r) => (r.id === id ? repository : r)),
+          0,
+        );
+        return { status: 'incomplete', repository };
+      }
       patchCache(accountId, (list) => list.filter((r) => r.id !== id), -1);
+      return { status: 'deleted' };
     },
 
     // Signing out removes the cached remote names: they belong to the account, not the computer.

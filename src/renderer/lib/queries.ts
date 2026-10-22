@@ -13,10 +13,13 @@ import type {
 } from '../../shared/ipc';
 import type {
   CloneInput,
-  CloneProgressEvent,
+  ProgressEvent,
   CreateRepositoryInput,
+  RemoteCreateInput,
   RemoteListInput,
   RemoteUpdateInput,
+  RepoTrashInput,
+  RepoUpdateInput,
 } from '../../shared/repos';
 import {
   DEFAULT_SETTINGS,
@@ -157,6 +160,8 @@ export function useRevokeOtherSessions() {
 
 export const useOpenLogs = () =>
   useMutation({ mutationFn: () => desktop().app.openLogs() });
+export const useTestNotification = () =>
+  useMutation({ mutationFn: () => desktop().app.testNotification() });
 export const useOpenGitInstallPage = () =>
   useMutation({ mutationFn: () => desktop().git.openInstallPage() });
 export const useCopyDiagnostics = () =>
@@ -171,6 +176,10 @@ export const repoKeys = {
     ['repo-changes', id, statusAt] as const,
   remote: ['remote-overview'] as const,
   remoteList: (sort: RemoteListInput['sort']) => ['remote-list', sort] as const,
+  history: (id: string, statusAt: number | null) =>
+    ['repo-history', id, statusAt] as const,
+  remoteDetail: (id: string) => ['remote-repo', id] as const,
+  remoteActivity: (id: string) => ['remote-activity', id] as const,
 };
 
 const repos = () => desktop().repos;
@@ -188,6 +197,14 @@ export const useRepositoryActivity = () =>
     queryFn: () => repos().activity(),
     staleTime: Infinity,
   });
+
+export function useClearActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => repos().clearActivity(),
+    onSettled: () => qc.invalidateQueries({ queryKey: repoKeys.activity }),
+  });
+}
 
 // Keyed by the snapshot time, so a new status check fetches the file list again and nothing else does.
 export const useRepositoryChanges = (
@@ -278,7 +295,73 @@ function invalidateRemote(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: repoKeys.list });
   void qc.invalidateQueries({ queryKey: repoKeys.remote });
   void qc.invalidateQueries({ queryKey: ['remote-list'] });
+  void qc.invalidateQueries({ queryKey: ['remote-repo'] });
+  void qc.invalidateQueries({ queryKey: ['remote-activity'] });
 }
+
+// Keyed by the status snapshot, like the change list: a new commit or checkout reads history again.
+export const useRepositoryHistory = (
+  id: string,
+  statusAt: number | null,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: repoKeys.history(id, statusAt),
+    queryFn: () => repos().history(id),
+    enabled,
+    staleTime: Infinity,
+  });
+
+// One server request per open; Refresh asks again. Provisioning finishes inside the create request,
+// so nothing here polls.
+export const useRemoteRepository = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: repoKeys.remoteDetail(id),
+    queryFn: () => repos().remoteGet(id),
+    enabled,
+    staleTime: 60_000,
+  });
+
+export const useRemoteActivity = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: repoKeys.remoteActivity(id),
+    queryFn: () => repos().remoteActivity(id),
+    enabled,
+    staleTime: 60_000,
+  });
+
+export function useCreateRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RemoteCreateInput) => repos().remoteCreate(input),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+export function useProvisionRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => repos().remoteProvision(id),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+// A linked rename also changes the remote, so remote views refresh too.
+export function useUpdateRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RepoUpdateInput) => repos().update(input),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: repoKeys.activity });
+      invalidateRemote(qc);
+    },
+  });
+}
+
+export const useUnlinkRepository = () =>
+  useRepoMutation((id: string) => repos().unlink(id));
+export const useTrashRepository = () =>
+  useRepoMutation((input: RepoTrashInput) => repos().trash(input));
 
 // Pages come straight from the server; main spaces and counts the requests.
 export const useRemoteList = (
@@ -325,14 +408,12 @@ export const useCancelClone = () =>
   useMutation({ mutationFn: (jobId: string) => repos().cancelClone(jobId) });
 
 // The latest progress main reported for one clone job.
-export function useCloneProgress(
-  jobId: string | null,
-): CloneProgressEvent | null {
-  const [progress, setProgress] = useState<CloneProgressEvent | null>(null);
+export function useJobProgress(jobId: string | null): ProgressEvent | null {
+  const [progress, setProgress] = useState<ProgressEvent | null>(null);
   useEffect(() => {
     setProgress(null);
     if (!jobId) return;
-    return repos().onCloneProgress((event) => {
+    return repos().onProgress((event) => {
       if (event.jobId === jobId) setProgress(event);
     });
   }, [jobId]);

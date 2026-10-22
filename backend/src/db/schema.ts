@@ -85,8 +85,10 @@ export const sessions = sqliteTable(
   ],
 );
 
-// Remote repository metadata only. Objects and refs are not stored here; the sync transport that
-// will put them in R2 is a later feature. Every query is scoped by owner_account_id.
+export const REPOSITORY_STATUSES = ['provisioning', 'ready', 'failed', 'deleting'] as const;
+
+// Remote repository metadata. Stored data lives in R2 under storage_key; D1 and R2 can't commit
+// together, so status records how far provisioning or deletion got. Every query is scoped by owner_account_id.
 export const repositories = sqliteTable(
   'repositories',
   {
@@ -104,17 +106,31 @@ export const repositories = sqliteTable(
     updatedAt: integer('updated_at').notNull(),
     // Client-chosen uuid that makes a retried create return the first result.
     idempotencyKey: text('idempotency_key'),
+    status: text('status', { enum: REPOSITORY_STATUSES }).notNull().default('ready'),
+    // When status last changed; the daily job uses it to find work that stopped partway.
+    statusAt: integer('status_at').notNull().default(0),
+    // Server-made R2 prefix (repositories/<id>/). Never derived from the name, never sent to clients.
+    storageKey: text('storage_key').notNull().default(''),
   },
   (t) => [
     uniqueIndex('repositories_owner_name').on(t.ownerAccountId, t.nameKey),
     uniqueIndex('repositories_owner_idempotency').on(t.ownerAccountId, t.idempotencyKey),
     index('repositories_owner_updated').on(t.ownerAccountId, t.updatedAt, t.id),
     index('repositories_owner_name_key').on(t.ownerAccountId, t.nameKey, t.id),
+    index('repositories_status').on(t.status, t.statusAt),
     check('repositories_visibility', sql`visibility in ('private')`),
+    check('repositories_status', sql`status in ('provisioning', 'ready', 'failed', 'deleting')`),
   ],
 );
 
-export const ACTIVITY_TYPES = ['repository.created', 'repository.updated', 'repository.deleted'] as const;
+export const ACTIVITY_TYPES = [
+  'repository.created',
+  'repository.updated',
+  'repository.deleted',
+  'repository.provisioned',
+  'repository.provisioning_failed',
+  'repository.deletion_failed',
+] as const;
 
 // The name is copied so a deleted repository's history still reads; its id goes null on delete.
 export const activity = sqliteTable(

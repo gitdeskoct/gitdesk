@@ -20,6 +20,8 @@
       "migrations_dir": "drizzle/migrations"
     }
   ],
+  // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
+  "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
   // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.
   "ratelimits": [
     { "name": "AUTH_LIMITER", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },

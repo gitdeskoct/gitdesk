@@ -12,7 +12,7 @@ import { ipcErrorMessage } from '../lib/ipc-error';
 import { useAddRepository } from '../lib/queries';
 import { useNavigation } from './navigation';
 
-export type Panel = 'create' | 'remote' | 'clone' | null;
+export type Panel = 'create' | 'clone' | null;
 
 // A notice from the last "Open repository": shown inline on the page, never in a modal.
 // "Already in gitdesk" is a toast instead, because that case navigates straight to the repository.

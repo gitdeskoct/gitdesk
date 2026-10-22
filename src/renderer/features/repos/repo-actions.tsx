@@ -1,17 +1,25 @@
 import {
+  CloudOff,
   CloudUpload,
   Copy,
   FolderOpen,
   FolderSearch,
+  Info,
+  Minus,
   MoreHorizontal,
+  Pencil,
   Pin,
   PinOff,
   RefreshCw,
   Trash2,
+  Unlink,
   type LucideIcon,
 } from 'lucide-react';
 import { Fragment, type ReactNode } from 'react';
-import type { RepositorySummary } from '../../../shared/repos';
+import type {
+  RemoteRepository,
+  RepositorySummary,
+} from '../../../shared/repos';
 import { Button } from '../../components/ui/button';
 import {
   ContextMenu,
@@ -37,11 +45,14 @@ import {
   useLinkRemote,
   useLocateRepository,
   usePinRepository,
+  useProvisionRemote,
   useRefreshRepositories,
   useRevealRepository,
 } from '../../lib/queries';
+import { useNavigation } from '../../app/navigation';
+import { trashName, type ManageMode } from './manage';
 
-type Action = {
+export type Action = {
   key: string;
   label: string;
   icon: LucideIcon;
@@ -59,10 +70,14 @@ export const fileManagerLabel = () =>
       : 'Open folder';
 
 // One list of actions for the overflow menu and the right-click menu, so they never disagree.
-// Removing is the caller's job: it asks for an inline confirmation first. A menu closes as soon
-// as an item is chosen, so the row shows `busy` while the work runs and a toast reports how it
-// ended; nothing finishes silently.
-export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
+// Anything that needs a confirmation or a form opens it inline through `open`. A menu closes as
+// soon as an item is chosen, so the row shows `busy` while the work runs and a toast reports how
+// it ended; nothing finishes silently. Actions that can't apply are left out, not shown disabled.
+export function useRepoActions(
+  repo: RepositorySummary,
+  open: (mode: ManageMode) => void,
+  remote: RemoteRepository | null = null,
+) {
   const pin = usePinRepository();
   const reveal = useRevealRepository();
   const copy = useCopyRepositoryPath();
@@ -81,6 +96,12 @@ export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
 
   const actions: Action[] = [
     {
+      key: 'rename',
+      label: 'Rename or describe…',
+      icon: Pencil,
+      onSelect: () => open('rename'),
+    },
+    {
       key: 'pin',
       label: repo.pinned ? 'Unpin' : 'Pin to top',
       icon: repo.pinned ? PinOff : Pin,
@@ -95,14 +116,17 @@ export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
           },
         ),
     },
-    {
+  ];
+  if (present)
+    actions.push({
       key: 'reveal',
       label: fileManagerLabel(),
       icon: FolderOpen,
-      disabled: !present || reveal.isPending,
+      disabled: reveal.isPending,
       onSelect: () =>
         reveal.mutate(repo.id, { onError: failed("Couldn't open the folder") }),
-    },
+    });
+  actions.push(
     {
       key: 'copy',
       label: 'Copy path',
@@ -123,7 +147,7 @@ export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
           onError: failed(`Couldn't check ${repo.name}`),
         }),
     },
-  ];
+  );
   if (!present)
     actions.push({
       key: 'locate',
@@ -138,7 +162,14 @@ export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
           onError: failed("Couldn't use that folder"),
         }),
     });
-  if (present && !repo.remoteId && auth?.status === 'authenticated')
+  if (repo.remoteId)
+    actions.push({
+      key: 'unlink',
+      label: 'Disconnect remote…',
+      icon: Unlink,
+      onSelect: () => open('unlink'),
+    });
+  else if (present && auth?.status === 'authenticated')
     actions.push({
       key: 'remote',
       label: 'Create private remote',
@@ -157,11 +188,26 @@ export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
   actions.push({
     key: 'remove',
     label: 'Remove from gitdesk…',
-    icon: Trash2,
-    danger: true,
+    icon: Minus,
     separatorBefore: true,
-    onSelect: onRemove,
+    onSelect: () => open('remove'),
   });
+  if (present)
+    actions.push({
+      key: 'trash',
+      label: `Move folder to ${trashName()}…`,
+      icon: Trash2,
+      danger: true,
+      onSelect: () => open('trash'),
+    });
+  if (remote && auth?.status === 'authenticated')
+    actions.push({
+      key: 'delete-remote',
+      label: 'Delete remote repository…',
+      icon: CloudOff,
+      danger: true,
+      onSelect: () => open('delete-remote'),
+    });
 
   const busy = pin.isPending
     ? repo.pinned
@@ -179,12 +225,77 @@ export function useRepoActions(repo: RepositorySummary, onRemove: () => void) {
   return { actions, busy, reveal };
 }
 
+// A repository that only exists in the account: everything here is a server call.
+export function useRemoteActions(
+  remote: RemoteRepository,
+  open: (mode: ManageMode) => void,
+) {
+  const { navigate } = useNavigation();
+  const provision = useProvisionRemote();
+  const toast = useToast();
+  const actions: Action[] = [
+    {
+      key: 'details',
+      label: 'View details',
+      icon: Info,
+      onSelect: () => navigate({ name: 'remote-repository', id: remote.id }),
+    },
+  ];
+  if (remote.status !== 'deleting')
+    actions.push({
+      key: 'edit',
+      label: 'Rename or describe…',
+      icon: Pencil,
+      onSelect: () => open('edit-remote'),
+    });
+  if (remote.status === 'failed' || remote.status === 'provisioning')
+    actions.push({
+      key: 'provision',
+      label: 'Retry storage setup',
+      icon: RefreshCw,
+      disabled: provision.isPending,
+      onSelect: () =>
+        provision.mutate(remote.id, {
+          onSuccess: (next) =>
+            toast(
+              next.status === 'ready'
+                ? { tone: 'success', title: `${remote.name} is ready` }
+                : {
+                    tone: 'danger',
+                    title: `Storage for ${remote.name} still isn't ready`,
+                  },
+            ),
+          onError: (err) =>
+            toast({
+              tone: 'danger',
+              title: "Storage setup didn't run",
+              description: ipcErrorMessage(err, 'Try again in a moment.'),
+            }),
+        }),
+    });
+  actions.push({
+    key: 'delete-remote',
+    label:
+      remote.status === 'deleting'
+        ? 'Finish deleting…'
+        : 'Delete remote repository…',
+    icon: CloudOff,
+    danger: true,
+    separatorBefore: true,
+    onSelect: () => open('delete-remote'),
+  });
+  return {
+    actions,
+    busy: provision.isPending ? 'Setting up storage…' : null,
+  };
+}
+
 export function RepoMenuButton({
-  repo,
+  name,
   actions,
   className,
 }: {
-  repo: RepositorySummary;
+  name: string;
   actions: Action[];
   className?: string;
 }) {
@@ -195,7 +306,7 @@ export function RepoMenuButton({
           <Button
             variant="ghost"
             size="icon"
-            aria-label={`More actions for ${repo.name}`}
+            aria-label={`More actions for ${name}`}
             className={className}
           >
             <MoreHorizontal />

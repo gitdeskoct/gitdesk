@@ -3,7 +3,11 @@ import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { simpleGit, type SimpleGit, type SimpleGitOptions } from 'simple-git';
-import type { RepoStatus, RepositoryChanges } from '../../shared/repos';
+import type {
+  RepoStatus,
+  RepositoryChanges,
+  RepositoryHistory,
+} from '../../shared/repos';
 import { UserError } from '../errors';
 import { parseLastCommit, parseStatus } from './git-status';
 
@@ -226,6 +230,121 @@ export async function inspect(root: string): Promise<Inspection> {
       lastCommit: parseLastCommit(log),
     },
   };
+}
+
+export const HISTORY_WEEKS = 12;
+// Enough for a busy repository's 12 weeks; past it the chart says its counts are a lower bound.
+const MAX_LOG_COMMITS = 5000;
+const OID = /^[0-9a-f]{40,64}$/;
+
+// Monday 00:00 in local time for the week holding `at`. setDate keeps local midnight across DST.
+export function weekStart(at: number): number {
+  const day = new Date(at);
+  day.setHours(0, 0, 0, 0);
+  day.setDate(day.getDate() - ((day.getDay() + 6) % 7));
+  return day.getTime();
+}
+
+export function bucketWeeks(
+  times: number[],
+  now: number,
+  count = HISTORY_WEEKS,
+): RepositoryHistory['weeks'] {
+  const weeks: RepositoryHistory['weeks'] = [];
+  for (let start = weekStart(now); weeks.length < count; ) {
+    weeks.unshift({ start, commits: 0 });
+    const previous = new Date(start);
+    previous.setDate(previous.getDate() - 7);
+    start = previous.getTime();
+  }
+  for (const at of times) {
+    // A commit dated in the future (a skewed clock) counts in the current week.
+    for (let i = weeks.length - 1; i >= 0; i--) {
+      if (at >= weeks[i]!.start) {
+        weeks[i]!.commits++;
+        break;
+      }
+    }
+  }
+  return weeks;
+}
+
+// Read-only history for the details page: what is reachable from HEAD, plus branch counts.
+export async function history(
+  root: string,
+  now = Date.now(),
+): Promise<RepositoryHistory> {
+  const git = gitAt(root);
+  try {
+    const top = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
+    if (!top || pathKey(await canonicalPath(top)) !== pathKey(root))
+      throw new GitError("This folder isn't a Git repository.");
+    const [branch, head, refs] = await Promise.all([
+      git.raw(['symbolic-ref', '--quiet', '--short', 'HEAD']).catch(() => ''),
+      git.raw(['rev-parse', '--verify', '--quiet', 'HEAD']).catch(() => ''),
+      git.raw([
+        'for-each-ref',
+        '--format=%(refname)',
+        'refs/heads',
+        'refs/remotes',
+      ]),
+    ]);
+    const names = refs.split('\n').filter(Boolean);
+    const base = {
+      branch: branch.trim() || null,
+      localBranches: names.filter((ref) => ref.startsWith('refs/heads/'))
+        .length,
+      // refs/remotes/<remote>/HEAD only points at another remote branch.
+      remoteBranches: names.filter(
+        (ref) => ref.startsWith('refs/remotes/') && !ref.endsWith('/HEAD'),
+      ).length,
+    };
+    const weeks = bucketWeeks([], now);
+    if (!head.trim())
+      return {
+        ...base,
+        commitCount: 0,
+        weeks,
+        weeksTruncated: false,
+        recent: [],
+      };
+
+    const since = `${Math.floor(weeks[0]!.start / 1000)} +0000`;
+    const [count, times, recent] = await Promise.all([
+      git.raw(['rev-list', '--count', 'HEAD']),
+      git.raw([
+        'log',
+        `--since=${since}`,
+        `--max-count=${MAX_LOG_COMMITS + 1}`,
+        '--format=%ct',
+        'HEAD',
+      ]),
+      git.raw(['log', '-n', '10', '--format=%H%x00%ct%x00%an%x00%s', 'HEAD']),
+    ]);
+    const stamps = times
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => Number(line) * 1000);
+    return {
+      ...base,
+      commitCount: Number(count.trim()) || 0,
+      weeks: bucketWeeks(stamps.slice(0, MAX_LOG_COMMITS), now),
+      weeksTruncated: stamps.length > MAX_LOG_COMMITS,
+      recent: recent
+        .split('\n')
+        .map((line) => line.split('\0'))
+        .filter(([oid, at]) => OID.test(oid ?? '') && Number(at) > 0)
+        .map(([oid, at, author, subject]) => ({
+          oid: oid!,
+          at: Number(at) * 1000,
+          author: (author ?? '').slice(0, 100),
+          subject: (subject ?? '').slice(0, 200),
+        })),
+    };
+  } catch (err) {
+    if (err instanceof GitError) throw err;
+    throw new GitError(describeGitError(err));
+  }
 }
 
 export async function listChanges(root: string): Promise<RepositoryChanges> {

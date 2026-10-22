@@ -9,12 +9,15 @@ import {
   cloneInputSchema,
   createRepositoryInputSchema,
   initializeInputSchema,
+  remoteCreateInputSchema,
   pinInputSchema,
   refreshInputSchema,
   remoteListInputSchema,
   remoteOverviewInputSchema,
   remoteUpdateInputSchema,
   repoIdSchema,
+  repoTrashInputSchema,
+  repoUpdateInputSchema,
   REPOS_IPC,
 } from '../../shared/repos';
 import { settingsPatchSchema } from '../../shared/settings';
@@ -26,6 +29,7 @@ import type { AppService } from '../app/app-service';
 import type { AuthService } from '../auth/auth-service';
 import type { createGitIdentity } from '../git/git-identity';
 import type { SettingsService } from '../settings/settings-service';
+import type { Notifier } from '../notifier';
 import type { Handle } from './handle';
 
 const none = z.undefined();
@@ -56,9 +60,11 @@ export function registerIpc(
     git: ReturnType<typeof createGitIdentity>;
     repos: RepositoryService;
     remote: RemoteService;
+    notifier: Notifier;
   },
 ): void {
-  const { app, auth, settings, git, repos, remote } = services;
+  const { app, auth, settings, git, repos, remote, notifier } = services;
+  handle(IPC.appTestNotification, none, () => notifier.test());
   handle(IPC.appGetInfo, none, () => app.info());
   handle(IPC.appSetOpenAtLogin, z.boolean(), (enabled) =>
     app.setOpenAtLogin(enabled),
@@ -180,6 +186,11 @@ export function registerIpc(
     userFacing(() => repos.activity()),
   );
   handle(
+    r.clearActivity,
+    none,
+    userFacing(() => repos.clearActivity()),
+  );
+  handle(
     r.remoteOverview,
     remoteOverviewInputSchema,
     userFacing(({ force }) => remote.overview(force)),
@@ -200,12 +211,54 @@ export function registerIpc(
     remoteUpdateInputSchema,
     userFacing((input) => remote.update(input)),
   );
+  // A deletion that stopped partway keeps the link: the remote still exists until it finishes.
   handle(
     r.remoteDelete,
     z.uuid(),
     userFacing(async (remoteId) => {
-      await remote.remove(remoteId);
-      repos.forgetRemote(remoteId);
+      const result = await remote.remove(remoteId);
+      if (result.status === 'deleted') repos.forgetRemote(remoteId);
+      return result;
     }),
+  );
+  handle(
+    r.remoteCreate,
+    remoteCreateInputSchema,
+    userFacing(({ key, ...input }) => remote.create(input, key)),
+  );
+  handle(
+    r.remoteGet,
+    z.uuid(),
+    userFacing((remoteId) => remote.get(remoteId)),
+  );
+  handle(
+    r.remoteProvision,
+    z.uuid(),
+    userFacing((remoteId) => remote.provision(remoteId)),
+  );
+  handle(
+    r.remoteActivity,
+    z.uuid(),
+    userFacing((remoteId) => remote.activity(remoteId)),
+  );
+  handle(
+    r.history,
+    id,
+    userFacing((repoId) => repos.history(repoId)),
+  );
+  handle(
+    r.update,
+    repoUpdateInputSchema,
+    userFacing((input) => repos.update(input)),
+  );
+  handle(
+    r.unlink,
+    id,
+    userFacing((repoId) => repos.unlink(repoId)),
+  );
+  handle(
+    r.trash,
+    repoTrashInputSchema,
+    userFacing((input) => repos.trash(input)),
   );
 }

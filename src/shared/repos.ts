@@ -57,7 +57,15 @@ export type LocalActivity = {
   id: number;
   repositoryId: string;
   repositoryName: string;
-  type: 'added' | 'created' | 'opened' | 'commit' | 'checkout' | 'cloned';
+  type:
+    | 'added'
+    | 'created'
+    | 'opened'
+    | 'commit'
+    | 'checkout'
+    | 'cloned'
+    | 'renamed'
+    | 'unlinked';
   at: number;
   detail: string | null;
 };
@@ -97,14 +105,69 @@ export const descriptionSchema = z
 export const repoIdSchema = z.uuid();
 const tokenSchema = z.string().regex(/^[A-Za-z0-9_-]{20,64}$/);
 
+// A local display name only labels the registration, so folder-style names with spaces are fine.
+// A linked repository's name also goes to the remote, which checks it with repositoryNameSchema.
+export const displayNameSchema = z
+  .string()
+  .trim()
+  .min(1, 'Enter a name.')
+  .max(100, 'Keep the name under 100 characters.')
+  .regex(/^[^\p{Cc}]*$/u, 'Use a single line.');
+
+export const repoUpdateInputSchema = z
+  .object({
+    id: repoIdSchema,
+    name: displayNameSchema.optional(),
+    description: descriptionSchema.nullable().optional(),
+  })
+  .strict()
+  .refine(
+    (input) => input.name !== undefined || input.description !== undefined,
+    { message: 'Change the name or the description.' },
+  );
+export type RepoUpdateInput = z.infer<typeof repoUpdateInputSchema>;
+
+// The typed name is checked again in main against the registration, never trusted as a path.
+export const repoTrashInputSchema = z
+  .object({ id: repoIdSchema, confirmName: z.string().min(1).max(100) })
+  .strict();
+export type RepoTrashInput = z.infer<typeof repoTrashInputSchema>;
+
+// Local history numbers for the details page, read from Git on this computer only. Every count is
+// for commits reachable from the current branch; branches can share history, so nothing is summed.
+export type RepositoryHistory = {
+  branch: string | null;
+  commitCount: number;
+  localBranches: number;
+  remoteBranches: number;
+  // Commits per week by committer date in local time, oldest first; start is the week's Monday.
+  weeks: { start: number; commits: number }[];
+  // More commits fell in the window than were read, so the weekly counts are a lower bound.
+  weeksTruncated: boolean;
+  // Author names come from Git config and are not verified identities.
+  recent: { oid: string; at: number; author: string; subject: string }[];
+};
+
 export const createRepositoryInputSchema = z.object({
   name: repositoryNameSchema,
   description: descriptionSchema.optional(),
   locationToken: tokenSchema,
   readme: z.boolean(),
   remote: z.boolean(),
+  // Lets the panel follow this create's steps on the progress channel.
+  jobId: z.uuid().optional(),
 });
 export type CreateRepositoryInput = z.infer<typeof createRepositoryInputSchema>;
+
+// The order create works through; a step that doesn't apply (no README, no remote) is skipped.
+export const CREATE_STEPS = [
+  'folder',
+  'init',
+  'readme',
+  'register',
+  'remote',
+] as const;
+export type CreateStep = (typeof CREATE_STEPS)[number];
 
 export type CreateRepositoryResult = {
   repository: RepositorySummary;
@@ -115,6 +178,8 @@ export type CreateRepositoryResult = {
     | { status: 'failed'; message: string };
   // A README the identity could not commit is left in place, uncommitted.
   readmeCommitted: boolean | null;
+  // Measured, not estimated: the whole create, and the server round trip for the remote step.
+  timing: { totalMs: number; remoteMs: number | null };
 };
 
 // Cloning from your account needs the sync transport (Git objects in R2 behind a Git-compatible
@@ -131,10 +196,15 @@ export type CloneInput = z.infer<typeof cloneInputSchema>;
 export type CloneResult =
   | { status: 'unavailable' }
   | { status: 'cloned'; repository: RepositorySummary };
-export type CloneProgressEvent = {
+// Progress of one long job (a clone or a create), pushed from main as it happens.
+// receivedBytes and bytesPerSecond come from Git's own transfer line, so they are null until
+// Git reports them and stay null for work that moves no data over the network.
+export type ProgressEvent = {
   jobId: string;
   stage: string;
   percent: number;
+  receivedBytes: number | null;
+  bytesPerSecond: number | null;
 };
 
 export const pinInputSchema = z.object({
@@ -153,6 +223,12 @@ export const remoteRepositorySchema = z.object({
   description: z.string().max(280).nullable(),
   visibility: z.enum(['private']),
   defaultBranch: z.string().max(100),
+  // provisioning: storage is being set up. failed: setup stopped and can be retried.
+  // deleting: deletion started and didn't finish; deleting again resumes it.
+  // Workers from before the lifecycle don't send it; their repositories are ready.
+  status: z
+    .enum(['provisioning', 'ready', 'failed', 'deleting'])
+    .default('ready'),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -165,6 +241,9 @@ export const remoteActivitySchema = z.object({
     'repository.created',
     'repository.updated',
     'repository.deleted',
+    'repository.provisioned',
+    'repository.provisioning_failed',
+    'repository.deletion_failed',
   ]),
   repositoryId: z.string().max(64).nullable(),
   repositoryName: z.string().min(1).max(100),
@@ -201,6 +280,21 @@ export const remoteUpdateInputSchema = z
   );
 export type RemoteUpdateInput = z.infer<typeof remoteUpdateInputSchema>;
 
+// A remote-only repository. The key makes a retried create return the first result.
+export const remoteCreateInputSchema = z
+  .object({
+    name: repositoryNameSchema,
+    description: descriptionSchema.nullable(),
+    key: z.uuid(),
+  })
+  .strict();
+export type RemoteCreateInput = z.infer<typeof remoteCreateInputSchema>;
+
+// incomplete: the server removed what it could and kept the repository as `deleting` to retry.
+export type RemoteDeleteResult =
+  | { status: 'deleted' }
+  | { status: 'incomplete'; repository: RemoteRepository };
+
 export type RemoteOverview = {
   // signed-out: no account. live: fetched this session. cached: last known, with fetchedAt.
   // never: signed in, nothing fetched yet (manual refresh mode or still loading).
@@ -235,14 +329,23 @@ export const REPOS_IPC = {
   create: 'repos:create',
   linkRemote: 'repos:link-remote',
   activity: 'repos:activity',
+  clearActivity: 'repos:clear-activity',
   changed: 'repos:changed',
   clone: 'repos:clone',
   cloneCancel: 'repos:clone-cancel',
-  cloneProgress: 'repos:clone-progress',
+  progress: 'repos:progress',
   remoteOverview: 'remote:overview',
   remoteList: 'remote:list',
   remoteUpdate: 'remote:update',
   remoteDelete: 'remote:delete',
+  history: 'repos:history',
+  update: 'repos:update',
+  unlink: 'repos:unlink',
+  trash: 'repos:trash',
+  remoteCreate: 'remote:create',
+  remoteGet: 'remote:get',
+  remoteProvision: 'remote:provision',
+  remoteActivity: 'remote:activity',
 } as const;
 
 export interface ReposApi {
@@ -262,13 +365,28 @@ export interface ReposApi {
   create(input: CreateRepositoryInput): Promise<CreateRepositoryResult>;
   linkRemote(id: string): Promise<RemoteRepository>;
   activity(): Promise<LocalActivity[]>;
+  // Empties this computer's activity list; repositories and their history are not touched.
+  clearActivity(): Promise<void>;
   remoteOverview(force: boolean): Promise<RemoteOverview>;
   remoteList(input: RemoteListInput): Promise<RemotePage>;
   remoteUpdate(input: RemoteUpdateInput): Promise<RemoteRepository>;
   // Deletes the remote for good; local repositories linked to it are unlinked, never deleted.
-  remoteDelete(id: string): Promise<void>;
+  remoteDelete(id: string): Promise<RemoteDeleteResult>;
+  // Creates a repository in the account only; nothing is written on this computer.
+  remoteCreate(input: RemoteCreateInput): Promise<RemoteRepository>;
+  remoteGet(id: string): Promise<RemoteRepository>;
+  // Retries storage setup for a repository whose setup failed or stopped.
+  remoteProvision(id: string): Promise<RemoteRepository>;
+  remoteActivity(id: string): Promise<RemoteActivity[]>;
+  history(id: string): Promise<RepositoryHistory>;
+  // Renames the registration (and its remote, when linked). The folder keeps its name.
+  update(input: RepoUpdateInput): Promise<RepositorySummary>;
+  // Forgets the link to the remote. Files, Git config and the remote itself are left as they are.
+  unlink(id: string): Promise<RepositorySummary>;
+  // Moves the folder to the system trash, then removes the registration. Never a permanent delete.
+  trash(input: RepoTrashInput): Promise<void>;
   clone(input: CloneInput): Promise<CloneResult>;
   cancelClone(jobId: string): Promise<void>;
-  onCloneProgress(callback: (event: CloneProgressEvent) => void): () => void;
+  onProgress(callback: (event: ProgressEvent) => void): () => void;
   onChanged(callback: (repositories: RepositorySummary[]) => void): () => void;
 }

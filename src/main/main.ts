@@ -8,6 +8,7 @@ import {
   Menu,
   nativeTheme,
   net,
+  Notification,
   safeStorage,
   shell,
 } from 'electron';
@@ -29,6 +30,7 @@ import {
 import { createGitIdentity } from './git/git-identity';
 import { createHandle } from './ipc/handle';
 import { registerIpc } from './ipc/register';
+import { createNotifier } from './notifier';
 import { registerAppScheme, serveRendererFrom } from './protocol';
 import {
   createRemoteService,
@@ -60,6 +62,16 @@ function focusMainWindow() {
 // Must run before the single-instance lock, which is keyed to the profile folder.
 if (!app.isPackaged && process.env.GITDESK_USER_DATA)
   app.setPath('userData', process.env.GITDESK_USER_DATA);
+
+// Windows shows notifications only for an app with an AppUserModelID. The Squirrel installer sets
+// it for packaged builds; a development run uses the Electron binary's path.
+if (process.platform === 'win32' && !app.isPackaged)
+  app.setAppUserModelId(process.execPath);
+
+const formatBytes = (bytes: number) =>
+  bytes >= 1024 ** 2
+    ? `${(bytes / 1024 ** 2).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
 if (started) {
   app.quit();
@@ -160,6 +172,36 @@ function start() {
     },
   });
 
+  // Held until closed: a notification that is garbage-collected stops delivering its click.
+  const shown = new Set<Notification>();
+  const notifier = createNotifier({
+    settings: () => settings.get(),
+    isFocused: () => !!mainWindow?.isVisible() && mainWindow.isFocused(),
+    sink: {
+      isSupported: () => Notification.isSupported(),
+      show(notice, onClick) {
+        const note = new Notification({
+          title: notice.title,
+          body: notice.body,
+        });
+        shown.add(note);
+        note.on('click', onClick);
+        note.on('close', () => shown.delete(note));
+        note.on('failed', (_event, error) => {
+          shown.delete(note);
+          log.warn('notification failed', error);
+        });
+        note.show();
+      },
+    },
+    toWindow: (notice) => mainWindow?.webContents.send(IPC.appNotice, notice),
+    onClick: (repositoryId) => {
+      focusMainWindow();
+      if (repositoryId)
+        mainWindow?.webContents.send(IPC.appOpenRepository, repositoryId);
+    },
+  });
+
   const store = createRepositoryStore(db);
   remote = createRemoteService({
     db,
@@ -173,8 +215,38 @@ function start() {
     remote,
     settings: () => settings.get(),
     emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
-    emitCloneProgress: (event) =>
-      mainWindow?.webContents.send(REPOS_IPC.cloneProgress, event),
+    emitProgress: (event) =>
+      mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    onProblem: (repo, kind) =>
+      notifier.notify('problem', {
+        title:
+          kind === 'conflict'
+            ? `${repo.name} has unresolved conflicts`
+            : `${repo.name}'s folder can't be found`,
+        body:
+          kind === 'conflict'
+            ? 'Found by a background check. Resolve them before you commit.'
+            : 'It was moved or deleted. Locate it again from gitdesk.',
+        tone: 'danger',
+        repositoryId: repo.id,
+      }),
+    onCloneDone: (outcome) =>
+      notifier.notify(
+        'clone',
+        outcome.ok
+          ? {
+              title: `${outcome.repository.name} cloned`,
+              body: `${outcome.bytes ? `${formatBytes(outcome.bytes)} in ` : 'Done in '}${Math.max(1, Math.round(outcome.ms / 1000))} s. Click to open it.`,
+              tone: 'success',
+              repositoryId: outcome.repository.id,
+            }
+          : {
+              title: `${outcome.name} wasn't cloned`,
+              body: outcome.message,
+              tone: 'danger',
+              repositoryId: null,
+            },
+      ),
     log,
     desktop: {
       async pickDirectory({ title, create }) {
@@ -192,6 +264,14 @@ function start() {
       // Paths come from gitdesk's own registry, never from the renderer.
       openPath: (target) => shell.openPath(target),
       copyText: (text) => clipboard.writeText(text),
+      trashItem: (target) => shell.trashItem(target),
+      protectedPaths: () => [
+        os.homedir(),
+        app.getPath('userData'),
+        app.getPath('desktop'),
+        app.getPath('documents'),
+        app.getPath('downloads'),
+      ],
     },
   });
   app.on('before-quit', () => repos.dispose());
@@ -205,6 +285,7 @@ function start() {
       git: createGitIdentity(),
       repos,
       remote,
+      notifier,
     },
   );
 

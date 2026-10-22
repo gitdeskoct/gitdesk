@@ -28,7 +28,6 @@ import { useNavigation } from '../../app/navigation';
 import { useWorkspaceUi } from '../../app/workspace-ui';
 import { ClonePanel } from '../repos/clone-panel';
 import { CreatePanel } from '../repos/create-panel';
-import { RemotePanel } from '../repos/remote-panel';
 import { RepoRow } from '../repos/repo-row';
 import { accountOf } from '../shell/account-menu';
 import { Page, PageTitle } from '../shell/page';
@@ -172,8 +171,6 @@ export function HomePage({ status }: { status: AuthStatus }) {
   const aside =
     ui.panel === 'create' ? (
       <CreatePanel onClose={() => ui.setPanel(null)} />
-    ) : ui.panel === 'remote' ? (
-      <RemotePanel onClose={() => ui.setPanel(null)} />
     ) : ui.panel === 'clone' ? (
       <ClonePanel onClose={() => ui.setPanel(null)} />
     ) : undefined;
@@ -326,44 +323,61 @@ export function HomePage({ status }: { status: AuthStatus }) {
     </Section>
   );
 
+  const pageSize = settings?.homePageSize ?? 6;
+  const showAttention = settings?.homeShowAttention ?? true;
+  const showActivity = settings?.homeShowActivity ?? true;
   const nextSteps = (
     <>
-      <Section
-        id="attention-heading"
-        title="Needs attention"
-        meta="From Git status, not guessed"
-      >
-        {attention.length || remote.data?.state === 'cached' ? (
-          <AttentionList items={attention} remote={remote.data} limit={5} />
-        ) : (
-          <EmptyState
-            compact
-            art={<NoResultsArt />}
-            title="Nothing is waiting"
-            className="border-t border-line"
-            action={
-              <Button
-                size="sm"
-                onClick={() => navigate({ name: 'repositories' })}
-              >
-                View all repositories
-              </Button>
-            }
-          >
-            Every repository is committed and in step with its upstream.
-          </EmptyState>
-        )}
-      </Section>
-      <Section id="activity-heading" title="Recent activity">
-        <ActivityList remote={remote.data} />
-      </Section>
+      {showAttention && (
+        <Section
+          id="attention-heading"
+          title="Needs attention"
+          meta="From Git status, not guessed"
+        >
+          {attention.length || remote.data?.state === 'cached' ? (
+            <AttentionList
+              items={attention}
+              remote={remote.data}
+              pageSize={pageSize}
+            />
+          ) : (
+            <EmptyState
+              compact
+              art={<NoResultsArt />}
+              title="Nothing is waiting"
+              className="border-t border-line"
+              action={
+                <Button
+                  size="sm"
+                  onClick={() => navigate({ name: 'repositories' })}
+                >
+                  View all repositories
+                </Button>
+              }
+            >
+              Every repository is committed and in step with its upstream.
+            </EmptyState>
+          )}
+        </Section>
+      )}
+      {showActivity && (
+        <Section id="activity-heading" title="Recent activity">
+          <ActivityList
+            remote={remote.data}
+            pageSize={pageSize}
+            source={settings?.activitySource ?? 'both'}
+            includeOpens={settings?.activityIncludeOpens ?? false}
+          />
+        </Section>
+      )}
     </>
   );
+  const hasNextSteps = showAttention || showActivity;
 
   return (
     <Page
       crumbs={[{ label: 'Home' }]}
-      width={split ? 'wide' : 'page'}
+      width={split && hasNextSteps ? 'wide' : 'page'}
       aside={aside}
     >
       <div className="@container">
@@ -373,20 +387,22 @@ export function HomePage({ status }: { status: AuthStatus }) {
             stats={stats}
             remote={remote.data}
             remoteFailed={remote.isError}
-            onRemote={() => ui.setPanel('remote')}
+            onRemote={() => navigate({ name: 'repositories', scope: 'remote' })}
           />
         </div>
         <div
           className={cn(
             'grid gap-x-10 gap-y-10',
-            layout === 'split' &&
+            hasNextSteps &&
+              layout === 'split' &&
               '@min-[900px]:grid-cols-[minmax(0,1fr)_300px]',
-            layout === 'auto' &&
+            hasNextSteps &&
+              layout === 'auto' &&
               '@min-[1120px]:grid-cols-[minmax(0,1fr)_320px]',
           )}
         >
           {repoList}
-          {split ? (
+          {!hasNextSteps ? null : split ? (
             <aside
               aria-label="Next steps"
               className="grid min-w-0 content-start gap-9"
@@ -394,7 +410,12 @@ export function HomePage({ status }: { status: AuthStatus }) {
               {nextSteps}
             </aside>
           ) : (
-            <div className="grid gap-x-10 gap-y-9 @min-[760px]:grid-cols-2">
+            <div
+              className={cn(
+                'grid gap-x-10 gap-y-9',
+                showAttention && showActivity && '@min-[760px]:grid-cols-2',
+              )}
+            >
               {nextSteps}
             </div>
           )}

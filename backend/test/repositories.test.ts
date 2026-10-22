@@ -1,9 +1,14 @@
 import { env } from 'cloudflare:workers';
+import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { getDb } from '../src/db/client';
 import { repositories } from '../src/db/schema';
-import { MAX_REPOSITORIES_PER_ACCOUNT } from '../src/modules/repositories/repositories';
+import {
+  MAX_REPOSITORIES_PER_ACCOUNT,
+  resumeLifecycle,
+  STALE_LIFECYCLE_MS,
+} from '../src/modules/repositories/repositories';
 import { call, fakeGoogle, postJson, signIn } from './helpers';
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -204,9 +209,9 @@ describe('remote repositories', () => {
       createdAt: now,
       updatedAt: now,
     }));
-    // D1 caps bound parameters per statement, so seed in chunks.
-    for (let i = 0; i < rows.length; i += 10) {
-      await db.insert(repositories).values(rows.slice(i, i + 10));
+    // D1 caps a statement at 100 bound parameters, so seed in chunks.
+    for (let i = 0; i < rows.length; i += 8) {
+      await db.insert(repositories).values(rows.slice(i, i + 8));
     }
 
     const results = await Promise.all(
@@ -291,5 +296,151 @@ describe('remote repositories', () => {
     expect((await call(app, path, { headers: bearer(owner.access_token) })).status).toBe(404);
     // The name is free again.
     expect((await create(app, owner.access_token, { name: 'gone' })).status).toBe(201);
+  });
+});
+
+// An R2 binding whose `op` always fails, to drive the partial-failure paths.
+const brokenStorage = (op: 'put' | 'delete') =>
+  new Proxy(env.REPO_STORAGE, {
+    get(target, key) {
+      if (key === op) return () => Promise.reject(new Error('storage unavailable'));
+      const value = Reflect.get(target, key) as unknown;
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+
+const sendWith = (
+  app: ReturnType<typeof createApp>,
+  storage: R2Bucket,
+  token: string,
+  method: string,
+  path: string,
+  body?: unknown,
+) =>
+  app.request(
+    path,
+    {
+      method,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      headers: { 'content-type': 'application/json', ...bearer(token) },
+    },
+    { ...env, REPO_STORAGE: storage },
+  );
+
+type Lifecycle = Remote & { status: string; createdAt: number };
+
+const created = async (res: Response) => ((await res.json()) as { repository: Lifecycle }).repository;
+
+describe('remote repository lifecycle', () => {
+  it('provisions storage under an opaque prefix and never exposes the key', async () => {
+    const { app, owner } = await twoAccounts();
+    const res = await create(app, owner.access_token, { name: 'stored' });
+    expect(res.status).toBe(201);
+    const repository = await created(res);
+    expect(repository.status).toBe('ready');
+    expect(Object.keys(repository)).not.toContain('storageKey');
+    const marker = await env.REPO_STORAGE.get(`repositories/${repository.id}/meta.json`);
+    expect(await marker?.json()).toEqual({
+      repositoryId: repository.id,
+      createdAt: repository.createdAt,
+    });
+  });
+
+  it('keeps a repository whose storage failed as failed, and a retry makes it ready', async () => {
+    const { app, owner, other } = await twoAccounts();
+    const res = await sendWith(
+      app,
+      brokenStorage('put'),
+      owner.access_token,
+      'POST',
+      '/api/v1/repositories',
+      { name: 'flaky' },
+    );
+    expect(res.status).toBe(201);
+    const repository = await created(res);
+    expect(repository.status).toBe('failed');
+
+    const path = `/api/v1/repositories/${repository.id}/provision`;
+    expect((await send(app, other.access_token, 'POST', path)).status).toBe(404);
+    const retried = await send(app, owner.access_token, 'POST', path);
+    expect(retried.status).toBe(200);
+    expect(await retried.json()).toMatchObject({
+      repository: { id: repository.id, status: 'ready' },
+    });
+    // Provisioning a ready repository changes nothing.
+    expect((await send(app, owner.access_token, 'POST', path)).status).toBe(200);
+
+    const activity = await call(app, `/api/v1/repositories/${repository.id}/activity`, {
+      headers: bearer(owner.access_token),
+    });
+    const rows = ((await activity.json()) as { activity: { type: string }[] }).activity;
+    expect(rows.map((row) => row.type)).toEqual(
+      expect.arrayContaining(['repository.provisioning_failed', 'repository.provisioned']),
+    );
+  });
+
+  it('removes stored data before the row, and resumes a deletion that stopped', async () => {
+    const { app, owner } = await twoAccounts();
+    const keep = await created(await create(app, owner.access_token, { name: 'keep' }));
+    const repository = await created(await create(app, owner.access_token, { name: 'doomed' }));
+    await env.REPO_STORAGE.put(`repositories/${repository.id}/objects/pack-1`, 'data');
+    const path = `/api/v1/repositories/${repository.id}`;
+
+    const stalled = await sendWith(app, brokenStorage('delete'), owner.access_token, 'DELETE', path);
+    expect(stalled.status).toBe(202);
+    expect(await stalled.json()).toMatchObject({ repository: { status: 'deleting' } });
+    const rename = await send(app, owner.access_token, 'PATCH', path, { name: 'saved' });
+    expect(rename.status).toBe(409);
+    expect(await rename.json()).toMatchObject({ error: { code: 'INVALID_STATE' } });
+    expect((await send(app, owner.access_token, 'POST', `${path}/provision`)).status).toBe(409);
+
+    expect((await send(app, owner.access_token, 'DELETE', path)).status).toBe(204);
+    const left = await env.REPO_STORAGE.list({ prefix: `repositories/${repository.id}/` });
+    expect(left.objects).toEqual([]);
+    expect(await env.REPO_STORAGE.head(`repositories/${keep.id}/meta.json`)).not.toBeNull();
+    expect((await call(app, path, { headers: bearer(owner.access_token) })).status).toBe(404);
+  });
+
+  it("lists one repository's activity for its owner only", async () => {
+    const { app, owner, other } = await twoAccounts();
+    const repository = await created(await create(app, owner.access_token, { name: 'mine' }));
+    await create(app, owner.access_token, { name: 'unrelated' });
+    const path = `/api/v1/repositories/${repository.id}/activity`;
+    expect((await call(app, path, { headers: bearer(other.access_token) })).status).toBe(404);
+    const res = await call(app, path, { headers: bearer(owner.access_token) });
+    const rows = ((await res.json()) as { activity: { repositoryName: string }[] }).activity;
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.repositoryName === 'mine')).toBe(true);
+  });
+
+  it('fails stale provisioning and finishes stale deletions in the daily job', async () => {
+    const { owner } = await twoAccounts();
+    const db = getDb(env.DB);
+    const old = Date.now() - STALE_LIFECYCLE_MS - 1000;
+    const stuck = { provisioning: crypto.randomUUID(), deleting: crypto.randomUUID() } as const;
+    for (const status of ['provisioning', 'deleting'] as const) {
+      const id = stuck[status];
+      await db.insert(repositories).values({
+        id,
+        ownerAccountId: owner.account.id,
+        name: status,
+        nameKey: status,
+        createdAt: old,
+        updatedAt: old,
+        status,
+        statusAt: old,
+        storageKey: `repositories/${id}/`,
+      });
+    }
+    await env.REPO_STORAGE.put(`repositories/${stuck.deleting}/meta.json`, '{}');
+
+    await resumeLifecycle(db, env.REPO_STORAGE, Date.now());
+
+    const rows = await db
+      .select()
+      .from(repositories)
+      .where(eq(repositories.ownerAccountId, owner.account.id));
+    expect(rows.map((row) => [row.id, row.status])).toEqual([[stuck.provisioning, 'failed']]);
+    expect(await env.REPO_STORAGE.head(`repositories/${stuck.deleting}/meta.json`)).toBeNull();
   });
 });

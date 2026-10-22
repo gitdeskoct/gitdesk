@@ -30,6 +30,7 @@ const repo = (id: string) => ({
   description: null,
   visibility: 'private' as const,
   defaultBranch: 'main',
+  status: 'ready' as const,
   createdAt: 1,
   updatedAt: 2,
 });
@@ -41,13 +42,18 @@ let status: AuthStatus;
 let settings: Settings;
 const dashboardOverview = vi.fn();
 const createRepository = vi.fn();
+const deleteRepository = vi.fn();
 
 function setup() {
   const store = createRepositoryStore(db);
   return createRemoteService({
     db,
     store,
-    api: { dashboardOverview, createRepository } as unknown as ApiClient,
+    api: {
+      dashboardOverview,
+      createRepository,
+      deleteRepository,
+    } as unknown as ApiClient,
     auth: {
       getStatus: () => status,
       authorized: (fn) => fn('token'),
@@ -65,6 +71,7 @@ beforeEach(() => {
   settings = { ...DEFAULT_SETTINGS };
   dashboardOverview.mockReset();
   createRepository.mockReset();
+  deleteRepository.mockReset();
   dashboardOverview.mockResolvedValue({
     total: 3,
     recent: [repo('a')],
@@ -277,5 +284,23 @@ describe('remote overview throttle', () => {
     ).rejects.toThrow('without an account');
     expect(dashboardOverview).not.toHaveBeenCalled();
     expect(createRepository).not.toHaveBeenCalled();
+  });
+
+  it('keeps a remote whose deletion stopped partway, marked deleting', async () => {
+    const remote = setup();
+    await remote.overview(false);
+    deleteRepository.mockResolvedValueOnce({
+      repository: { ...repo('a'), status: 'deleting' },
+    });
+    expect(await remote.remove('a')).toMatchObject({ status: 'incomplete' });
+    const after = await remote.overview(false);
+    expect(after).toMatchObject({ total: 3 });
+    expect(after.recent).toEqual([
+      expect.objectContaining({ id: 'a', status: 'deleting' }),
+    ]);
+
+    deleteRepository.mockResolvedValueOnce(undefined);
+    expect(await remote.remove('a')).toEqual({ status: 'deleted' });
+    expect((await remote.overview(false)).recent).toEqual([]);
   });
 });

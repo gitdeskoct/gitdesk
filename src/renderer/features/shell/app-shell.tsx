@@ -4,6 +4,7 @@ import { useNavigation, type Route } from '../../app/navigation';
 import { HomePage } from '../home/home-page';
 import { NotBuiltPage } from '../not-built/not-built-page';
 import { RepositoriesPage } from '../repos/repositories-page';
+import { RemoteRepositoryPage } from '../repository/remote-repository-page';
 import { RepositoryPage } from '../repository/repository-page';
 import { SettingsLayout } from '../settings/settings-layout';
 import { PageErrorBoundary } from './page';
@@ -11,9 +12,10 @@ import { Sidebar } from './sidebar';
 import { TitleBar } from './title-bar';
 
 function routeKey(route: Route): string {
-  if (route.name === 'repository') return `repository:${route.id}`;
+  if (route.name === 'repository' || route.name === 'remote-repository')
+    return `${route.name}:${route.id}`;
   if (route.name === 'repositories')
-    return `repositories:${route.show ?? 'all'}`;
+    return `repositories:${route.show ?? 'all'}:${route.scope ?? 'all'}`;
   return route.name;
 }
 
@@ -22,9 +24,16 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
     case 'home':
       return <HomePage status={status} />;
     case 'repositories':
-      return <RepositoriesPage initialShow={route.show ?? 'all'} />;
+      return (
+        <RepositoriesPage
+          initialShow={route.show ?? 'all'}
+          initialScope={route.scope ?? 'all'}
+        />
+      );
     case 'repository':
       return <RepositoryPage id={route.id} />;
+    case 'remote-repository':
+      return <RemoteRepositoryPage id={route.id} />;
     case 'settings':
       return <SettingsLayout status={status} section={route.section} />;
     default:

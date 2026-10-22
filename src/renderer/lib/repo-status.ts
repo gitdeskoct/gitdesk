@@ -1,4 +1,54 @@
-import type { RepoStatus, RepositorySummary } from '../../shared/repos';
+import type {
+  RemoteRepository,
+  RepoStatus,
+  RepositorySummary,
+} from '../../shared/repos';
+import type { RepoScope } from '../app/navigation';
+
+// One row in the Repositories list. A linked registration carries its remote's metadata when that
+// remote is among the loaded pages; a remote with no registration here is its own row.
+export type RepoItem =
+  | {
+      kind: 'local';
+      key: string;
+      repo: RepositorySummary;
+      remote: RemoteRepository | null;
+    }
+  | { kind: 'remote'; key: string; remote: RemoteRepository };
+
+export function repoItems(
+  local: RepositorySummary[],
+  remote: RemoteRepository[],
+): RepoItem[] {
+  const byId = new Map(remote.map((r) => [r.id, r]));
+  const linked = new Set(local.map((r) => r.remoteId).filter(Boolean));
+  return [
+    ...local.map(
+      (repo): RepoItem => ({
+        kind: 'local',
+        key: repo.id,
+        repo,
+        remote: repo.remoteId ? (byId.get(repo.remoteId) ?? null) : null,
+      }),
+    ),
+    ...remote
+      .filter((r) => !linked.has(r.id))
+      .map(
+        (r): RepoItem => ({ kind: 'remote', key: `remote:${r.id}`, remote: r }),
+      ),
+  ];
+}
+
+export const itemName = (item: RepoItem) =>
+  item.kind === 'local' ? item.repo.name : item.remote.name;
+
+// Local: registered on this computer. Remote: in the account, linked or not. Linked: both.
+export function inScope(item: RepoItem, scope: RepoScope): boolean {
+  if (scope === 'local') return item.kind === 'local';
+  if (scope === 'linked') return item.kind === 'local' && !!item.repo.remoteId;
+  if (scope === 'remote') return item.kind === 'remote' || !!item.repo.remoteId;
+  return true;
+}
 
 // Two dimensions, never merged into one label: what is uncommitted here, and how the current
 // branch compares with its upstream. A clean tree can be behind; an up-to-date branch can be dirty.

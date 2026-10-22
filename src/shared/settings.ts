@@ -15,11 +15,29 @@ export const settingsSchema = z.object({
   // Workspace: how Home is laid out and how often repositories are checked.
   dashboardLayout: z.enum(['auto', 'centered', 'split']),
   dashboardDensity: z.enum(['comfortable', 'compact']),
+  // Repositories: one centered column, or the list beside the selected repository. Auto splits on wide windows.
+  repositoriesLayout: z.enum(['auto', 'centered', 'split']),
   watchRepositories: z.boolean(),
   refreshOnFocus: z.boolean(),
   // Minutes between background checks while the window is open; 0 turns them off.
-  backgroundRefresh: z.union([z.literal(0), z.literal(5), z.literal(15), z.literal(30)]),
+  backgroundRefresh: z.union([
+    z.literal(0),
+    z.literal(5),
+    z.literal(15),
+    z.literal(30),
+  ]),
   remoteRefresh: z.enum(['auto', 'manual']),
+  // Home sections and what Recent activity lists.
+  homeShowAttention: z.boolean(),
+  homeShowActivity: z.boolean(),
+  homePageSize: z.union([z.literal(6), z.literal(10), z.literal(20)]),
+  activitySource: z.enum(['both', 'local', 'account']),
+  activityIncludeOpens: z.boolean(),
+  // System notifications; while gitdesk is in front the same news is an in-app toast.
+  notifications: z.boolean(),
+  notifyClone: z.boolean(),
+  notifyProblems: z.boolean(),
+  notifyOnlyInBackground: z.boolean(),
 });
 
 export const settingsPatchSchema = settingsSchema.partial().strict();
@@ -39,10 +57,20 @@ export const DEFAULT_SETTINGS: Settings = {
   localOnly: false,
   dashboardLayout: 'auto',
   dashboardDensity: 'comfortable',
+  repositoriesLayout: 'auto',
   watchRepositories: true,
   refreshOnFocus: true,
   backgroundRefresh: 5,
   remoteRefresh: 'auto',
+  homeShowAttention: true,
+  homeShowActivity: true,
+  homePageSize: 6,
+  activitySource: 'both',
+  activityIncludeOpens: false,
+  notifications: true,
+  notifyClone: true,
+  notifyProblems: true,
+  notifyOnlyInBackground: true,
 };
 
 // Field by field, so one bad or retired value falls back alone instead of resetting everything.

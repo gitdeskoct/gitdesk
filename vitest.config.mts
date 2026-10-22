@@ -9,6 +9,8 @@ export default defineConfig({
           name: 'main',
           environment: 'node',
           include: ['src/main/**/*.test.ts', 'src/shared/**/*.test.ts'],
+          // These run real Git in temp folders; under a full parallel run some take over 5 s.
+          testTimeout: 20_000,
         },
       },
       {

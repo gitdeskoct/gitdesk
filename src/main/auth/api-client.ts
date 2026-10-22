@@ -35,6 +35,11 @@ const overviewResponse = z.object({
   serverTime: z.number(),
 });
 const repositoryResponse = z.object({ repository: remoteRepositorySchema });
+// 204 has no body; 202 carries the repository that is still being deleted.
+const deleteResponse = repositoryResponse.nullable();
+const activityResponse = z.object({
+  activity: z.array(remoteActivitySchema).max(50),
+});
 const listResponse = z.object({
   repositories: z.array(remoteRepositorySchema).max(50),
   nextCursor: z.string().max(400).nullable(),
@@ -142,11 +147,33 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
           token,
         },
       ),
+    getRepository: (token: string, id: string) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}`,
+        repositoryResponse,
+        { token },
+      ),
+    provisionRepository: (token: string, id: string) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/provision`,
+        repositoryResponse,
+        { method: 'POST', token },
+      ),
+    repositoryActivity: (token: string, id: string) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/activity?limit=20`,
+        activityResponse,
+        { token },
+      ),
     deleteRepository: (token: string, id: string) =>
-      request(`/api/v1/repositories/${encodeURIComponent(id)}`, null, {
-        method: 'DELETE',
-        token,
-      }),
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}`,
+        deleteResponse,
+        {
+          method: 'DELETE',
+          token,
+        },
+      ),
     revokeSession: (token: string, id: string) =>
       request(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, null, {
         method: 'DELETE',

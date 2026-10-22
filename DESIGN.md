@@ -228,15 +228,35 @@ Short results of actions whose own UI has already closed: a menu item, a bulk ac
 
 _Why: a closed menu can't show its own spinner or error, and a result that vanishes silently reads as nothing happened._
 
+## Notifications
+
+One rule: a **system notification** while gitdesk is in the background, the **in-app toast** while it is in front. The same notice never goes out twice within a minute, and nothing notifies about ordinary edits. Clicking a system notification brings gitdesk forward and opens the repository it names.
+
+## Pagination
+
+Lists on Home show 6 items per page by default (Settings › Workspace offers 10 and 20). The count sits on the left ("7–12 of 31"), the pages on the right: previous, numbers that collapse with an ellipsis past five pages, next. The current page is the `control` fill in `ink`; arrow keys turn pages while the pager has focus. One page needs no pager.
+
+## Repositories
+
+- **One list, three overlapping sets.** Local is registered on this computer, Remote is in the account, Linked is both. The statistics strip is the filter and says the counts overlap. State filters (Changed, Ahead and so on) only match repositories on this computer.
+- **Two layouts, one set of components.** Centered shows the table in the content column. Split shows the list beside the selected repository; arrows move the selection and Enter opens the full page. Under 860px of content (1100px for Auto) split falls back to the list, and a row opens its page. The choice lives in Settings › Workspace.
+- **Charts answer a question.** The details chart is titled with the question it answers, counts commits reachable from the current branch per local-time week by commit date, and has a text summary and a hidden table for screen readers. Bars are focusable and name their week. No scores, no percentages of health.
+- **Words, not zeros.** A number that has nothing to compare against says so (Not connected), and an unchecked folder is never called safe to delete.
+
 ## Destructive confirmations
 
-Removing a repository from gitdesk, removing several, and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Deleting a remote also asks for its name to be typed, because it can't be undone.
+Removing a repository from gitdesk, removing several, disconnecting a remote, moving a folder to the system trash and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Each names the one thing it touches. Moving a folder to the trash and deleting a remote also ask for the name to be typed: the first shows the folder path and any uncommitted changes, the second can't be undone. A folder is only ever moved to the trash, never deleted outright.
 
 There are no centered modals. _Why: the CSP blocks the style tag a modal's scroll lock injects, and an inline band keeps the context visible._
 
 ## Progress
 
-Long work with a known end (cloning) shows a 6px `accent` bar on a `control` track with a 4px corner, its stage, its percent and a Cancel button. Work without a known end uses the spinner.
+Long work with a known end (cloning, creating) shows a 6px `accent` bar on a `control` track with a 4px corner, with its stage on the left and its percent or step on the right. Under the bar:
+
+- **Transfer**, when Git reports it: speed in bold, bytes received, time left. These are measured from Git's own progress line.
+- **Connection**, while the step uses the network: four bars plus words ("Good connection · 45 ms · about 10 Mbps"). The values are the system's estimate and read "about"; the words carry the meaning, the bar color only repeats it.
+
+Work without a known end uses the spinner.
 
 ## Focus
 

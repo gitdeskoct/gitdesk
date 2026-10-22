@@ -46,7 +46,7 @@ export const recordActivity = (
 export async function listPage(
   db: Db,
   accountId: string,
-  input: { limit: number; cursor?: [number, string] },
+  input: { limit: number; cursor?: [number, string]; repositoryId?: string },
 ) {
   const [createdAt, id] = input.cursor ?? [];
   const rows = await db
@@ -55,6 +55,7 @@ export async function listPage(
     .where(
       and(
         eq(activity.accountId, accountId),
+        input.repositoryId ? eq(activity.repositoryId, input.repositoryId) : undefined,
         createdAt !== undefined && id !== undefined
           ? or(
               lt(activity.createdAt, createdAt),
