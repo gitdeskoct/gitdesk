@@ -36,7 +36,8 @@ beforeAll(() => {
   Element.prototype.scrollIntoView ??= () => {};
 });
 
-const status: AuthStatus = { status: 'signed-out' };
+const signedOut: AuthStatus = { status: 'signed-out' };
+let status: AuthStatus = signedOut;
 let settings: Settings = DEFAULT_SETTINGS;
 const never = () => new Promise<never>(() => {});
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -229,6 +230,7 @@ const openRepo = async () => {
 
 beforeEach(() => {
   settings = { ...DEFAULT_SETTINGS, workspaceLayout: 'centered' };
+  status = signedOut;
   install();
 });
 afterEach(() => vi.restoreAllMocks());
@@ -405,5 +407,85 @@ describe('branches and history', () => {
       skip: 50,
     });
     expect(screen.getByText("That's the first commit.")).toBeInTheDocument();
+  });
+});
+
+describe('push and the hosted Git URL', () => {
+  const HOSTED = 'https://acct.artifacts.cloudflare.net/git/gitdesk/abc.git';
+  const REMOTE_ID = '22222222-2222-4222-8222-222222222222';
+
+  it('pushes the current branch with a cancel while it runs', async () => {
+    install([
+      repo({ hasRemotes: true, upstream: 'origin/main', ahead: 2, behind: 0 }),
+    ]);
+    workspace.push = vi.fn(never);
+    workspace.cancelPush = vi.fn(async () => undefined);
+    await openRepo();
+    await userEvent.click(screen.getByRole('button', { name: /Push 2/ }));
+    expect(workspace.push).toHaveBeenCalledWith({
+      id: ID,
+      jobId: expect.any(String),
+    });
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Cancel push' }),
+    );
+    expect(workspace.cancelPush).toHaveBeenCalledWith(
+      (workspace.push.mock.calls[0]![0] as { jobId: string }).jobId,
+    );
+  });
+
+  it('offers the account link from the Remotes tab when the repository has none', async () => {
+    await openRepo();
+    await userEvent.click(screen.getByRole('tab', { name: 'Remotes' }));
+    const section = (
+      await screen.findByText('Not linked to your account')
+    ).closest('section')!;
+    expect(
+      within(section).getByRole('button', { name: 'Sign in' }),
+    ).toBeInTheDocument();
+  });
+
+  it('shows the Git URL and adds it as a remote with a spinner, never a token', async () => {
+    status = {
+      status: 'authenticated',
+      account: {
+        id: 'acct-1',
+        displayName: 'Test',
+        email: 't@example.com',
+        avatarUrl: null,
+      },
+      persistence: 'secure',
+    };
+    const linked = { ...repo(), remoteId: REMOTE_ID };
+    install([linked]);
+    repos.remoteGet = vi.fn(async () => ({
+      id: REMOTE_ID,
+      name: 'desktop-git',
+      description: null,
+      visibility: 'private',
+      defaultBranch: 'main',
+      status: 'ready',
+      gitUrl: HOSTED,
+      createdAt: 1,
+      updatedAt: 2,
+    }));
+    repos.addHostedRemote = vi.fn(never);
+    repos.copyGitCommand = vi.fn(async () => ({ expiresAt: Date.now() }));
+    await openRepo();
+    await userEvent.click(screen.getByRole('tab', { name: 'Remotes' }));
+
+    expect(await screen.findByText(HOSTED)).toBeInTheDocument();
+    const add = screen.getByRole('button', { name: 'Add as a Git remote' });
+    await userEvent.click(add);
+    expect(repos.addHostedRemote).toHaveBeenCalledWith(ID);
+    expect(add).toHaveAttribute('aria-busy', 'true');
+    expect(add).not.toBeDisabled();
+
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Copy terminal command' }),
+    );
+    expect(repos.copyGitCommand).toHaveBeenCalledWith(ID);
+    expect(await screen.findByText('Push command copied')).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('Bearer');
   });
 });

@@ -47,6 +47,8 @@ export function parseGitProgress(line: string): CloneProgress | null {
 // temporary folder is ever deleted; an existing folder is refused, never touched.
 export async function cloneInto(options: {
   url: string;
+  // GIT_CONFIG_* credentials for exactly this URL, from gitAuthEnv.
+  auth?: Record<string, string>;
   parent: string;
   name: string;
   signal: AbortSignal;
@@ -74,6 +76,7 @@ export async function cloneInto(options: {
       ...protocols.map((p) => `protocol.${p}.allow=always`),
     ],
     allowProtocolOverride: true,
+    auth: options.auth,
   });
   // The last size and speed seen survive into later stages (resolving deltas reports neither).
   let last: CloneProgress | null = null;

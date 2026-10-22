@@ -2,6 +2,7 @@ import {
   AppWindow,
   ArrowLeft,
   Braces,
+  Cloud,
   Info,
   Laptop,
   Palette,
@@ -29,6 +30,7 @@ import { EditorSection } from './editor-section';
 import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
+import { HostingSection } from './hosting-section';
 import { ShortcutsSection } from './shortcuts-section';
 import { WorkspaceSection } from './workspace-section';
 import { SECTION_LABELS, searchSettings } from './search-index';
@@ -53,6 +55,7 @@ const GROUPS: {
     label: 'Account',
     items: [
       { id: 'account', icon: User },
+      { id: 'hosting', icon: Cloud },
       { id: 'devices', icon: Laptop },
     ],
   },
@@ -126,6 +129,7 @@ export function SettingsLayout({
     git: <GitSection />,
     shortcuts: <ShortcutsSection />,
     account: <AccountSection status={status} />,
+    hosting: <HostingSection status={status} />,
     devices: <DevicesSection status={status} />,
     about: <AboutSection />,
   };

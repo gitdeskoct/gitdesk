@@ -183,6 +183,21 @@ export type FetchResult =
       message: string;
     };
 
+export const pushInputSchema = z
+  .object({ id: repoIdSchema, jobId: z.uuid() })
+  .strict();
+export type PushResult =
+  | { status: 'pushed'; remote: string; branch: string; at: number }
+  | {
+      status: 'failed';
+      reason:
+        | Extract<FetchResult, { status: 'failed' }>['reason']
+        | 'rejected'
+        | 'no-remote'
+        | 'detached';
+      message: string;
+    };
+
 export type RemoteInfo = {
   name: string;
   // Credentials and query strings removed; for display only. The raw URL stays in main.
@@ -389,6 +404,8 @@ export const WORKSPACE_IPC = {
   createBranch: 'workspace:create-branch',
   fetch: 'workspace:fetch',
   cancelFetch: 'workspace:fetch-cancel',
+  push: 'workspace:push',
+  cancelPush: 'workspace:push-cancel',
   remotes: 'workspace:remotes',
   log: 'workspace:log',
   commitDetail: 'workspace:commit-detail',
@@ -428,6 +445,9 @@ export interface WorkspaceApi {
   // Updates remote-tracking branches only; never merges into the current branch.
   fetch(input: z.infer<typeof fetchInputSchema>): Promise<FetchResult>;
   cancelFetch(jobId: string): Promise<void>;
+  // Pushes the current branch to its upstream, or sets one on the default remote. Never forces.
+  push(input: z.infer<typeof pushInputSchema>): Promise<PushResult>;
+  cancelPush(jobId: string): Promise<void>;
   remotes(id: string): Promise<RemoteInfo[]>;
   log(input: z.infer<typeof logInputSchema>): Promise<HistoryPage>;
   commitDetail(

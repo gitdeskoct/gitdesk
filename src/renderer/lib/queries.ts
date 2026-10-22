@@ -555,6 +555,26 @@ export const useCancelFetch = () =>
   useMutation({
     mutationFn: (jobId: string) => workspace().cancelFetch(jobId),
   });
+// Push moves the remote's branch and the upstream ahead count; local files stay as they are.
+export const usePush = (id: string) =>
+  useWorkspaceMutation(id, (jobId: string) => workspace().push({ id, jobId }), [
+    'branches',
+    'remotes',
+    'history',
+  ]);
+export const useCancelPush = () =>
+  useMutation({
+    mutationFn: (jobId: string) => workspace().cancelPush(jobId),
+  });
+
+// The account's Git URL as a Git remote of this repository.
+export const useAddHostedRemote = (id: string) =>
+  useWorkspaceMutation(id, () => repos().addHostedRemote(id), ['remotes']);
+// The command and its token go straight from main to the clipboard; only the expiry comes back.
+export const useCopyGitCommand = () =>
+  useMutation({ mutationFn: (id: string) => repos().copyGitCommand(id) });
+export const useRevokeGitTokens = () =>
+  useMutation({ mutationFn: (id: string) => repos().revokeGitTokens(id) });
 
 export const useRemotes = (id: string, statusAt: number | null) =>
   useQuery({

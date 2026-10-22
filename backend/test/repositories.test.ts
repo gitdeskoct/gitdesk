@@ -434,7 +434,7 @@ describe('remote repository lifecycle', () => {
     }
     await env.REPO_STORAGE.put(`repositories/${stuck.deleting}/meta.json`, '{}');
 
-    await resumeLifecycle(db, env.REPO_STORAGE, Date.now());
+    await resumeLifecycle(db, { bucket: env.REPO_STORAGE, git: null }, Date.now());
 
     const rows = await db
       .select()

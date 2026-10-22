@@ -1,5 +1,10 @@
 import * as Tabs from '@radix-ui/react-tabs';
-import { CloudDownload, FolderOpen, RefreshCw } from 'lucide-react';
+import {
+  CloudDownload,
+  CloudUpload,
+  FolderOpen,
+  RefreshCw,
+} from 'lucide-react';
 import { Fragment, useState, type ReactNode } from 'react';
 import type {
   RemoteRepository,
@@ -59,6 +64,7 @@ import { HistoryTab } from './history-tab';
 import { RemotesTab } from './remotes-tab';
 import { RepoSettingsTab } from './repo-settings-tab';
 import { useFetchAction } from './use-fetch';
+import { usePushAction } from './use-push';
 
 function upstreamText(repo: RepositorySummary): string {
   const status = repo.status!;
@@ -485,6 +491,35 @@ function FetchButton({ repo }: { repo: RepositorySummary }) {
   );
 }
 
+// Pushes the current branch; the count is what its upstream doesn't have yet.
+function PushButton({ repo }: { repo: RepositorySummary }) {
+  const action = usePushAction(repo.id);
+  const status = repo.status;
+  if (!status?.hasRemotes || !status.branch) return null;
+  const ahead = status.upstream ? (status.ahead ?? 0) : null;
+  if (action.running)
+    return (
+      <Button size="sm" onClick={action.cancel} aria-label="Cancel push">
+        <CloudUpload />
+        {action.progress ? `${action.progress.percent}%` : 'Pushing'} · Cancel
+      </Button>
+    );
+  return (
+    <Button
+      size="sm"
+      onClick={action.start}
+      title={
+        ahead === null
+          ? `Pushes ${status.branch} and sets its upstream`
+          : `${ahead} ${ahead === 1 ? 'commit' : 'commits'} to push`
+      }
+    >
+      <CloudUpload />
+      Push{ahead ? ` ${ahead}` : ''}
+    </Button>
+  );
+}
+
 // A successful switch needs no notice: the branch label already says where you are.
 const keepNotice = (next: SwitchOutcome) =>
   'result' in next && next.result.status === 'switched' ? null : next;
@@ -680,6 +715,7 @@ function RepositoryView({
                         : '')}
               </span>
               <FetchButton repo={repo} />
+              <PushButton repo={repo} />
             </div>
           </div>
           {notices}
@@ -766,7 +802,7 @@ function RepositoryView({
             )}
           </Tabs.Content>
           <Tabs.Content value="remotes" className={tabContent}>
-            {scrolling(<RemotesTab repo={repo} remote={remote} />)}
+            {scrolling(<RemotesTab repo={repo} />)}
           </Tabs.Content>
           <Tabs.Content value="overview" className={tabContent}>
             {scrolling(

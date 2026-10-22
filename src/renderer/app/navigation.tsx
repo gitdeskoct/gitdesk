@@ -16,6 +16,7 @@ export type SettingsSection =
   | 'git'
   | 'shortcuts'
   | 'account'
+  | 'hosting'
   | 'devices'
   | 'about';
 export type RepoTab =

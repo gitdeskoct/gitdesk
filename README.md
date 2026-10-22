@@ -57,6 +57,16 @@ After sign-in:
 - **Sign-out.** Local credentials are always cleared. Remote revocation through `/api/v1/auth/logout` is best effort, and the UI is told if it could not be confirmed.
 - **Offline.** If the Worker is unreachable at startup, main reports `offline` with the cached account summary and retries.
 
+## Git hosting
+
+A repository linked to your account gets a private Git URL on Cloudflare Artifacts, `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/gitdesk/<id>.git`, when the Worker has Git hosting on (see [backend/README.md](backend/README.md#git-hosting-srclibgit-hostts)). The URL holds no credentials, so it is shown and copied freely.
+
+- **Linking adds the remote.** Linking a repository, or Add as a Git remote on its Remotes tab, writes the URL to `.git/config` as `origin` when the repository has none and as `gitdesk` otherwise (Settings › Git hosting can always use `gitdesk`, or skip it). An existing remote is never replaced.
+- **Tokens never touch disk.** Before a fetch, push or clone against that exact URL, main asks the Worker for a 15-minute token (`read` for fetch and clone, `write` for push), keeps it in memory, and reuses it until a minute before it expires (`src/main/remote/git-auth.ts`). It reaches Git as `GIT_CONFIG_COUNT`/`GIT_CONFIG_KEY_n`/`GIT_CONFIG_VALUE_n` (`gitAuthEnv` in `src/main/repos/git-inspector.ts`): an `http.<url>.extraHeader` for that one URL, with redirects off for it. So it is not on the command line, not in `.git/config` and not sent to any other remote. Other remotes keep using your own credential helper or SSH agent. Sign-out drops every held token.
+- **Push** sends the current branch to its upstream, or sets one on the default remote. It never forces; a rejected push says to fetch and merge first.
+- **Clone** from a remote repository's page or the clone panel uses the same read token.
+- **Terminal access.** Copy terminal command on the Remotes tab puts `git -c "http.<url>.extraHeader=Authorization: Bearer <token>" push <remote> HEAD` on the clipboard, with a token that lasts 1 hour by default (15 minutes or 8 hours in Settings › Git hosting). The token goes from main to the clipboard and never reaches the renderer; only `HEAD`, a remote name and a URL that pass a shell-safe check are pasted. Revoke tokens invalidates every token for the repository at once.
+
 ## Module layout
 
 ```
@@ -67,6 +77,7 @@ src/
     editors/         code editor detection and launch
     git/             Git identity and which Git binary runs
     ipc/             handle() guard and channel registration
+    remote/          account repositories, and Git tokens for the hosted URL
     repos/           registry, status, watchers and the local Git workspace
     settings/        user settings and theme
     config.ts        API origin and allowed renderer origins
@@ -85,9 +96,10 @@ backend/
     index.ts         Worker entry: fetch and the daily cleanup cron
     db/              Drizzle schema and client
     jobs/            scheduled jobs
-    lib/             crypto, errors, logging
+    lib/             crypto, errors, logging, the Git host (Artifacts)
     middleware/      validation, rate limits, requireAuth, error handler
     modules/auth/    Google OAuth, desktop handoff, sessions, tokens
+    modules/repositories/  repository metadata, lifecycle and Git credentials
   drizzle/migrations/
   test/
 ```

@@ -299,8 +299,8 @@ export function createRepositoryStore(db: AppDatabase) {
         ).run(accountId);
         const insert = db.prepare(
           `INSERT INTO remote_repository_cache
-             (account_id, remote_id, name, description, visibility, default_branch, status, created_at, updated_at, fetched_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (account_id, remote_id, name, description, visibility, default_branch, status, git_url, created_at, updated_at, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const repo of repositories) {
           insert.run(
@@ -311,6 +311,7 @@ export function createRepositoryStore(db: AppDatabase) {
             repo.visibility,
             repo.defaultBranch,
             repo.status,
+            repo.gitUrl ?? null,
             repo.createdAt,
             repo.updatedAt,
             fetchedAt,
@@ -323,7 +324,7 @@ export function createRepositoryStore(db: AppDatabase) {
       return (
         db
           .prepare(
-            `SELECT remote_id, name, description, visibility, default_branch, status, created_at, updated_at
+            `SELECT remote_id, name, description, visibility, default_branch, status, git_url, created_at, updated_at
              FROM remote_repository_cache WHERE account_id = ? ORDER BY updated_at DESC`,
           )
           .all(accountId) as {
@@ -333,6 +334,7 @@ export function createRepositoryStore(db: AppDatabase) {
           visibility: 'private';
           default_branch: string;
           status: RemoteRepository['status'];
+          git_url: string | null;
           created_at: number;
           updated_at: number;
         }[]
@@ -343,6 +345,7 @@ export function createRepositoryStore(db: AppDatabase) {
         visibility: row.visibility,
         defaultBranch: row.default_branch,
         status: row.status,
+        gitUrl: row.git_url,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       }));

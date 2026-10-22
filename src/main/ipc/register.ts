@@ -28,6 +28,7 @@ import {
   createBranchInputSchema,
   diffInputSchema,
   fetchInputSchema,
+  pushInputSchema,
   logInputSchema,
   openInEditorInputSchema,
   pathsInputSchema,
@@ -273,6 +274,21 @@ export function registerIpc(
     userFacing((remoteId) => remote.activity(remoteId)),
   );
   handle(
+    r.addHostedRemote,
+    id,
+    userFacing((repoId) => repos.addHostedRemote(repoId)),
+  );
+  handle(
+    r.copyGitCommand,
+    id,
+    userFacing((repoId) => repos.copyGitCommand(repoId)),
+  );
+  handle(
+    r.revokeGitTokens,
+    id,
+    userFacing((repoId) => repos.revokeGitTokens(repoId)),
+  );
+  handle(
     r.history,
     id,
     userFacing((repoId) => repos.history(repoId)),
@@ -345,6 +361,12 @@ export function registerIpc(
     userFacing((input) => workspace.fetch(input)),
   );
   handle(w.cancelFetch, z.uuid(), (jobId) => workspace.cancelFetch(jobId));
+  handle(
+    w.push,
+    pushInputSchema,
+    userFacing((input) => workspace.push(input)),
+  );
+  handle(w.cancelPush, z.uuid(), (jobId) => workspace.cancelPush(jobId));
   handle(
     w.remotes,
     id,

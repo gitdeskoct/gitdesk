@@ -42,6 +42,7 @@ import {
   createRemoteService,
   type RemoteService,
 } from './remote/remote-service';
+import { createGitAuth, type GitAuth } from './remote/git-auth';
 import { createRepositoryService } from './repos/repository-service';
 import { createRepositoryStore } from './repos/repository-store';
 import { hardenApp } from './security';
@@ -147,6 +148,8 @@ async function start() {
   const api = createApiClient(apiOrigin, (url, init) => net.fetch(url, init));
   // Assigned right after auth exists; auth's emit only fires after start-up.
   let remote: RemoteService | null = null;
+  // Held Git tokens; dropped on sign-out so the next account never reuses them.
+  let gitAuth: GitAuth | null = null;
   const auth = new AuthService({
     api,
     store: new CredentialStore(path.join(userData, 'session.bin'), safeStorage),
@@ -178,6 +181,7 @@ async function start() {
       ),
     emit: (status) => {
       remote?.handleAuth(status);
+      if (status.status === 'signed-out') gitAuth?.forget();
       mainWindow?.webContents.send(IPC.authStatusChanged, status);
     },
   });
@@ -220,9 +224,23 @@ async function start() {
     store,
     settings: () => settings.get(),
   });
+  const account = remote;
+  gitAuth = createGitAuth({ remote: account });
+  const tokens = gitAuth;
   const repos = createRepositoryService({
     store,
     remote,
+    hosting: {
+      hostedUrl: (remoteId) => account.hostedUrl(remoteId),
+      provision: (remoteId) => account.provision(remoteId),
+      envFor: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
+      terminalToken: (remoteId, lifetime) =>
+        account.gitCredentials(remoteId, 'write', lifetime),
+      async revoke(remoteId) {
+        tokens.forget(remoteId);
+        return account.revokeGitCredentials(remoteId);
+      },
+    },
     settings: () => settings.get(),
     emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
     emitProgress: (event) =>
@@ -286,6 +304,7 @@ async function start() {
   });
   const ws = createWorkspaceService({
     store,
+    gitAuth: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
     refresh: (id) => repos.refresh(id),
     addActivity: (id, type, detail) =>
       store.addActivity(id, type, detail, Date.now()),

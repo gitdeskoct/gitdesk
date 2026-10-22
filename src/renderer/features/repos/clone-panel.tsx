@@ -4,7 +4,6 @@ import { Check, Lock } from 'lucide-react';
 import { useState } from 'react';
 import {
   repositoryNameSchema,
-  SYNC_TRANSPORT_READY,
   type RemoteRepository,
 } from '../../../shared/repos';
 import { OfflineArt, RemoteArt } from '../../components/illustrations';
@@ -33,7 +32,7 @@ import { useOpenRepo } from './repo-row';
 import { SidePanel } from './side-panel';
 
 const BLOCKED_REASON =
-  "Cloning needs the sync transport, which your account doesn't have yet.";
+  "This repository has no Git URL, so there's nothing to clone. The gitdesk server needs Git hosting turned on.";
 
 function Running({
   jobId,
@@ -79,7 +78,14 @@ function Running({
 
 // The whole clone flow: pick a repository from the account, pick a folder, clone with progress.
 // The final step waits on the sync transport; until then the button says so instead of failing.
-export function ClonePanel({ onClose }: { onClose: () => void }) {
+// `initial` preselects a repository, as when cloning from its own page.
+export function ClonePanel({
+  onClose,
+  initial = null,
+}: {
+  onClose: () => void;
+  initial?: RemoteRepository | null;
+}) {
   const { navigate } = useNavigation();
   const { setPanel } = useWorkspaceUi();
   const { data: auth } = useAuthStatus();
@@ -92,8 +98,8 @@ export function ClonePanel({ onClose }: { onClose: () => void }) {
   const clone = useCloneRepository();
   const openRepo = useOpenRepo();
   const toast = useToast();
-  const [picked, setPicked] = useState<RemoteRepository | null>(null);
-  const [name, setName] = useState('');
+  const [picked, setPicked] = useState<RemoteRepository | null>(initial);
+  const [name, setName] = useState(initial?.name ?? '');
   const [nameError, setNameError] = useState<string>();
   const [location, setLocation] = useState<{
     token: string;
@@ -328,7 +334,7 @@ export function ClonePanel({ onClose }: { onClose: () => void }) {
           maxLength={100}
         />
 
-        {!SYNC_TRANSPORT_READY && (
+        {picked && !picked.gitUrl && (
           <InlineStatus>
             <span className="flex items-start gap-2">
               <Lock
@@ -354,13 +360,11 @@ export function ClonePanel({ onClose }: { onClose: () => void }) {
         <div className="flex gap-2">
           <Button
             variant="primary"
-            aria-disabled={
-              !SYNC_TRANSPORT_READY || !picked || !location || undefined
-            }
+            aria-disabled={!picked?.gitUrl || !location || undefined}
             aria-describedby={
-              SYNC_TRANSPORT_READY ? undefined : 'clone-blocked'
+              picked && !picked.gitUrl ? 'clone-blocked' : undefined
             }
-            onClick={() => SYNC_TRANSPORT_READY && start()}
+            onClick={() => picked?.gitUrl && start()}
           >
             Clone
           </Button>

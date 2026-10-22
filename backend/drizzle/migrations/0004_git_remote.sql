@@ -1,0 +1,1 @@
+ALTER TABLE `repositories` ADD `git_remote` text;

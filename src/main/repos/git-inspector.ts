@@ -90,6 +90,8 @@ export function gitAt(
     allowProtocolOverride?: boolean;
     // Inactivity limit; commits get longer because hooks such as linters can run for a while.
     timeoutMs?: number;
+    // GIT_CONFIG_* from gitAuthEnv only: credentials for one URL, kept off the command line.
+    auth?: Record<string, string>;
   } = {},
 ): SimpleGit {
   return simpleGit({
@@ -108,6 +110,7 @@ export function gitAt(
       allowUnsafeFsMonitor: true,
       allowUnsafeProtocolOverride: options.allowProtocolOverride ?? false,
       allowUnsafeCustomBinary: gitBinary !== null,
+      allowUnsafeConfigEnvCount: options.auth !== undefined,
     },
     // simple-git blocks GIT_* variables unless named; these are the only ones gitdesk sets.
     allowEnvironment: [
@@ -118,8 +121,21 @@ export function gitAt(
       'GIT_AUTHOR_EMAIL',
       'GIT_COMMITTER_NAME',
       'GIT_COMMITTER_EMAIL',
+      ...(options.auth ? Object.keys(options.auth) : []),
     ],
-  }).env(gitEnv());
+  }).env({ ...gitEnv(), ...options.auth });
+}
+
+// A bearer token for exactly one https URL, passed as GIT_CONFIG_* so it never appears in the
+// process list or .git/config. Redirects are off for that URL so the header can't follow one.
+export function gitAuthEnv(url: string, token: string): Record<string, string> {
+  return {
+    GIT_CONFIG_COUNT: '2',
+    GIT_CONFIG_KEY_0: `http.${url}.extraHeader`,
+    GIT_CONFIG_VALUE_0: `Authorization: Bearer ${token}`,
+    GIT_CONFIG_KEY_1: `http.${url}.followRedirects`,
+    GIT_CONFIG_VALUE_1: 'false',
+  };
 }
 
 export class GitError extends UserError {}

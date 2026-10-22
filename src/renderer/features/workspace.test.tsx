@@ -85,6 +85,7 @@ function repo(overrides: Partial<RepositorySummary> = {}): RepositorySummary {
 }
 
 const signedOut: RemoteOverview = {
+  gitHosting: null,
   state: 'signed-out',
   total: null,
   recent: [],
@@ -387,6 +388,7 @@ const remote = (
   visibility: 'private',
   defaultBranch: 'main',
   status: 'ready',
+  gitUrl: null,
   createdAt: Date.now() - 86_400_000,
   updatedAt: Date.now() - 3_600_000,
   ...overrides,

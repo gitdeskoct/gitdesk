@@ -107,6 +107,14 @@ export const settingsSchema = z.object({
   ]),
   // An editor id from the detected list, or system for the OS default app. Main only ever
   // launches an executable it found itself, so this can't name a program.
+  // Git hosting: the remote name used when linking adds the account's Git URL, and how long a
+  // token in a copied terminal command lasts, in seconds.
+  hostingRemoteName: z.enum(['auto', 'gitdesk', 'none']),
+  hostingTokenLifetime: z.union([
+    z.literal(900),
+    z.literal(3600),
+    z.literal(28_800),
+  ]),
   editor: z.enum(EDITOR_IDS),
   editorGotoLine: z.boolean(),
   editorOpenFolder: z.boolean(),
@@ -159,6 +167,8 @@ export const DEFAULT_SETTINGS: Settings = {
   commitSummaryGuide: 72,
   commitSignoff: false,
   autoFetch: 0,
+  hostingRemoteName: 'auto',
+  hostingTokenLifetime: 3600,
   editor: 'system',
   editorGotoLine: true,
   editorOpenFolder: true,

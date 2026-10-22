@@ -9,6 +9,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   git: 'Git',
   shortcuts: 'Shortcuts',
   account: 'Account',
+  hosting: 'Git hosting',
   devices: 'Devices',
   about: 'About',
 };
@@ -358,6 +359,30 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Sign out',
     section: 'account',
     keywords: 'logout log out session',
+  },
+  {
+    id: 'hosting-status',
+    label: 'Git hosting',
+    section: 'hosting',
+    keywords: 'git url clone push remote artifacts server',
+  },
+  {
+    id: 'hosting-remote-name',
+    label: 'Add the Git URL as',
+    section: 'hosting',
+    keywords: 'origin remote name link gitdesk url',
+  },
+  {
+    id: 'hosting-token-lifetime',
+    label: 'Token lifetime for copied commands',
+    section: 'hosting',
+    keywords: 'terminal token expiry push command credentials',
+  },
+  {
+    id: 'hosting-own-tokens',
+    label: 'Tokens gitdesk uses itself',
+    section: 'hosting',
+    keywords: 'token security credentials memory',
   },
   {
     id: 'devices',

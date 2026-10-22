@@ -64,6 +64,8 @@ const MIGRATIONS = [
      value TEXT NOT NULL,
      updated_at INTEGER NOT NULL
    )`,
+  // The hosted Git URL the server gave a remote, so fetch and push know it without asking again.
+  `ALTER TABLE remote_repository_cache ADD COLUMN git_url TEXT`,
 ];
 
 export type AppDatabase = DatabaseSync;

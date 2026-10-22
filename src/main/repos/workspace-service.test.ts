@@ -20,7 +20,9 @@ import {
 } from 'vitest';
 import { DEFAULT_SETTINGS, type Settings } from '../../shared/settings';
 import { openDatabase } from '../db/database';
-import { createRepositoryService } from './repository-service';
+import { UserError } from '../errors';
+import { gitAuthEnv } from './git-inspector';
+import { createRepositoryService, type Hosting } from './repository-service';
 import { createRepositoryStore } from './repository-store';
 import {
   classifyFetchError,
@@ -71,19 +73,28 @@ function makeRepo(name = 'app'): string {
   return root;
 }
 
-async function setup(root: string) {
-  const db = openDatabase(path.join(dir, 'test.db'));
+async function setup(
+  root: string,
+  extra: {
+    hosting?: Hosting;
+    gitAuth?: Parameters<typeof createWorkspaceService>[0]['gitAuth'];
+    db?: string;
+  } = {},
+) {
+  const db = openDatabase(path.join(dir, extra.db ?? 'test.db'));
   cleanups.push(() => db.close());
   const store = createRepositoryStore(db);
+  const copyText = vi.fn();
   const repos = createRepositoryService({
     store,
     remote: { create: vi.fn(), update: vi.fn() },
     settings: () => settings,
     emit: vi.fn(),
+    hosting: extra.hosting,
     desktop: {
       pickDirectory: async () => root,
       openPath: async () => '',
-      copyText: vi.fn(),
+      copyText,
       trashItem: vi.fn(),
       protectedPaths: () => [],
     },
@@ -101,6 +112,7 @@ async function setup(root: string) {
   };
   const service = createWorkspaceService({
     store,
+    gitAuth: extra.gitAuth,
     refresh: (repoId) => repos.refresh(repoId),
     addActivity: (repoId, type, detail) =>
       store.addActivity(repoId, type, detail, Date.now()),
@@ -114,7 +126,7 @@ async function setup(root: string) {
     desktop,
   });
   cleanups.push(() => service.dispose());
-  return { id, service, repos, store, desktop };
+  return { id, service, repos, store, desktop, copyText };
 }
 
 const changes = async (
@@ -426,6 +438,196 @@ describe('remotes and fetch', () => {
     await expect(
       service.fetch({ id, remote: 'missing', jobId: crypto.randomUUID() }),
     ).rejects.toThrow(/isn't configured/);
+  });
+});
+
+describe('push', () => {
+  const bareRemote = (name = 'remote.git') => {
+    const bare = path.join(dir, name);
+    git(dir, 'init', '-q', '--bare', '-b', 'main', bare);
+    return bare;
+  };
+  const job = () => crypto.randomUUID();
+
+  it('pushes the current branch, sets its upstream once, and is refused rather than forced', async () => {
+    const bare = bareRemote();
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', bare);
+    const { id, service, store } = await setup(root);
+
+    const first = await service.push({ id, jobId: job() });
+    expect(first).toMatchObject({
+      status: 'pushed',
+      remote: 'origin',
+      branch: 'main',
+    });
+    expect(git(root, 'rev-parse', '--abbrev-ref', 'main@{u}').trim()).toBe(
+      'origin/main',
+    );
+    expect(git(bare, 'rev-parse', 'main')).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(
+      store.activity(10).map((entry) => [entry.type, entry.detail]),
+    ).toContainEqual(['pushed', 'origin/main']);
+
+    // Someone else moves the remote branch; this push must not overwrite their commit.
+    const other = path.join(dir, 'other');
+    git(dir, 'clone', '-q', bare, other);
+    writeFileSync(path.join(other, 'theirs.txt'), 'theirs\n');
+    git(other, 'add', '.');
+    git(other, 'commit', '-q', '-m', 'Theirs');
+    git(other, 'push', '-q', 'origin', 'main');
+    const theirs = git(bare, 'rev-parse', 'main');
+    writeFileSync(path.join(root, 'mine.txt'), 'mine\n');
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'Mine');
+
+    const refused = await service.push({ id, jobId: job() });
+    expect(refused).toMatchObject({ status: 'failed', reason: 'rejected' });
+    expect(git(bare, 'rev-parse', 'main')).toBe(theirs);
+  });
+
+  it('says why when there is no remote or no branch', async () => {
+    const root = makeRepo();
+    const { id, service } = await setup(root);
+    expect(await service.push({ id, jobId: job() })).toMatchObject({
+      status: 'failed',
+      reason: 'no-remote',
+    });
+    git(root, 'checkout', '-q', '--detach');
+    expect(await service.push({ id, jobId: job() })).toMatchObject({
+      status: 'failed',
+      reason: 'detached',
+    });
+  });
+
+  it('asks for hosted credentials only for a linked repository, with the right scope', async () => {
+    const bare = bareRemote();
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', bare);
+    // A header scoped to an unrelated https URL: present in the env, never sent to a local path.
+    const gitAuth = vi.fn(async () =>
+      gitAuthEnv('https://example.com/r.git', 'test-token'),
+    );
+    const { id, service, store } = await setup(root, { gitAuth });
+
+    await service.fetch({ id, remote: 'origin', jobId: job() });
+    expect(gitAuth).not.toHaveBeenCalled();
+
+    const remoteId = '44444444-4444-4444-8444-444444444444';
+    store.setRemote(id, remoteId);
+    expect((await service.push({ id, jobId: job() })).status).toBe('pushed');
+    expect(gitAuth).toHaveBeenLastCalledWith(remoteId, bare, 'write');
+    const fetched = await service.fetch({ id, remote: 'origin', jobId: job() });
+    expect(fetched.status).toBe('fetched');
+    expect(gitAuth).toHaveBeenLastCalledWith(remoteId, bare, 'read');
+  });
+
+  it('reports an account error as a failed fetch without running Git', async () => {
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', 'https://example.invalid/r.git');
+    const gitAuth = vi.fn(async () => {
+      throw new UserError("The Git host didn't answer. Try again in a moment.");
+    });
+    const { id, service, store } = await setup(root, { gitAuth });
+    store.setRemote(id, '44444444-4444-4444-8444-444444444444');
+    expect(await service.fetch({ id, remote: 'origin', jobId: job() })).toEqual(
+      {
+        status: 'failed',
+        reason: 'auth',
+        message: "The Git host didn't answer. Try again in a moment.",
+      },
+    );
+  });
+});
+
+describe('hosted Git remote', () => {
+  const HOSTED = 'https://acct.artifacts.cloudflare.net/git/gitdesk/abc.git';
+  const REMOTE_ID = '55555555-5555-4555-8555-555555555555';
+  const hosting = (overrides: Partial<Hosting> = {}): Hosting => ({
+    hostedUrl: vi.fn(async () => HOSTED),
+    provision: vi.fn(),
+    envFor: vi.fn(async () => null),
+    terminalToken: vi.fn(async () => ({
+      token: 'art_v1_0123456789abcdef?expires=1790000000',
+      expiresAt: 1_790_000_000_000,
+    })),
+    revoke: vi.fn(async () => 2),
+    ...overrides,
+  });
+
+  it('adds the Git URL as origin, once, with no secret in .git/config', async () => {
+    const root = makeRepo();
+    const { id, repos, store } = await setup(root, { hosting: hosting() });
+    await expect(repos.addHostedRemote(id)).rejects.toThrow(
+      /Link this repository/,
+    );
+    store.setRemote(id, REMOTE_ID);
+
+    expect(await repos.addHostedRemote(id)).toEqual({
+      name: 'origin',
+      added: true,
+    });
+    expect(git(root, 'remote', 'get-url', 'origin').trim()).toBe(HOSTED);
+    expect(await repos.addHostedRemote(id)).toEqual({
+      name: 'origin',
+      added: false,
+    });
+    expect(
+      readFileSync(path.join(root, '.git', 'config'), 'utf8'),
+    ).not.toContain('art_v1');
+  });
+
+  it('uses gitdesk when origin points elsewhere, and never replaces it', async () => {
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', 'https://example.com/other.git');
+    const { id, repos, store } = await setup(root, { hosting: hosting() });
+    store.setRemote(id, REMOTE_ID);
+    expect(await repos.addHostedRemote(id)).toEqual({
+      name: 'gitdesk',
+      added: true,
+    });
+    expect(git(root, 'remote', 'get-url', 'origin').trim()).toBe(
+      'https://example.com/other.git',
+    );
+  });
+
+  it('says so when the server has no Git hosting', async () => {
+    const root = makeRepo();
+    const off = hosting({
+      hostedUrl: vi.fn(async () => null),
+      provision: vi.fn(async () => ({ gitUrl: null }) as never),
+    });
+    const { id, repos, store } = await setup(root, { hosting: off });
+    store.setRemote(id, REMOTE_ID);
+    await expect(repos.addHostedRemote(id)).rejects.toThrow(
+      /Git hosting turned on/,
+    );
+  });
+
+  it('copies a push command that names HEAD, never a branch, and refuses unsafe tokens', async () => {
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', HOSTED);
+    const safe = await setup(root, { hosting: hosting() });
+    safe.store.setRemote(safe.id, REMOTE_ID);
+    expect(await safe.repos.copyGitCommand(safe.id)).toEqual({
+      expiresAt: 1_790_000_000_000,
+    });
+    expect(safe.copyText).toHaveBeenCalledWith(
+      `git -c "http.${HOSTED}.extraHeader=Authorization: Bearer art_v1_0123456789abcdef?expires=1790000000" push origin HEAD`,
+    );
+
+    const unsafe = hosting({
+      terminalToken: vi.fn(async () => ({
+        token: 'x"; rm -rf ~; "',
+        expiresAt: 1,
+      })),
+    });
+    const bad = await setup(root, { hosting: unsafe, db: 'other.db' });
+    bad.store.setRemote(bad.id, REMOTE_ID);
+    await expect(bad.repos.copyGitCommand(bad.id)).rejects.toThrow(
+      /isn't safe/,
+    );
+    expect(bad.copyText).not.toHaveBeenCalled();
   });
 });
 

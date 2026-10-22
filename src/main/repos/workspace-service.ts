@@ -21,6 +21,7 @@ import {
   type DiffInput,
   type DiffResult,
   type FetchResult,
+  type PushResult,
   type HistoryPage,
   type LocalBranch,
   type PathsInput,
@@ -80,6 +81,8 @@ const MAX_FULL_LINES = 50_000;
 const BATCH = 100;
 const COMMIT_TIMEOUT_MS = 120_000;
 const FETCH_TIMEOUT_MS = 60_000;
+// Inactivity limit for a push; Git reports progress while it sends, so only a stall trips it.
+const PUSH_TIMEOUT_MS = 120_000;
 const MAX_OUTPUT = 4000;
 const MAX_ANALYTICS_COMMITS = 5000;
 const OID = /^[0-9a-f]{40,64}$/;
@@ -192,6 +195,33 @@ const FETCH_MESSAGES: Record<
   failed: "Git couldn't fetch from this remote.",
 };
 
+type PushFailure = Extract<PushResult, { status: 'failed' }>['reason'];
+
+export function classifyPushError(
+  text: string,
+): Exclude<PushFailure, 'cancelled' | 'no-remote' | 'detached'> {
+  if (
+    /\[rejected\]|\[remote rejected\]|non-fast-forward|fetch first|Updates were rejected|hook declined/i.test(
+      text,
+    )
+  )
+    return 'rejected';
+  return classifyFetchError(text);
+}
+
+const PUSH_MESSAGES: Record<PushFailure, string> = {
+  ...FETCH_MESSAGES,
+  failed: "Git couldn't push to this remote.",
+  cancelled:
+    'Push cancelled. The remote may have received part of it; push again to finish.',
+  rejected:
+    "The remote refused the push. Usually it has commits this branch doesn't: fetch, merge them in, then push again. gitdesk never force-pushes.",
+  'no-remote':
+    'This repository has no remote to push to. Add one on the Remotes tab.',
+  detached:
+    'HEAD is not on a branch, so there is nothing to push. Switch to a branch first.',
+};
+
 // Git's refusal to switch names the files in the way, one per tab-indented line.
 export function parseBlockedFiles(text: string): string[] {
   const files: string[] = [];
@@ -217,9 +247,15 @@ export function createWorkspaceService(deps: {
   refresh: (id: string) => Promise<void>;
   addActivity: (
     id: string,
-    type: 'fetched' | 'branch-created',
+    type: 'fetched' | 'pushed' | 'branch-created',
     detail: string | null,
   ) => void;
+  // Credentials for the account's hosted remote of a linked repository; null for any other URL.
+  gitAuth?: (
+    remoteId: string,
+    url: string,
+    scope: 'read' | 'write',
+  ) => Promise<Record<string, string> | null>;
   desktop: WorkspaceDesktop;
   settings: () => Settings;
   watcher: TreeWatcher;
@@ -231,6 +267,7 @@ export function createWorkspaceService(deps: {
   const log = deps.log ?? console;
   const chains = new Map<string, Promise<unknown>>();
   const fetches = new Map<string, AbortController>();
+  const pushes = new Map<string, AbortController>();
   const analyticsCache = new Map<string, RepositoryAnalytics>();
   const watchCounts = new Map<string, number>();
   let autoFetch: { id: string; timer: NodeJS.Timeout } | null = null;
@@ -612,26 +649,44 @@ export function createWorkspaceService(deps: {
     return { status: 'switched', branch };
   }
 
-  async function fetchRemote(
+  // Credentials only for the hosted remote of a linked repository, read from its own config.
+  async function hostedAuth(
     id: string,
+    root: string,
     remote: string,
+    scope: 'read' | 'write',
+  ): Promise<Record<string, string> | undefined> {
+    const remoteId = deps.store.get(id)?.remoteId;
+    if (!remoteId || !deps.gitAuth) return undefined;
+    const args = [
+      'remote',
+      'get-url',
+      ...(scope === 'write' ? ['--push'] : []),
+      remote,
+    ];
+    const url = (
+      await gitAt(root)
+        .raw(args)
+        .catch(() => '')
+    ).trim();
+    if (!url) return undefined;
+    return (await deps.gitAuth(remoteId, url, scope)) ?? undefined;
+  }
+
+  // Fetch and push share one setup: transports that run programs (ext::) are refused, and Git's
+  // progress lines become progress events for the job.
+  function transferGit(
+    root: string,
     jobId: string,
-  ): Promise<FetchResult> {
-    const root = rootOf(id);
-    const remotes = await remoteNames(root);
-    if (!remotes.includes(remote) || remote.startsWith('-'))
-      throw new WorkspaceError(
-        "That remote isn't configured in this repository.",
-      );
-    if (fetches.has(jobId))
-      throw new WorkspaceError('That fetch is already running.');
-    const controller = new AbortController();
-    fetches.set(jobId, controller);
-    // ext:: and other transports that run programs are refused; prune follows the user's fetch.prune.
+    signal: AbortSignal,
+    timeoutMs: number,
+    auth: Record<string, string> | undefined,
+  ) {
     const git = gitAt(root, {
-      abort: controller.signal,
-      timeoutMs: FETCH_TIMEOUT_MS,
+      abort: signal,
+      timeoutMs,
       allowProtocolOverride: true,
+      auth,
       config: [
         'protocol.allow=never',
         'protocol.https.allow=always',
@@ -650,6 +705,45 @@ export function createWorkspaceService(deps: {
         }
       });
     });
+    return git;
+  }
+
+  const accountMessage = (err: unknown, fallback: string) =>
+    err instanceof UserError ? err.message : fallback;
+
+  async function fetchRemote(
+    id: string,
+    remote: string,
+    jobId: string,
+  ): Promise<FetchResult> {
+    const root = rootOf(id);
+    const remotes = await remoteNames(root);
+    if (!remotes.includes(remote) || remote.startsWith('-'))
+      throw new WorkspaceError(
+        "That remote isn't configured in this repository.",
+      );
+    if (fetches.has(jobId))
+      throw new WorkspaceError('That fetch is already running.');
+    let auth;
+    try {
+      auth = await hostedAuth(id, root, remote, 'read');
+    } catch (err) {
+      return {
+        status: 'failed',
+        reason: 'auth',
+        message: accountMessage(err, FETCH_MESSAGES.auth),
+      };
+    }
+    const controller = new AbortController();
+    fetches.set(jobId, controller);
+    // Prune follows the user's own fetch.prune.
+    const git = transferGit(
+      root,
+      jobId,
+      controller.signal,
+      FETCH_TIMEOUT_MS,
+      auth,
+    );
     try {
       await git.raw(['fetch', '--progress', '--recurse-submodules=no', remote]);
       deps.addActivity(id, 'fetched', remote);
@@ -661,6 +755,79 @@ export function createWorkspaceService(deps: {
       return { status: 'failed', reason, message: FETCH_MESSAGES[reason] };
     } finally {
       fetches.delete(jobId);
+      await deps.refresh(id).catch(() => undefined);
+    }
+  }
+
+  // The current branch goes to its upstream when it has one on a configured remote; otherwise to
+  // the same name on the default remote, which then becomes its upstream. Never a force push.
+  async function pushBranch(id: string, jobId: string): Promise<PushResult> {
+    const root = rootOf(id);
+    const failed = (
+      reason: PushFailure,
+      message = PUSH_MESSAGES[reason],
+    ): PushResult => ({
+      status: 'failed',
+      reason,
+      message,
+    });
+    const branch = await currentBranch(root);
+    if (!branch) return failed('detached');
+    const config = (key: string) =>
+      gitAt(root)
+        .raw(['config', '--get', key])
+        .then((value) => value.trim())
+        .catch(() => '');
+    const [upstreamRemote, upstreamRef, remotes] = await Promise.all([
+      config(`branch.${branch}.remote`),
+      config(`branch.${branch}.merge`),
+      remoteNames(root),
+    ]);
+    const tracked =
+      remotes.includes(upstreamRemote) && upstreamRef.startsWith('refs/heads/');
+    const remote = tracked ? upstreamRemote : await defaultRemote(id, root);
+    if (!remote || remote.startsWith('-')) return failed('no-remote');
+    if (pushes.has(jobId))
+      throw new WorkspaceError('That push is already running.');
+    let auth;
+    try {
+      auth = await hostedAuth(id, root, remote, 'write');
+    } catch (err) {
+      return failed('auth', accountMessage(err, PUSH_MESSAGES.auth));
+    }
+    const controller = new AbortController();
+    pushes.set(jobId, controller);
+    const git = transferGit(
+      root,
+      jobId,
+      controller.signal,
+      PUSH_TIMEOUT_MS,
+      auth,
+    );
+    const target = tracked ? upstreamRef : `refs/heads/${branch}`;
+    try {
+      await git.raw([
+        'push',
+        '--progress',
+        '--recurse-submodules=no',
+        ...(tracked ? [] : ['--set-upstream']),
+        remote,
+        `refs/heads/${branch}:${target}`,
+      ]);
+      deps.addActivity(
+        id,
+        'pushed',
+        `${remote}/${target.slice('refs/heads/'.length)}`,
+      );
+      return { status: 'pushed', remote, branch, at: now() };
+    } catch (err) {
+      return failed(
+        controller.signal.aborted
+          ? 'cancelled'
+          : classifyPushError(errorText(err)),
+      );
+    } finally {
+      pushes.delete(jobId);
       await deps.refresh(id).catch(() => undefined);
     }
   }
@@ -996,6 +1163,13 @@ export function createWorkspaceService(deps: {
       fetches.get(jobId)?.abort();
     },
 
+    push: (input: { id: string; jobId: string }) =>
+      pushBranch(input.id, input.jobId),
+
+    cancelPush(jobId: string): void {
+      pushes.get(jobId)?.abort();
+    },
+
     async remotes(id: string): Promise<RemoteInfo[]> {
       const root = rootOf(id);
       const output = await gitRaw(root, ['remote', '-v']);
@@ -1324,6 +1498,7 @@ export function createWorkspaceService(deps: {
 
     dispose(): void {
       for (const controller of fetches.values()) controller.abort();
+      for (const controller of pushes.values()) controller.abort();
       scheduleAutoFetch(null);
       deps.watcher.dispose();
     },

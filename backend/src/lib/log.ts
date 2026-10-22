@@ -7,6 +7,9 @@ type LogFields = {
   path?: string;
   status?: number;
   error?: string;
+  // Which kind of Git token was issued, never the token itself.
+  scope?: 'read' | 'write';
+  lifetime?: number;
 };
 
 export function logEvent(

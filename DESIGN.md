@@ -250,6 +250,18 @@ Lists on Home show 6 items per page by default (Settings › Workspace offers 10
 - **Git's states stay apart.** Conflicts, Staged, Not staged and Untracked are separate groups, and a file with staged and unstaged edits appears in both. Ignored files never appear and Stage all never stages them.
 - **Local means local.** The commit button names the branch and says the commit stays on this computer until you push. Fetch updates remote-tracking branches only and says so.
 - **Git decides what is safe.** A switch that would overwrite edits is refused by Git; gitdesk lists the files in a warning band and never forces or stashes. Discard confirms inline in a `danger-soft` band that names the files; untracked files go to the system trash.
+- **The header is one row.** Name, tags, description and path sit on the left; branch picker, status chips, "Fetched …" and Fetch on the right. It wraps instead of stacking, so the tabs start close to the top.
+- **The commit message folds away.** In the split file pane, Hide folds the summary and description into one row (Show message, the summary so far, Commit). The choice is remembered on this computer. Committing with no summary opens the fields and focuses Summary instead of failing out of sight.
+- **Authors are 6px squares.** Your own commits (matched by your gitdesk account email or your global Git email) show your gitdesk account picture, or initials on the accent tint when there is no picture. Everyone else gets initials on `control`. gitdesk never asks another service for pictures.
+- **Size is measured, not guessed.** Repository Settings shows the folder on disk split into Git history (`chart-1`), files in the last commit (`chart-2`) and everything else (`faint`), with a stacked bar, a sentence and the largest tracked files. It re-measures after status changes (cached 30 seconds) and on Measure again. A very large folder stops counting and says the numbers are a lower bound. Rounding never says 0% or 100% about a part that is neither.
+
+## Git hosting
+
+- **The URL is safe to show.** The hosted Git URL holds no credentials, so it is shown in full in a sunken mono field with a copy button, on the Remotes tab and the remote repository page. It says so under the field.
+- **Tokens stay out of sight.** No screen ever shows a token. Copy terminal command copies a command and says only until when its token works; its row also says that anyone who sees the command can push until then.
+- **Revoke confirms inline**, in a `danger-soft` band that names the repository and says copied commands stop working.
+- **Push never forces.** The header shows Push with the count the upstream doesn't have yet. A refused push explains fetching and merging first; it never offers to force.
+- **Off is a state, not an error.** When the server has Git hosting off, the URL row says so in words, the clone button stays unavailable with the reason beside it, and Settings › Git hosting shows Off with a warning icon.
 
 ## Code and diffs
 

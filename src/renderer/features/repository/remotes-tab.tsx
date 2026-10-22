@@ -1,8 +1,5 @@
 import { CloudDownload, FolderOpen } from 'lucide-react';
-import type {
-  RemoteRepository,
-  RepositorySummary,
-} from '../../../shared/repos';
+import type { RepositorySummary } from '../../../shared/repos';
 import { RemoteArt, OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
@@ -13,10 +10,13 @@ import {
   useAuthStatus,
   useLinkRemote,
   useRemotes,
+  useRemoteRepository,
   useRevealRepository,
+  useSettings,
 } from '../../lib/queries';
 import { fileManagerLabel } from '../repos/repo-actions';
-import { REMOTE_STATUS, Section } from './history';
+import { Section } from './history';
+import { HostedRemoteSection, sameGitUrl } from './hosted-remote';
 import { useFetchAction } from './use-fetch';
 
 const PROTOCOL: Record<string, string> = {
@@ -29,19 +29,18 @@ const PROTOCOL: Record<string, string> = {
 };
 
 // The repository's own Git remotes, from its config, and the account link kept by gitdesk.
-export function RemotesTab({
-  repo,
-  remote,
-}: {
-  repo: RepositorySummary;
-  remote: RemoteRepository | null;
-}) {
+export function RemotesTab({ repo }: { repo: RepositorySummary }) {
   const remotes = useRemotes(repo.id, repo.statusAt);
   const action = useFetchAction(repo.id);
   const link = useLinkRemote();
   const reveal = useRevealRepository();
   const { data: auth } = useAuthStatus();
+  const { data: settings } = useSettings();
   const signedIn = auth?.status === 'authenticated';
+  const hosted = useRemoteRepository(
+    repo.remoteId ?? '',
+    !!repo.remoteId && signedIn,
+  ).data?.gitUrl;
 
   let body;
   if (remotes.isPending)
@@ -107,8 +106,13 @@ export function RemotesTab({
           return (
             <li key={entry.name} className="border-b border-line py-3">
               <div className="grid grid-cols-[minmax(6rem,9rem)_minmax(0,1fr)_auto] items-center gap-x-4 gap-y-1">
-                <b className="truncate font-mono text-[0.8125rem] font-semibold text-ink">
-                  {entry.name}
+                <b className="flex min-w-0 items-center gap-1.5 font-mono text-[0.8125rem] font-semibold text-ink">
+                  <span className="truncate">{entry.name}</span>
+                  {hosted && sameGitUrl(entry.fetchUrl, hosted) && (
+                    <span className="inline-flex h-5 items-center rounded-[4px] border border-line bg-sunken px-1.5 font-sans text-[0.71875rem] font-medium">
+                      gitdesk
+                    </span>
+                  )}
                 </b>
                 <div className="min-w-0">
                   <div
@@ -119,6 +123,9 @@ export function RemotesTab({
                   </div>
                   <div className="text-xs text-muted">
                     {PROTOCOL[entry.protocol]}
+                    {hosted && sameGitUrl(entry.fetchUrl, hosted)
+                      ? ' · signed in through your account'
+                      : ''}
                     {entry.pushUrl && ` · pushes to ${entry.pushUrl}`}
                   </div>
                 </div>
@@ -185,32 +192,11 @@ export function RemotesTab({
       >
         {body}
       </Section>
-      <Section
-        id="account-link-heading"
-        title="Your gitdesk account"
-        meta="Metadata only"
-      >
-        <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-4 gap-y-2.5 border-y border-line py-3 text-sm">
-          <dt className="text-muted">Linked remote</dt>
-          <dd className="min-w-0 text-ink">
-            {!repo.remoteId
-              ? 'Not linked to your account'
-              : remote
-                ? `${remote.name} · ${REMOTE_STATUS[remote.status].label} · private`
-                : 'Linked to your account'}
-          </dd>
-          <dt className="text-muted">Git transport</dt>
-          <dd className="text-ink">
-            Not built yet. Fetching from and pushing to gitdesk hosting needs
-            the sync service. Fetch from any Git remote above works now.
-          </dd>
-        </dl>
-        {link.isError && (
-          <InlineStatus tone="danger" className="mt-3">
-            {ipcErrorMessage(link.error, "The remote wasn't created.")}
-          </InlineStatus>
-        )}
-      </Section>
+      <HostedRemoteSection
+        repo={repo}
+        gitRemotes={remotes.data}
+        tokenLifetime={settings?.hostingTokenLifetime ?? 3600}
+      />
     </>
   );
 }
