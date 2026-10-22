@@ -202,6 +202,26 @@ export function createRepositoryStore(db: AppDatabase) {
       ).run(remoteId, id);
     },
 
+    // Only fields that are passed change; undefined keeps the stored value.
+    rename(
+      id: string,
+      patch: { name?: string; description?: string | null },
+      now: number,
+    ): void {
+      transaction(db, () => {
+        if (patch.name !== undefined)
+          db.prepare(
+            'UPDATE local_repositories SET display_name = ? WHERE id = ?',
+          ).run(patch.name, id);
+        if (patch.description !== undefined)
+          db.prepare(
+            'UPDATE local_repositories SET description = ? WHERE id = ?',
+          ).run(patch.description, id);
+        if (patch.name !== undefined)
+          this.addActivity(id, 'renamed', patch.name, now);
+      });
+    },
+
     clearRemoteLink(remoteId: string): void {
       db.prepare(
         'UPDATE local_repositories SET remote_id = NULL WHERE remote_id = ?',
@@ -274,8 +294,8 @@ export function createRepositoryStore(db: AppDatabase) {
         ).run(accountId);
         const insert = db.prepare(
           `INSERT INTO remote_repository_cache
-             (account_id, remote_id, name, description, visibility, default_branch, created_at, updated_at, fetched_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+             (account_id, remote_id, name, description, visibility, default_branch, status, created_at, updated_at, fetched_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const repo of repositories) {
           insert.run(
@@ -285,6 +305,7 @@ export function createRepositoryStore(db: AppDatabase) {
             repo.description,
             repo.visibility,
             repo.defaultBranch,
+            repo.status,
             repo.createdAt,
             repo.updatedAt,
             fetchedAt,
@@ -297,7 +318,7 @@ export function createRepositoryStore(db: AppDatabase) {
       return (
         db
           .prepare(
-            `SELECT remote_id, name, description, visibility, default_branch, created_at, updated_at
+            `SELECT remote_id, name, description, visibility, default_branch, status, created_at, updated_at
              FROM remote_repository_cache WHERE account_id = ? ORDER BY updated_at DESC`,
           )
           .all(accountId) as {
@@ -306,6 +327,7 @@ export function createRepositoryStore(db: AppDatabase) {
           description: string | null;
           visibility: 'private';
           default_branch: string;
+          status: RemoteRepository['status'];
           created_at: number;
           updated_at: number;
         }[]
@@ -315,6 +337,7 @@ export function createRepositoryStore(db: AppDatabase) {
         description: row.description,
         visibility: row.visibility,
         defaultBranch: row.default_branch,
+        status: row.status,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
       }));

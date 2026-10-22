@@ -15,6 +15,8 @@ export const settingsSchema = z.object({
   // Workspace: how Home is laid out and how often repositories are checked.
   dashboardLayout: z.enum(['auto', 'centered', 'split']),
   dashboardDensity: z.enum(['comfortable', 'compact']),
+  // Repositories: one centered column, or the list beside the selected repository. Auto splits on wide windows.
+  repositoriesLayout: z.enum(['auto', 'centered', 'split']),
   watchRepositories: z.boolean(),
   refreshOnFocus: z.boolean(),
   // Minutes between background checks while the window is open; 0 turns them off.
@@ -55,6 +57,7 @@ export const DEFAULT_SETTINGS: Settings = {
   localOnly: false,
   dashboardLayout: 'auto',
   dashboardDensity: 'comfortable',
+  repositoriesLayout: 'auto',
   watchRepositories: true,
   refreshOnFocus: true,
   backgroundRefresh: 5,

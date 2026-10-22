@@ -17,12 +17,16 @@ export type SettingsSection =
   | 'devices'
   | 'about';
 export type RepoShow = 'all' | 'changed' | 'ahead' | 'behind' | 'problems';
+// Where a repository lives. Counts overlap: a linked repository is local and remote at once.
+export type RepoScope = 'all' | 'local' | 'remote' | 'linked';
 export type Route =
   | { name: 'home' | 'pulls' | 'issues' }
-  // `show` lets Home's statistics open the list already filtered.
-  | { name: 'repositories'; show?: RepoShow }
+  // `show` and `scope` let Home's statistics open the list already filtered.
+  | { name: 'repositories'; show?: RepoShow; scope?: RepoScope }
   // A registered repository, by gitdesk's id; the path stays in main.
   | { name: 'repository'; id: string }
+  // A repository in the account with no registration on this computer, by its remote id.
+  | { name: 'remote-repository'; id: string }
   | { name: 'settings'; section: SettingsSection; row?: string };
 
 type Navigation = { route: Route; navigate: (route: Route) => void };

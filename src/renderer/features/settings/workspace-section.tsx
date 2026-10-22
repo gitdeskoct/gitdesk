@@ -46,7 +46,8 @@ export function WorkspaceSection() {
   return (
     <>
       <PageTitle title="Workspace">
-        How Home is laid out and how often gitdesk checks your repositories.
+        How Home and Repositories are laid out, and how often gitdesk checks
+        your repositories.
       </PageTitle>
       <SettingGroup title="Home">
         <SettingRow
@@ -71,6 +72,22 @@ export function WorkspaceSection() {
             value={settings.dashboardDensity}
             options={DENSITIES}
             onChange={(dashboardDensity) => update.mutate({ dashboardDensity })}
+          />
+        </SettingRow>
+      </SettingGroup>
+      <SettingGroup title="Repositories">
+        <SettingRow
+          id="repositories-layout"
+          label="Layout"
+          description="Split keeps the list beside the selected repository. Auto splits when the window is wide enough."
+        >
+          <Segmented
+            label="Repositories layout"
+            value={settings.repositoriesLayout}
+            options={LAYOUTS}
+            onChange={(repositoriesLayout) =>
+              update.mutate({ repositoriesLayout })
+            }
           />
         </SettingRow>
       </SettingGroup>

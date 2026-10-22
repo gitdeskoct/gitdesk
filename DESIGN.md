@@ -236,9 +236,16 @@ One rule: a **system notification** while gitdesk is in the background, the **in
 
 Lists on Home show 6 items per page by default (Settings › Workspace offers 10 and 20). The count sits on the left ("7–12 of 31"), the pages on the right: previous, numbers that collapse with an ellipsis past five pages, next. The current page is the `control` fill in `ink`; arrow keys turn pages while the pager has focus. One page needs no pager.
 
+## Repositories
+
+- **One list, three overlapping sets.** Local is registered on this computer, Remote is in the account, Linked is both. The statistics strip is the filter and says the counts overlap. State filters (Changed, Ahead and so on) only match repositories on this computer.
+- **Two layouts, one set of components.** Centered shows the table in the content column. Split shows the list beside the selected repository; arrows move the selection and Enter opens the full page. Under 860px of content (1100px for Auto) split falls back to the list, and a row opens its page. The choice lives in Settings › Workspace.
+- **Charts answer a question.** The details chart is titled with the question it answers, counts commits reachable from the current branch per local-time week by commit date, and has a text summary and a hidden table for screen readers. Bars are focusable and name their week. No scores, no percentages of health.
+- **Words, not zeros.** A number that has nothing to compare against says so (Not connected), and an unchecked folder is never called safe to delete.
+
 ## Destructive confirmations
 
-Removing a repository from gitdesk, removing several, and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Deleting a remote also asks for its name to be typed, because it can't be undone.
+Removing a repository from gitdesk, removing several, disconnecting a remote, moving a folder to the system trash and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Each names the one thing it touches. Moving a folder to the trash and deleting a remote also ask for the name to be typed: the first shows the folder path and any uncommitted changes, the second can't be undone. A folder is only ever moved to the trash, never deleted outright.
 
 There are no centered modals. _Why: the CSP blocks the style tag a modal's scroll lock injects, and an inline band keeps the context visible._
 

@@ -3,12 +3,10 @@ import { useState } from 'react';
 import type { RepositorySummary } from '../../../shared/repos';
 import { Button } from '../../components/ui/button';
 import { Spinner } from '../../components/ui/spinner';
-import { InlineStatus } from '../../components/ui/status';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
 import { relativeTime } from '../../lib/format';
-import { ipcErrorMessage } from '../../lib/ipc-error';
-import { useOpenRepository, useRemoveRepository } from '../../lib/queries';
+import { useOpenRepository } from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
 import {
   fileManagerLabel,
@@ -16,6 +14,7 @@ import {
   RepoMenuButton,
   useRepoActions,
 } from './repo-actions';
+import { ManageBand, type ManageMode } from './manage';
 import { BranchLabel, SyncChip, TreeChip } from './status';
 
 export function openedLabel(repo: RepositorySummary): string {
@@ -34,46 +33,6 @@ export function useOpenRepo() {
   };
 }
 
-export function RemoveConfirm({
-  repo,
-  onCancel,
-  onRemoved = onCancel,
-}: {
-  repo: RepositorySummary;
-  onCancel: () => void;
-  onRemoved?: () => void;
-}) {
-  const remove = useRemoveRepository();
-  return (
-    <div
-      role="group"
-      aria-label={`Remove ${repo.name}`}
-      className="flex flex-wrap items-center gap-3 bg-danger-soft px-3 py-2.5 text-[0.8125rem] text-ink"
-    >
-      <span className="min-w-0 flex-1">
-        Remove <b className="font-semibold">{repo.name}</b> from gitdesk? The
-        folder and its history stay on disk.
-        {remove.isError && (
-          <InlineStatus tone="danger" className="mt-1.5">
-            {ipcErrorMessage(remove.error, "It wasn't removed. Try again.")}
-          </InlineStatus>
-        )}
-      </span>
-      <Button
-        size="sm"
-        variant="danger"
-        pending={remove.isPending}
-        onClick={() => remove.mutate(repo.id, { onSuccess: onRemoved })}
-      >
-        Remove
-      </Button>
-      <Button size="sm" variant="ghost" onClick={onCancel} autoFocus>
-        Cancel
-      </Button>
-    </div>
-  );
-}
-
 // A flat row: the whole row opens the repository, the overflow menu holds everything else.
 // Each row is its own size container, so it narrows the same way in a wide list and a side column.
 export function RepoRow({
@@ -84,10 +43,8 @@ export function RepoRow({
   density: 'comfortable' | 'compact';
 }) {
   const openRepo = useOpenRepo();
-  const [confirming, setConfirming] = useState(false);
-  const { actions, busy, reveal } = useRepoActions(repo, () =>
-    setConfirming(true),
-  );
+  const [mode, setMode] = useState<ManageMode | null>(null);
+  const { actions, busy, reveal } = useRepoActions(repo, setMode);
   const present = repo.availability === 'available';
 
   return (
@@ -174,12 +131,12 @@ export function RepoRow({
                 </Button>
               </Tooltip>
             )}
-            <RepoMenuButton repo={repo} actions={actions} />
+            <RepoMenuButton name={repo.name} actions={actions} />
           </div>
         </div>
       </RepoContextMenu>
-      {confirming && (
-        <RemoveConfirm repo={repo} onCancel={() => setConfirming(false)} />
+      {mode && (
+        <ManageBand mode={mode} repo={repo} onClose={() => setMode(null)} />
       )}
     </li>
   );

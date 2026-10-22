@@ -51,11 +51,14 @@ describe('activity', () => {
     expect((await write('DELETE', path)).status).toBe(404);
 
     const all = await get<Page>(owner.access_token, '/api/v1/activity');
-    expect(all.body.activity.map((a) => [a.type, a.repositoryName])).toEqual([
+    // Provisioning can land in the same millisecond as the create, so its place among them isn't fixed.
+    const types = all.body.activity.map((a) => [a.type, a.repositoryName]);
+    expect(types.filter(([type]) => type !== 'repository.provisioned')).toEqual([
       ['repository.deleted', 'journal'],
       ['repository.updated', 'journal'],
       ['repository.created', 'log'],
     ]);
+    expect(types).toContainEqual(['repository.provisioned', 'log']);
     // The repository is gone, so every row's reference was cleared.
     expect(all.body.activity.every((a) => a.repositoryId === null)).toBe(true);
 

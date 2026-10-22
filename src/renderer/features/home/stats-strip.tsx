@@ -31,25 +31,29 @@ function Value({ value, muted }: { value: string; muted?: boolean }) {
   );
 }
 
-// Each statistic is a way in: it opens the view that lists exactly what it counts.
-function Stat({
+// Each statistic is a way in: it opens the view that lists exactly what it counts. Where the
+// strip is itself the filter, `pressed` marks the one in use.
+export function Stat({
   value,
   label,
   context,
   muted,
+  pressed,
   onSelect,
 }: {
   value: string;
   label: string;
   context: ReactNode;
   muted?: boolean;
+  pressed?: boolean;
   onSelect: () => void;
 }) {
   return (
     <button
       type="button"
       onClick={onSelect}
-      className="relative grid min-w-0 content-start gap-1 border-l border-line px-5 pt-4.5 pb-4 text-left transition-colors first:border-l-0 first:pl-0 hover:bg-row-hover focus-visible:outline-offset-[-2px]"
+      aria-pressed={pressed}
+      className="relative grid min-w-0 content-start gap-1 border-l border-line px-5 pt-4.5 pb-4 text-left transition-colors first:border-l-0 first:pl-0 hover:bg-row-hover focus-visible:outline-offset-[-2px] aria-pressed:after:absolute aria-pressed:after:inset-x-0 aria-pressed:after:-bottom-px aria-pressed:after:h-0.5 aria-pressed:after:bg-accent"
     >
       <Value value={value} muted={muted} />
       <span className="text-[0.8125rem] font-medium text-ink">{label}</span>
@@ -60,7 +64,7 @@ function Stat({
   );
 }
 
-function remoteContext(
+export function remoteContext(
   remote: RemoteOverview | undefined,
   failed: boolean,
 ): {

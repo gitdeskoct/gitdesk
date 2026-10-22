@@ -122,6 +122,16 @@ export const RemoteArt = () => (
   </Art>
 );
 
+// Weekly bars waiting on their first commit: the chart's own empty state.
+export const CommitsArt = () => (
+  <Art viewBox="0 0 64 52" width={88} height={72} strokeWidth={1.3}>
+    <path d="M6 44h52" />
+    <path d="M14 44v-8M24 44V30M34 44v-6" strokeDasharray="2 3" />
+    <circle cx="46" cy="22" r="4" {...accent} />
+    <path d="M46 26v18" />
+  </Art>
+);
+
 // Bleeding drawings for the sign-in tiles: larger, on a solid tile color.
 export const CommitGraphArt = ({ className }: { className?: string }) => (
   <Art

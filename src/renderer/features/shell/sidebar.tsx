@@ -109,7 +109,9 @@ export function Sidebar({
           icon={item.icon}
           active={
             route.name === item.route ||
-            (item.route === 'repositories' && route.name === 'repository')
+            (item.route === 'repositories' &&
+              (route.name === 'repository' ||
+                route.name === 'remote-repository'))
           }
           collapsed={collapsed}
           trailing={item.soon ? 'Soon' : undefined}

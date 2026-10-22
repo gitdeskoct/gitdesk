@@ -13,6 +13,7 @@ import {
   GitCommitHorizontal,
   GitMerge,
   Pencil,
+  Unlink,
   type LucideIcon,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -39,7 +40,8 @@ import {
 } from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
 import { useWorkspaceUi } from '../../app/workspace-ui';
-import { RemoveConfirm, useOpenRepo } from '../repos/repo-row';
+import { RemoveConfirm } from '../repos/manage';
+import { useOpenRepo } from '../repos/repo-row';
 
 const count = (n: number | null | undefined, one: string, many: string) =>
   `${n ?? 0} ${n === 1 ? one : many}`;
@@ -237,12 +239,17 @@ const LOCAL: Record<
   opened: { icon: FolderOpen, label: 'Opened' },
   commit: { icon: GitCommitHorizontal, label: 'New commit' },
   checkout: { icon: GitBranch, label: 'Switched to' },
+  renamed: { icon: Pencil, label: 'Renamed to' },
+  unlinked: { icon: Unlink, label: 'Disconnected from its remote' },
 };
 
-const REMOTE: Record<RemoteActivity['type'], string> = {
+export const REMOTE_ACTIVITY: Record<RemoteActivity['type'], string> = {
   'repository.created': 'Remote created',
   'repository.updated': 'Remote details changed',
   'repository.deleted': 'Remote deleted',
+  'repository.provisioned': 'Storage ready',
+  'repository.provisioning_failed': 'Storage setup failed',
+  'repository.deletion_failed': "Deletion didn't finish",
 };
 
 type Entry = {
@@ -286,7 +293,7 @@ export function ActivityList({
       key: `remote:${item.id}`,
       name: item.repositoryName,
       icon: Cloud,
-      text: REMOTE[item.type],
+      text: REMOTE_ACTIVITY[item.type],
       at: item.createdAt,
       source: 'Your account',
     })),

@@ -6,6 +6,9 @@ import path from 'node:path';
 import {
   CREATE_STEPS,
   repositoryNameSchema,
+  type RepositoryHistory,
+  type RepoTrashInput,
+  type RepoUpdateInput,
   type CreateStep,
   type CloneInput,
   type ProgressEvent,
@@ -27,6 +30,7 @@ import {
   describeGitError,
   gitAt,
   GitError,
+  history,
   inspect,
   listChanges,
   pathKey,
@@ -43,6 +47,15 @@ export type Desktop = {
   }): Promise<string | null>;
   openPath(target: string): Promise<string>;
   copyText(text: string): void;
+  // The system trash (Recycle Bin). Rejects when the OS can't move the item.
+  trashItem(target: string): Promise<void>;
+  // Folders that are never trashed, and never trashed as part of a parent folder.
+  protectedPaths(): string[];
+};
+
+const isInside = (child: string, parent: string): boolean => {
+  const relative = path.relative(parent, child);
+  return !!relative && !relative.startsWith('..') && !path.isAbsolute(relative);
 };
 
 const CONCURRENCY = 3;
@@ -67,7 +80,7 @@ export function displayPath(root: string, home = os.homedir()): string {
 
 export function createRepositoryService(deps: {
   store: RepositoryStore;
-  remote: Pick<RemoteService, 'create'>;
+  remote: Pick<RemoteService, 'create' | 'update'>;
   desktop: Desktop;
   settings: () => Settings;
   emit: (repositories: RepositorySummary[]) => void;
@@ -488,6 +501,98 @@ export function createRepositoryService(deps: {
       } catch (err) {
         throw new RepoError(err instanceof Error ? err.message : String(err));
       }
+    },
+
+    async history(id: string): Promise<RepositoryHistory> {
+      const row = rowOrThrow(id);
+      if (row.availability && row.availability !== 'available')
+        throw new RepoError('The folder is gone. Locate it again.');
+      return history(row.rootPath, now());
+    },
+
+    // A linked repository's remote is renamed first, so a rejected name leaves both sides as they were.
+    async update(input: RepoUpdateInput): Promise<RepositorySummary> {
+      const row = rowOrThrow(input.id);
+      if (row.remoteId) {
+        const name =
+          input.name === undefined
+            ? undefined
+            : repositoryNameSchema.safeParse(input.name);
+        if (name && !name.success)
+          throw new RepoError(
+            name.error.issues[0]?.message ?? "That name can't be used.",
+          );
+        await deps.remote.update({
+          id: row.remoteId,
+          name: name?.data,
+          description: input.description,
+        });
+      }
+      store.rename(
+        row.id,
+        { name: input.name, description: input.description },
+        now(),
+      );
+      changed();
+      return toSummary(rowOrThrow(row.id));
+    },
+
+    // gitdesk never wrote a Git remote for the link, so the repository's Git config isn't touched.
+    unlink(id: string): RepositorySummary {
+      const row = rowOrThrow(id);
+      if (!row.remoteId)
+        throw new RepoError('This repository has no remote to disconnect.');
+      store.setRemote(id, null);
+      store.addActivity(id, 'unlinked', null, now());
+      changed();
+      return toSummary(rowOrThrow(id));
+    },
+
+    // The renderer names a registration and retypes its name; the path always comes from the
+    // registry, and is checked again on disk before anything moves. Trash only, never a delete.
+    async trash(input: RepoTrashInput): Promise<void> {
+      const row = rowOrThrow(input.id);
+      if (input.confirmName !== row.name)
+        throw new RepoError(`Type ${row.name} exactly to confirm.`);
+      const root = await resolveRoot(row.rootPath).catch(() => null);
+      if (
+        root?.kind !== 'repository' ||
+        pathKey(root.root) !== pathKey(row.rootPath)
+      )
+        throw new RepoError(
+          'That folder no longer holds this repository, so nothing was moved.',
+        );
+      const target = path.resolve(row.rootPath);
+      const key = pathKey(target);
+      const guarded = deps.desktop
+        .protectedPaths()
+        .map((p) => path.resolve(p))
+        .some((p) => pathKey(p) === key || isInside(p, target));
+      if (path.parse(target).root === target || guarded)
+        throw new RepoError(
+          "gitdesk won't move that folder to the trash. Remove it from gitdesk instead.",
+        );
+      const nested = store
+        .list()
+        .find(
+          (other) => other.id !== row.id && isInside(other.rootPath, target),
+        );
+      if (nested)
+        throw new RepoError(
+          `${nested.name} is inside this folder. Remove it from gitdesk first.`,
+        );
+      // Open watch handles can make Windows refuse the move.
+      unwatch(row.id);
+      try {
+        await deps.desktop.trashItem(target);
+      } catch {
+        syncWatcher(row.id);
+        throw new RepoError(
+          "Couldn't move the folder to the trash. Nothing was deleted.",
+        );
+      }
+      store.remove(row.id);
+      changed();
     },
 
     async chooseLocation(): Promise<{

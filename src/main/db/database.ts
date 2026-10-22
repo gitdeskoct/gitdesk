@@ -56,6 +56,8 @@ const MIGRATIONS = [
   // failed or "missing" check never makes an old snapshot look new.
   `ALTER TABLE repository_cache ADD COLUMN status_at INTEGER;
    UPDATE repository_cache SET status_at = inspected_at WHERE status_json IS NOT NULL`,
+  // The server's lifecycle state for cached remotes (provisioning, ready, failed, deleting).
+  `ALTER TABLE remote_repository_cache ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'`,
 ];
 
 export type AppDatabase = DatabaseSync;

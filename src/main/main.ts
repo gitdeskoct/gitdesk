@@ -264,6 +264,14 @@ function start() {
       // Paths come from gitdesk's own registry, never from the renderer.
       openPath: (target) => shell.openPath(target),
       copyText: (text) => clipboard.writeText(text),
+      trashItem: (target) => shell.trashItem(target),
+      protectedPaths: () => [
+        os.homedir(),
+        app.getPath('userData'),
+        app.getPath('desktop'),
+        app.getPath('documents'),
+        app.getPath('downloads'),
+      ],
     },
   });
   app.on('before-quit', () => repos.dispose());

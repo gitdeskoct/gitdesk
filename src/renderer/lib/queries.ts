@@ -15,8 +15,11 @@ import type {
   CloneInput,
   ProgressEvent,
   CreateRepositoryInput,
+  RemoteCreateInput,
   RemoteListInput,
   RemoteUpdateInput,
+  RepoTrashInput,
+  RepoUpdateInput,
 } from '../../shared/repos';
 import {
   DEFAULT_SETTINGS,
@@ -173,6 +176,10 @@ export const repoKeys = {
     ['repo-changes', id, statusAt] as const,
   remote: ['remote-overview'] as const,
   remoteList: (sort: RemoteListInput['sort']) => ['remote-list', sort] as const,
+  history: (id: string, statusAt: number | null) =>
+    ['repo-history', id, statusAt] as const,
+  remoteDetail: (id: string) => ['remote-repo', id] as const,
+  remoteActivity: (id: string) => ['remote-activity', id] as const,
 };
 
 const repos = () => desktop().repos;
@@ -288,7 +295,73 @@ function invalidateRemote(qc: ReturnType<typeof useQueryClient>) {
   void qc.invalidateQueries({ queryKey: repoKeys.list });
   void qc.invalidateQueries({ queryKey: repoKeys.remote });
   void qc.invalidateQueries({ queryKey: ['remote-list'] });
+  void qc.invalidateQueries({ queryKey: ['remote-repo'] });
+  void qc.invalidateQueries({ queryKey: ['remote-activity'] });
 }
+
+// Keyed by the status snapshot, like the change list: a new commit or checkout reads history again.
+export const useRepositoryHistory = (
+  id: string,
+  statusAt: number | null,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: repoKeys.history(id, statusAt),
+    queryFn: () => repos().history(id),
+    enabled,
+    staleTime: Infinity,
+  });
+
+// One server request per open; Refresh asks again. Provisioning finishes inside the create request,
+// so nothing here polls.
+export const useRemoteRepository = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: repoKeys.remoteDetail(id),
+    queryFn: () => repos().remoteGet(id),
+    enabled,
+    staleTime: 60_000,
+  });
+
+export const useRemoteActivity = (id: string, enabled: boolean) =>
+  useQuery({
+    queryKey: repoKeys.remoteActivity(id),
+    queryFn: () => repos().remoteActivity(id),
+    enabled,
+    staleTime: 60_000,
+  });
+
+export function useCreateRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RemoteCreateInput) => repos().remoteCreate(input),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+export function useProvisionRemote() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) => repos().remoteProvision(id),
+    onSettled: () => invalidateRemote(qc),
+  });
+}
+
+// A linked rename also changes the remote, so remote views refresh too.
+export function useUpdateRepository() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: RepoUpdateInput) => repos().update(input),
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: repoKeys.activity });
+      invalidateRemote(qc);
+    },
+  });
+}
+
+export const useUnlinkRepository = () =>
+  useRepoMutation((id: string) => repos().unlink(id));
+export const useTrashRepository = () =>
+  useRepoMutation((input: RepoTrashInput) => repos().trash(input));
 
 // Pages come straight from the server; main spaces and counts the requests.
 export const useRemoteList = (

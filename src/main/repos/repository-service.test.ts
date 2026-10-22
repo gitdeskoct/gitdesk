@@ -21,6 +21,7 @@ import {
 import { DEFAULT_SETTINGS } from '../../shared/settings';
 import { openDatabase } from '../db/database';
 import { UserError } from '../errors';
+import { bucketWeeks, weekStart } from './git-inspector';
 import { createRepositoryService, displayPath } from './repository-service';
 import { createRepositoryStore } from './repository-store';
 
@@ -39,6 +40,11 @@ beforeAll(() => {
 let dir: string;
 let picked: string | null;
 const remoteCreate = vi.fn();
+const remoteUpdate = vi.fn();
+const trashItem = vi.fn(async (target: string) =>
+  rmSync(target, { recursive: true, force: true }),
+);
+let protectedPaths: string[] = [];
 const cleanups: (() => void)[] = [];
 
 function setup(
@@ -50,13 +56,15 @@ function setup(
   const emit = vi.fn();
   const service = createRepositoryService({
     store,
-    remote: { create: remoteCreate },
+    remote: { create: remoteCreate, update: remoteUpdate },
     settings: () => ({ ...DEFAULT_SETTINGS, watchRepositories: false }),
     emit,
     desktop: {
       pickDirectory: async () => picked,
       openPath: async () => '',
       copyText: vi.fn(),
+      trashItem,
+      protectedPaths: () => protectedPaths,
     },
     ...extra,
   });
@@ -78,6 +86,9 @@ beforeEach(() => {
   dir = mkdtempSync(path.join(os.tmpdir(), 'gitdesk-repos-'));
   picked = null;
   remoteCreate.mockReset();
+  remoteUpdate.mockReset();
+  trashItem.mockClear();
+  protectedPaths = [];
 });
 // Windows can't delete the folder while SQLite or a watcher still holds a file in it.
 afterEach(() => {
@@ -441,5 +452,181 @@ describe('displayPath', () => {
     expect(displayPath(path.join(path.sep, 'srv', 'app'), home)).toBe(
       path.join(path.sep, 'srv', 'app'),
     );
+  });
+});
+
+async function registered(root: string) {
+  picked = root;
+  const harness = setup();
+  const added = await harness.service.add();
+  if (added.status !== 'added') throw new Error('not added');
+  return { ...harness, id: added.repository.id };
+}
+
+describe('history', () => {
+  it('counts commits, branches and weeks from the current branch', async () => {
+    const root = makeRepo('app');
+    const twoWeeksAgo = new Date(Date.now() - 14 * 86_400_000).toISOString();
+    execFileSync('git', ['commit', '-q', '--allow-empty', '-m', 'Older'], {
+      cwd: root,
+      env: { ...process.env, GIT_COMMITTER_DATE: twoWeeksAgo },
+    });
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'Latest');
+    git(root, 'branch', 'feature');
+    git(root, 'update-ref', 'refs/remotes/origin/main', 'HEAD');
+    git(
+      root,
+      'symbolic-ref',
+      'refs/remotes/origin/HEAD',
+      'refs/remotes/origin/main',
+    );
+    const { service, id } = await registered(root);
+
+    const result = await service.history(id);
+
+    expect(result).toMatchObject({
+      branch: 'main',
+      commitCount: 3,
+      localBranches: 2,
+      remoteBranches: 1,
+      weeksTruncated: false,
+    });
+    expect(result.weeks).toHaveLength(12);
+    expect(result.weeks.reduce((sum, week) => sum + week.commits, 0)).toBe(3);
+    expect(result.recent.map((c) => c.subject)).toEqual([
+      'Latest',
+      'Older',
+      'First <commit> & "quotes"',
+    ]);
+    expect(result.recent[0]).toMatchObject({ author: 'Test' });
+  });
+
+  it('reports an empty repository without inventing history', async () => {
+    const root = path.join(dir, 'empty');
+    mkdirSync(root);
+    git(root, 'init', '-q', '-b', 'trunk');
+    const { service, id } = await registered(root);
+
+    const result = await service.history(id);
+
+    expect(result).toMatchObject({
+      branch: 'trunk',
+      commitCount: 0,
+      recent: [],
+    });
+    expect(result.weeks.every((week) => week.commits === 0)).toBe(true);
+  });
+
+  it('buckets by local Monday and counts future-dated commits in the current week', () => {
+    const now = new Date(2026, 9, 21, 15).getTime();
+    const monday = weekStart(now);
+    expect(new Date(monday).getDay()).toBe(1);
+    expect(new Date(monday).getHours()).toBe(0);
+    const weeks = bucketWeeks(
+      [now + 86_400_000, monday, monday - 1, monday - 20 * 7 * 86_400_000],
+      now,
+    );
+    expect(weeks.at(-1)).toEqual({ start: monday, commits: 2 });
+    expect(weeks.at(-2)?.commits).toBe(1);
+    expect(weeks.reduce((sum, week) => sum + week.commits, 0)).toBe(3);
+  });
+});
+
+describe('disconnect, rename and trash', () => {
+  it('disconnects a remote without touching Git config, and refuses when there is none', async () => {
+    const root = makeRepo('app');
+    const { service, store, id } = await registered(root);
+    store.setRemote(id, crypto.randomUUID());
+
+    expect(service.unlink(id).remoteId).toBeNull();
+    expect(service.activity().map((a) => a.type)).toContain('unlinked');
+    expect(() => service.unlink(id)).toThrow('no remote');
+  });
+
+  it('renames a linked repository on the remote first, and keeps both as they were on a bad name', async () => {
+    const root = makeRepo('app');
+    const { service, store, id } = await registered(root);
+    const remoteId = crypto.randomUUID();
+    store.setRemote(id, remoteId);
+
+    await expect(service.update({ id, name: 'two words' })).rejects.toThrow();
+    expect(remoteUpdate).not.toHaveBeenCalled();
+    expect(service.list()[0]?.name).toBe('app');
+
+    remoteUpdate.mockResolvedValueOnce({});
+    const renamed = await service.update({
+      id,
+      name: 'desk-app',
+      description: 'Notes',
+    });
+    expect(remoteUpdate).toHaveBeenCalledWith({
+      id: remoteId,
+      name: 'desk-app',
+      description: 'Notes',
+    });
+    expect(renamed).toMatchObject({ name: 'desk-app', description: 'Notes' });
+
+    remoteUpdate.mockRejectedValueOnce(new UserError('Server said no'));
+    await expect(service.update({ id, name: 'other' })).rejects.toThrow(
+      'Server said no',
+    );
+    expect(service.list()[0]?.name).toBe('desk-app');
+  });
+
+  it('allows a folder-style display name on a local-only repository', async () => {
+    const { service, id } = await registered(makeRepo('app'));
+    expect((await service.update({ id, name: 'My App' })).name).toBe('My App');
+    expect(remoteUpdate).not.toHaveBeenCalled();
+  });
+
+  it('moves the registered folder to the trash only after the name is retyped', async () => {
+    const root = makeRepo('app');
+    const { service, id } = await registered(root);
+
+    await expect(service.trash({ id, confirmName: 'App' })).rejects.toThrow(
+      'exactly',
+    );
+    expect(trashItem).not.toHaveBeenCalled();
+
+    await service.trash({ id, confirmName: 'app' });
+    expect(trashItem).toHaveBeenCalledWith(path.resolve(root));
+    expect(existsSync(root)).toBe(false);
+    expect(service.list()).toHaveLength(0);
+  });
+
+  it('refuses to trash a folder that is protected, changed or holds another repository', async () => {
+    const outer = makeRepo('outer');
+    const { service, id, store } = await registered(outer);
+
+    protectedPaths = [path.join(outer, 'src')];
+    await expect(service.trash({ id, confirmName: 'outer' })).rejects.toThrow(
+      "won't",
+    );
+    protectedPaths = [];
+
+    const inner = makeRepo(path.join('outer', 'inner'));
+    picked = inner;
+    await service.add();
+    await expect(service.trash({ id, confirmName: 'outer' })).rejects.toThrow(
+      'inner is inside this folder',
+    );
+
+    rmSync(path.join(outer, '.git'), { recursive: true, force: true });
+    store.remove(service.list().find((r) => r.name === 'inner')!.id);
+    await expect(service.trash({ id, confirmName: 'outer' })).rejects.toThrow(
+      'no longer holds this repository',
+    );
+    expect(trashItem).not.toHaveBeenCalled();
+    expect(existsSync(outer)).toBe(true);
+  });
+
+  it('keeps the registration when the system trash refuses', async () => {
+    const root = makeRepo('app');
+    const { service, id } = await registered(root);
+    trashItem.mockRejectedValueOnce(new Error('in use'));
+    await expect(service.trash({ id, confirmName: 'app' })).rejects.toThrow(
+      'Nothing was deleted',
+    );
+    expect(service.list()).toHaveLength(1);
   });
 });

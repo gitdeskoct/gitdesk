@@ -87,6 +87,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: 'dashboard split centered columns attention activity',
   },
   {
+    id: 'repositories-layout',
+    label: 'Repositories layout',
+    section: 'workspace',
+    keywords: 'repositories list split centered inspector details wide',
+  },
+  {
     id: 'dashboard-density',
     label: 'Home density',
     section: 'workspace',

@@ -28,7 +28,6 @@ import { useNavigation } from '../../app/navigation';
 import { useWorkspaceUi } from '../../app/workspace-ui';
 import { ClonePanel } from '../repos/clone-panel';
 import { CreatePanel } from '../repos/create-panel';
-import { RemotePanel } from '../repos/remote-panel';
 import { RepoRow } from '../repos/repo-row';
 import { accountOf } from '../shell/account-menu';
 import { Page, PageTitle } from '../shell/page';
@@ -172,8 +171,6 @@ export function HomePage({ status }: { status: AuthStatus }) {
   const aside =
     ui.panel === 'create' ? (
       <CreatePanel onClose={() => ui.setPanel(null)} />
-    ) : ui.panel === 'remote' ? (
-      <RemotePanel onClose={() => ui.setPanel(null)} />
     ) : ui.panel === 'clone' ? (
       <ClonePanel onClose={() => ui.setPanel(null)} />
     ) : undefined;
@@ -390,7 +387,7 @@ export function HomePage({ status }: { status: AuthStatus }) {
             stats={stats}
             remote={remote.data}
             remoteFailed={remote.isError}
-            onRemote={() => ui.setPanel('remote')}
+            onRemote={() => navigate({ name: 'repositories', scope: 'remote' })}
           />
         </div>
         <div
