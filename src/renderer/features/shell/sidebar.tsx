@@ -23,7 +23,7 @@ type Item = {
 
 const code: Item[] = [
   { route: 'repositories', label: 'Repositories', icon: Folder },
-  { route: 'pulls', label: 'Pull requests', icon: GitPullRequest, soon: true },
+  { route: 'pulls', label: 'Pull requests', icon: GitPullRequest },
   { route: 'issues', label: 'Issues', icon: CircleDot, soon: true },
 ];
 
@@ -111,7 +111,8 @@ export function Sidebar({
             route.name === item.route ||
             (item.route === 'repositories' &&
               (route.name === 'repository' ||
-                route.name === 'remote-repository'))
+                route.name === 'remote-repository' ||
+                route.name === 'pull-request'))
           }
           collapsed={collapsed}
           trailing={item.soon ? 'Soon' : undefined}

@@ -43,6 +43,10 @@ import {
   type RemoteService,
 } from './remote/remote-service';
 import { createGitAuth, type GitAuth } from './remote/git-auth';
+import { createAccountRecords } from './pulls/account-records';
+import { createLocalRecords, createViewedStore } from './pulls/local-records';
+import { createPullService } from './pulls/pull-service';
+import { UserError } from './errors';
 import { createRepositoryService } from './repos/repository-service';
 import { createRepositoryStore } from './repos/repository-store';
 import { hardenApp } from './security';
@@ -349,18 +353,63 @@ async function start() {
     repos.dispose();
   });
 
+  const gitIdentity = createGitIdentity();
+  // A linked repository keeps its pull requests in the account; any other one, in local SQLite.
+  const pulls = createPullService({
+    db,
+    store,
+    workspace: ws,
+    recordsFor(repoId) {
+      const row = store.get(repoId);
+      if (!row) throw new UserError('That repository is no longer in gitdesk.');
+      if (!row.remoteId) return createLocalRecords(db, repoId);
+      const status = auth.getStatus();
+      if (settings.get().localOnly || status.status !== 'authenticated')
+        throw new UserError(
+          "This repository's pull requests are stored in your account. Sign in and connect to see them.",
+        );
+      return createAccountRecords({
+        api,
+        call: (fn) => auth.authorized(fn),
+        repositoryId: row.remoteId,
+        localRepositoryId: repoId,
+      });
+    },
+    async author() {
+      const status = auth.getStatus();
+      if (status.status === 'authenticated' && status.account)
+        return {
+          accountId: status.account.id,
+          name: status.account.displayName,
+          avatarUrl: status.account.avatarUrl,
+        };
+      const identity = await gitIdentity.get().catch(() => null);
+      return {
+        accountId: null,
+        name: (identity?.available && identity.name) || 'You',
+        avatarUrl: null,
+      };
+    },
+    viewed: createViewedStore(db),
+    addActivity: (id, type, detail) =>
+      store.addActivity(id, type, detail, Date.now()),
+    refresh: (id) => repos.refresh(id),
+    log,
+  });
+
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
     {
       app: createAppService(() => mainWindow),
       auth,
       settings,
-      git: createGitIdentity(),
+      git: gitIdentity,
       repos,
       remote,
       notifier,
       workspace: ws,
       gitInstall,
+      pulls,
     },
   );
 

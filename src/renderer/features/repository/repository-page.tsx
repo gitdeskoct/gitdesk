@@ -18,6 +18,7 @@ import {
 } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
+import { LongValue } from '../../components/ui/long-value';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { cn } from '../../lib/cn';
 import { relativeTime, useNow } from '../../lib/format';
@@ -25,6 +26,7 @@ import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useAuthStatus,
   useLinkRemote,
+  useCopyRepositoryPath,
   useLocateRepository,
   useRefreshRepositories,
   useRemoteRepository,
@@ -62,6 +64,8 @@ import {
 } from './history';
 import { HistoryTab } from './history-tab';
 import { RemotesTab } from './remotes-tab';
+import { PullAnalytics } from '../pulls/pull-analytics';
+import { PullsTab } from '../pulls/pulls-tab';
 import { RepoSettingsTab } from './repo-settings-tab';
 import { useFetchAction } from './use-fetch';
 import { usePushAction } from './use-push';
@@ -393,6 +397,7 @@ const TABS: { value: RepoTab; label: string }[] = [
   { value: 'changes', label: 'Changes' },
   { value: 'history', label: 'History' },
   { value: 'branches', label: 'Branches' },
+  { value: 'pulls', label: 'Pull requests' },
   { value: 'remotes', label: 'Remotes' },
   { value: 'overview', label: 'Overview' },
   { value: 'settings', label: 'Settings' },
@@ -541,6 +546,7 @@ function RepositoryView({
   const refresh = useRefreshRepositories();
   const reveal = useRevealRepository();
   const locate = useLocateRepository();
+  const copyPath = useCopyRepositoryPath();
   const remoteQuery = useRemoteRepository(
     repo.remoteId ?? '',
     !!repo.remoteId && auth?.status === 'authenticated',
@@ -689,12 +695,17 @@ function RepositoryView({
                 {repo.name}
               </h1>
               <RepoTags local remote={!!repo.remoteId} />
-              <span
-                className="min-w-0 truncate text-xs text-muted"
-                title={repo.displayPath}
-              >
-                {repo.description ? `${repo.description} · ` : ''}
-                <span className="font-mono">{repo.displayPath}</span>
+              <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
+                {repo.description && (
+                  <span className="max-w-[40%] shrink-0 truncate">
+                    {repo.description} ·
+                  </span>
+                )}
+                <LongValue
+                  value={repo.displayPath}
+                  label="path"
+                  copy={() => copyPath.mutateAsync(repo.id)}
+                />
               </span>
             </div>
             <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
@@ -801,6 +812,9 @@ function RepositoryView({
               />,
             )}
           </Tabs.Content>
+          <Tabs.Content value="pulls" className={tabContent}>
+            <PullsTab repo={repo} width={width} />
+          </Tabs.Content>
           <Tabs.Content value="remotes" className={tabContent}>
             {scrolling(<RemotesTab repo={repo} />)}
           </Tabs.Content>
@@ -808,6 +822,7 @@ function RepositoryView({
             {scrolling(
               <>
                 <Analytics repo={repo} />
+                <PullAnalytics repo={repo} />
                 {status && (
                   <Section id="details-heading" title="This repository">
                     <Details repo={repo} remote={remote} />

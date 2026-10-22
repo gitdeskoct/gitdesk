@@ -2,6 +2,7 @@ import { FolderOpen, Pin } from 'lucide-react';
 import { useState } from 'react';
 import type { RepositorySummary } from '../../../shared/repos';
 import { Button } from '../../components/ui/button';
+import { MiddleTruncate } from '../../components/ui/long-value';
 import { Spinner } from '../../components/ui/spinner';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
@@ -82,14 +83,13 @@ export function RepoRow({
                 <Spinner className="size-3.5 text-muted" />
               )}
             </div>
-            <div
-              className="mt-0.5 truncate text-xs text-muted"
-              title={repo.displayPath}
-            >
-              {density === 'comfortable' &&
-                repo.description &&
-                `${repo.description} · `}
-              <span className="font-mono">{repo.displayPath}</span>
+            <div className="mt-0.5 flex min-w-0 gap-1 text-xs text-muted">
+              {density === 'comfortable' && repo.description && (
+                <span className="max-w-[40%] shrink-0 truncate">
+                  {repo.description} ·
+                </span>
+              )}
+              <MiddleTruncate value={repo.displayPath} className="font-mono" />
             </div>
           </div>
           <BranchLabel

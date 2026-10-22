@@ -10,6 +10,7 @@ import {
   type ProgressEvent,
   type RepositorySummary,
 } from '../shared/repos';
+import { PULLS_IPC as P } from '../shared/pulls';
 import { WORKSPACE_IPC as W } from '../shared/workspace';
 
 // Each method maps to one fixed channel. No generic invoke, no raw ipcRenderer, no token access.
@@ -146,6 +147,37 @@ const api: DesktopApi = {
     usePathGit: () => ipcRenderer.invoke(W.usePathGit),
     setGlobalPrune: (enabled) => ipcRenderer.invoke(W.setGlobalPrune, enabled),
     size: (input) => ipcRenderer.invoke(W.size, input),
+  },
+  pulls: {
+    list: (input) => ipcRenderer.invoke(P.list, input),
+    overview: () => ipcRenderer.invoke(P.overview),
+    compare: (input) => ipcRenderer.invoke(P.compare, input),
+    create: (input) => ipcRenderer.invoke(P.create, input),
+    get: (input) => ipcRenderer.invoke(P.get, input),
+    update: (input) => ipcRenderer.invoke(P.update, input),
+    setStatus: (input) => ipcRenderer.invoke(P.setStatus, input),
+    fileDiff: (input) => ipcRenderer.invoke(P.fileDiff, input),
+    checkMergeability: (input) =>
+      ipcRenderer.invoke(P.checkMergeability, input),
+    comments: (input) => ipcRenderer.invoke(P.comments, input),
+    addComment: (input) => ipcRenderer.invoke(P.addComment, input),
+    editComment: (input) => ipcRenderer.invoke(P.editComment, input),
+    deleteComment: (input) => ipcRenderer.invoke(P.deleteComment, input),
+    reviews: (input) => ipcRenderer.invoke(P.reviews, input),
+    submitReview: (input) => ipcRenderer.invoke(P.submitReview, input),
+    activity: (input) => ipcRenderer.invoke(P.activity, input),
+    viewed: (input) => ipcRenderer.invoke(P.viewed, input),
+    setViewed: (input) => ipcRenderer.invoke(P.setViewed, input),
+    merge: (input) => ipcRenderer.invoke(P.merge, input),
+    conflicts: (repoId) => ipcRenderer.invoke(P.conflicts, repoId),
+    conflictSides: (input) => ipcRenderer.invoke(P.conflictSides, input),
+    resolveConflict: (input) => ipcRenderer.invoke(P.resolveConflict, input),
+    continueMerge: (repoId) => ipcRenderer.invoke(P.continueMerge, repoId),
+    abortMerge: (repoId) => ipcRenderer.invoke(P.abortMerge, repoId),
+    revertInfo: (input) => ipcRenderer.invoke(P.revertInfo, input),
+    revert: (input) => ipcRenderer.invoke(P.revert, input),
+    deleteBranch: (input) => ipcRenderer.invoke(P.deleteBranch, input),
+    stats: (input) => ipcRenderer.invoke(P.stats, input),
   },
 };
 

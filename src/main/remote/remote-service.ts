@@ -50,7 +50,7 @@ const accountIdOf = (status: AuthStatus): string | null =>
     : null;
 
 // Server codes become sentences; anything unexpected gets the caller's fallback.
-function userError(err: unknown, fallback: string): UserError {
+export function userError(err: unknown, fallback: string): UserError {
   if (err instanceof UserError) return err;
   if (err instanceof NetworkError)
     return new UserError("Can't reach the gitdesk server.");

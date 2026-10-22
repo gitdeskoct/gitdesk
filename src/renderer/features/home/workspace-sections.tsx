@@ -15,6 +15,7 @@ import {
   GitMerge,
   Link2,
   Pencil,
+  Undo2,
   Unlink,
   type LucideIcon,
 } from 'lucide-react';
@@ -246,6 +247,8 @@ const LOCAL: Record<
   fetched: { icon: CloudDownload, label: 'Fetched from' },
   pushed: { icon: CloudUpload, label: 'Pushed' },
   'hosted-remote-added': { icon: Link2, label: 'Added the Git URL' },
+  'pr-merged': { icon: GitMerge, label: 'Merged pull request' },
+  'pr-reverted': { icon: Undo2, label: 'Reverted pull request' },
   'branch-created': { icon: GitBranch, label: 'New branch' },
 };
 

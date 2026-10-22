@@ -8,6 +8,7 @@ import { rateLimit } from '../../middleware/rate-limit';
 import { requireAuth } from '../../middleware/require-auth';
 import { validate } from '../../middleware/validate';
 import { listPage as activityPage } from '../activity/activity';
+import { repositoryPullRoutes } from '../pull-requests/routes';
 import { activityQuery } from '../activity/routes';
 import {
   createRepository,
@@ -145,6 +146,8 @@ export function repositoryRoutes(gitHost: GitHostFor) {
     logEvent('git_tokens_revoked', { requestId: c.get('requestId'), accountId });
     return c.json({ revoked: result.count });
   });
+
+  repositoryPullRoutes(app);
 
   app.post(
     '/',

@@ -66,6 +66,106 @@ const MIGRATIONS = [
    )`,
   // The hosted Git URL the server gave a remote, so fetch and push know it without asking again.
   `ALTER TABLE remote_repository_cache ADD COLUMN git_url TEXT`,
+  // Pull requests of repositories not linked to the account, their review records, files marked
+  // viewed per snapshot (account pull requests too, by id), and merge or revert operations so an
+  // interrupted one can be found again after a restart.
+  `CREATE TABLE pull_requests (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES local_repositories (id) ON DELETE CASCADE,
+    number INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL,
+    source_ref TEXT NOT NULL,
+    target_ref TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('open', 'closed', 'merged')),
+    is_draft INTEGER NOT NULL DEFAULT 0,
+    author_json TEXT NOT NULL,
+    idempotency_key TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    closed_at INTEGER,
+    merged_at INTEGER,
+    merge_commit_oid TEXT,
+    merge_operation_id TEXT,
+    UNIQUE (repository_id, number),
+    UNIQUE (repository_id, idempotency_key)
+  );
+  CREATE INDEX pull_requests_list ON pull_requests (repository_id, status, updated_at, id);
+  CREATE TABLE pull_snapshots (
+    pull_id TEXT NOT NULL REFERENCES pull_requests (id) ON DELETE CASCADE,
+    version INTEGER NOT NULL,
+    source_oid TEXT NOT NULL,
+    target_oid TEXT NOT NULL,
+    merge_base_oid TEXT,
+    mergeability TEXT NOT NULL DEFAULT 'unknown',
+    reason TEXT,
+    conflicts_json TEXT NOT NULL DEFAULT '[]',
+    checked_at INTEGER,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY (pull_id, version)
+  );
+  CREATE TABLE pull_comments (
+    id TEXT PRIMARY KEY,
+    pull_id TEXT NOT NULL REFERENCES pull_requests (id) ON DELETE CASCADE,
+    parent_id TEXT,
+    author_json TEXT NOT NULL,
+    body TEXT NOT NULL,
+    anchor_json TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    deleted_at INTEGER,
+    resolved_at INTEGER
+  );
+  CREATE INDEX pull_comments_pull ON pull_comments (pull_id, created_at);
+  CREATE TABLE pull_reviews (
+    id TEXT PRIMARY KEY,
+    pull_id TEXT NOT NULL REFERENCES pull_requests (id) ON DELETE CASCADE,
+    decision TEXT NOT NULL CHECK (decision IN ('approved', 'changes_requested', 'commented')),
+    body TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    source_oid TEXT NOT NULL,
+    target_oid TEXT NOT NULL,
+    author_json TEXT NOT NULL,
+    submitted_at INTEGER NOT NULL
+  );
+  CREATE INDEX pull_reviews_pull ON pull_reviews (pull_id, submitted_at);
+  CREATE TABLE pull_activity (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    pull_id TEXT NOT NULL REFERENCES pull_requests (id) ON DELETE CASCADE,
+    event_type TEXT NOT NULL,
+    actor_json TEXT NOT NULL,
+    detail TEXT,
+    created_at INTEGER NOT NULL
+  );
+  CREATE INDEX pull_activity_pull ON pull_activity (pull_id, id);
+  CREATE TABLE pull_viewed (
+    pull_key TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    path TEXT NOT NULL,
+    PRIMARY KEY (pull_key, version, path)
+  );
+  CREATE TABLE merge_operations (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES local_repositories (id) ON DELETE CASCADE,
+    pull_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('merge', 'revert')),
+    state TEXT NOT NULL,
+    strategy TEXT,
+    source_oid TEXT NOT NULL,
+    target_oid TEXT NOT NULL,
+    result_oid TEXT,
+    -- Push the target after merging; whether the account has the result; the branch to go back to
+    -- after an abort; the paths that conflicted.
+    push INTEGER NOT NULL DEFAULT 0,
+    recorded INTEGER NOT NULL DEFAULT 0,
+    head_ref TEXT,
+    conflicts_json TEXT NOT NULL DEFAULT '[]',
+    message TEXT,
+    commit_message TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  CREATE INDEX merge_operations_repo ON merge_operations (repository_id, updated_at);`,
 ];
 
 export type AppDatabase = DatabaseSync;

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { accountSummarySchema, sessionInfoSchema } from '../../shared/ipc';
+import { PULL_EVENTS } from '../../shared/pulls';
 import {
   gitUrlSchema,
   remoteActivitySchema,
@@ -49,6 +50,131 @@ const credentialsResponse = z.object({
   expiresAt: z.number(),
 });
 const revokeResponse = z.object({ revoked: z.number().int().nonnegative() });
+
+// Pull request records from the Worker, validated like any other server input. OIDs and paths are
+// checked to their shapes so nothing odd reaches Git or the screen.
+const oid = z.string().regex(/^[0-9a-f]{40,64}$/);
+const text = (max: number) => z.string().max(max);
+const author = z.object({
+  accountId: z.string().min(1).max(64),
+  name: text(200),
+  avatarUrl: z.string().url().startsWith('https://').max(2048).nullable(),
+});
+const snapshot = z.object({
+  version: z.number().int().min(1),
+  sourceOid: oid,
+  targetOid: oid,
+  mergeBaseOid: oid.nullable(),
+  mergeability: z.enum([
+    'unknown',
+    'mergeable',
+    'conflicts',
+    'needs_refresh',
+    'unavailable',
+  ]),
+  reason: z
+    .enum([
+      'source-missing',
+      'target-missing',
+      'unrelated',
+      'git-too-old',
+      'failed',
+    ])
+    .nullable(),
+  conflicts: z.array(text(4096)).max(200),
+  checkedAt: z.number().nullable(),
+});
+export const accountPullSchema = z.object({
+  id: z.uuid(),
+  number: z.number().int().min(1),
+  title: text(200),
+  description: text(10_000),
+  sourceRef: text(255),
+  targetRef: text(255),
+  status: z.enum(['open', 'closed', 'merged']),
+  isDraft: z.boolean(),
+  author,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  closedAt: z.number().nullable(),
+  mergedAt: z.number().nullable(),
+  mergeCommitOid: oid.nullable(),
+  latest: snapshot.nullable(),
+  comments: z.number().int().nonnegative(),
+  unresolved: z.number().int().nonnegative(),
+  review: z
+    .object({
+      decision: z.enum(['approved', 'changes_requested', 'commented']),
+      version: z.number().int(),
+      stale: z.boolean(),
+    })
+    .nullable(),
+});
+const pullResponse = z.object({ pullRequest: accountPullSchema });
+const counts = z.object({
+  open: z.number().int(),
+  merged: z.number().int(),
+  closed: z.number().int(),
+});
+const pullListResponse = z.object({
+  pullRequests: z.array(accountPullSchema).max(50),
+  nextCursor: z.string().max(400).nullable(),
+  counts,
+});
+const anchor = z.object({
+  comparisonVersion: z.number().int().min(1),
+  sourceOid: oid,
+  targetOid: oid,
+  path: text(4096),
+  side: z.enum(['old', 'new']),
+  oldLine: z.number().int().nullable(),
+  newLine: z.number().int().nullable(),
+  contextHash: z.string().regex(/^[0-9a-f]{40}$/),
+});
+const comment = z.object({
+  id: z.uuid(),
+  parentId: z.uuid().nullable(),
+  author,
+  body: text(10_000),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  deleted: z.boolean(),
+  resolved: z.boolean(),
+  anchor: anchor.nullable(),
+});
+const review = z.object({
+  id: z.uuid(),
+  decision: z.enum(['approved', 'changes_requested', 'commented']),
+  body: text(10_000),
+  version: z.number().int().min(1),
+  sourceOid: oid,
+  targetOid: oid,
+  author,
+  submittedAt: z.number(),
+});
+const pullEvent = z.object({
+  id: z.string().min(1).max(64),
+  type: z.enum(PULL_EVENTS),
+  actor: author,
+  detail: text(300).nullable(),
+  createdAt: z.number(),
+});
+const statsResponse = z.object({
+  months: z
+    .array(
+      z.object({
+        month: z.string().regex(/^\d{4}-\d{2}$/),
+        opened: z.number().int(),
+        merged: z.number().int(),
+      }),
+    )
+    .max(13),
+  counts,
+  medianMergeMs: z.number().nullable(),
+  merges: z.number().int(),
+  openWithConflicts: z.number().int(),
+});
+export type AccountPull = z.infer<typeof accountPullSchema>;
 const repositoryResponse = z.object({ repository: remoteRepositorySchema });
 // 204 has no body; 202 carries the repository that is still being deleted.
 const deleteResponse = repositoryResponse.nullable();
@@ -204,6 +330,83 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
         `/api/v1/repositories/${encodeURIComponent(id)}/git-credentials`,
         revokeResponse,
         { method: 'DELETE', token },
+      ),
+    listPullRequests: (
+      token: string,
+      repositoryId: string,
+      query: { status: string; q: string; cursor: string | null },
+    ) => {
+      const params = new URLSearchParams({ status: query.status, limit: '25' });
+      if (query.q) params.set('q', query.q);
+      if (query.cursor) params.set('cursor', query.cursor);
+      return request(
+        `/api/v1/repositories/${encodeURIComponent(repositoryId)}/pull-requests?${params}`,
+        pullListResponse,
+        { token },
+      );
+    },
+    pullRequestStats: (token: string, repositoryId: string, range: string) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(repositoryId)}/pull-requests/stats?range=${encodeURIComponent(range)}`,
+        statsResponse,
+        { token },
+      ),
+    createPullRequest: (
+      token: string,
+      repositoryId: string,
+      body: {
+        title: string;
+        description: string;
+        sourceRef: string;
+        targetRef: string;
+        isDraft: boolean;
+      },
+      idempotencyKey: string,
+    ) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(repositoryId)}/pull-requests`,
+        pullResponse,
+        {
+          method: 'POST',
+          body,
+          token,
+          headers: { 'idempotency-key': idempotencyKey },
+        },
+      ),
+    // One call shape for every pull request route: the path after /api/v1/pull-requests/:id.
+    pullRequest: <T>(
+      token: string,
+      id: string,
+      rest: string,
+      schema:
+        | 'pull'
+        | 'comments'
+        | 'comment'
+        | 'reviews'
+        | 'review'
+        | 'activity'
+        | 'none',
+      init: { method?: string; body?: unknown } = {},
+    ) =>
+      request(
+        `/api/v1/pull-requests/${encodeURIComponent(id)}${rest}`,
+        (schema === 'pull'
+          ? pullResponse
+          : schema === 'comments'
+            ? z.object({ comments: z.array(comment).max(1000) })
+            : schema === 'comment'
+              ? z.object({ comment })
+              : schema === 'reviews'
+                ? z.object({ reviews: z.array(review).max(100) })
+                : schema === 'review'
+                  ? z.object({ review })
+                  : schema === 'activity'
+                    ? z.object({
+                        events: z.array(pullEvent).max(50),
+                        nextCursor: z.string().max(400).nullable(),
+                      })
+                    : null) as z.ZodType<T> | null,
+        { ...init, token },
       ),
     revokeSession: (token: string, id: string) =>
       request(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, null, {

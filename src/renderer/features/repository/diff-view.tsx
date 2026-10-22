@@ -231,7 +231,33 @@ function LineText({
   return <>{out}</>;
 }
 
-function Gutter({ value }: { value: number | null }) {
+// With onComment, the line number is the button that starts a comment on that line.
+function Gutter({
+  value,
+  onComment,
+  removed = false,
+}: {
+  value: number | null;
+  onComment?: () => void;
+  // The old side of a removed line: its number is from before the change.
+  removed?: boolean;
+}) {
+  if (onComment && value !== null) {
+    const label = `Comment on ${removed ? 'removed ' : ''}line ${value}`;
+    return (
+      <span role="cell" className="text-right">
+        <button
+          type="button"
+          onClick={onComment}
+          aria-label={label}
+          title={label}
+          className="w-full pr-2 text-right text-muted tabular-nums select-none hover:bg-accent-soft hover:text-accent focus-visible:outline-offset-[-2px]"
+        >
+          {value}
+        </button>
+      </span>
+    );
+  }
   return (
     <span
       role="cell"
@@ -239,6 +265,21 @@ function Gutter({ value }: { value: number | null }) {
     >
       {value ?? ''}
     </span>
+  );
+}
+
+// A thread or composer under a line, inside the diff's table.
+function SlotRow({ children }: { children: ReactNode }) {
+  return (
+    <div role="row" className="border-y border-line bg-surface font-sans">
+      <div
+        role="cell"
+        // Pinned to the visible width, so a thread stays in view while long code scrolls sideways.
+        className="sticky left-0 w-[100cqw] py-3 pr-4 pl-4 whitespace-normal sm:pl-[6.25rem]"
+      >
+        {children}
+      </div>
+    </div>
   );
 }
 
@@ -251,13 +292,17 @@ function Sign({ kind }: { kind: DiffLine['kind'] }) {
   );
 }
 
-function DiffBody({
+// The text diff itself. Reviews pass lineSlot to show threads under lines and onLineComment to
+// make line numbers start a comment; Changes passes neither.
+export function DiffBody({
   diff,
   path,
   settings,
   split,
   onExpand,
   maxHeight,
+  lineSlot,
+  onLineComment,
 }: {
   diff: Extract<DiffResult, { status: 'text' }>;
   path: string;
@@ -265,6 +310,8 @@ function DiffBody({
   split: boolean;
   onExpand: (() => void) | null;
   maxHeight?: string;
+  lineSlot?: (line: DiffLine) => ReactNode;
+  onLineComment?: (line: DiffLine, side: 'old' | 'new') => void;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const rows = useMemo(() => buildRows(diff.hunks, split), [diff, split]);
@@ -309,11 +356,24 @@ function DiffBody({
     side ? (
       <>
         <Gutter
+          // Left is the file before (old numbers), right the file after (new numbers).
           value={
-            side.line.kind === 'add'
-              ? side.line.new
-              : (side.line.old ?? side.line.new)
+            first
+              ? (side.line.old ?? side.line.new)
+              : (side.line.new ?? side.line.old)
           }
+          // The left column comments only on removed lines: an unchanged line there shows its old
+          // number, so its comment belongs to the right column's copy.
+          onComment={
+            onLineComment && (!first || side.line.kind === 'del')
+              ? () =>
+                  onLineComment(
+                    side.line,
+                    side.line.kind === 'del' ? 'old' : 'new',
+                  )
+              : undefined
+          }
+          removed={side.line.kind === 'del'}
         />
         <Sign kind={side.line.kind} />
         <span
@@ -384,18 +444,32 @@ function DiffBody({
           </span>
         </div>
       );
-    if (row.type === 'line')
-      return (
+    if (row.type === 'line') {
+      const slot = lineSlot?.(row.line);
+      const line = (
         <div
           key={index}
-          {...common}
+          {...(slot ? { role: 'row' } : common)}
           className={cn(
             'grid grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)]',
             ROW_TINT[row.line.kind],
           )}
         >
-          <Gutter value={row.line.old} />
-          <Gutter value={row.line.new} />
+          <Gutter
+            value={row.line.old}
+            onComment={
+              onLineComment && row.line.kind === 'del'
+                ? () => onLineComment(row.line, 'old')
+                : undefined
+            }
+            removed
+          />
+          <Gutter
+            value={row.line.new}
+            onComment={
+              onLineComment ? () => onLineComment(row.line, 'new') : undefined
+            }
+          />
           <Sign kind={row.line.kind} />
           <span
             role="cell"
@@ -418,10 +492,24 @@ function DiffBody({
           </span>
         </div>
       );
-    return (
+      if (!slot) return line;
+      // The line and its thread are measured as one item when the diff is virtualized.
+      return (
+        <div key={index} data-index={index} ref={measure}>
+          {line}
+          <SlotRow>{slot}</SlotRow>
+        </div>
+      );
+    }
+    // An unchanged line is the same line in both columns: ask for its threads once.
+    const lines = new Set([row.left?.line, row.right?.line]);
+    const slots = [...lines]
+      .map((line) => (line ? lineSlot?.(line) : null))
+      .filter(Boolean);
+    const pair = (
       <div
         key={index}
-        {...common}
+        {...(slots.length ? { role: 'row' } : common)}
         className="grid grid-cols-[3rem_1.25rem_minmax(0,1fr)_3rem_1.25rem_minmax(0,1fr)]"
       >
         <div
@@ -440,6 +528,15 @@ function DiffBody({
         >
           {textCell(row.right, row.hunk, false)}
         </div>
+      </div>
+    );
+    if (!slots.length) return pair;
+    return (
+      <div key={index} data-index={index} ref={measure}>
+        {pair}
+        {slots.map((slot, i) => (
+          <SlotRow key={i}>{slot}</SlotRow>
+        ))}
       </div>
     );
   };
@@ -478,7 +575,10 @@ function DiffBody({
         role="table"
         aria-label={`Diff of ${path}`}
         aria-rowcount={rows.length}
-        className={cn('code-text min-h-0 flex-1 overflow-auto', maxHeight)}
+        className={cn(
+          'code-text @container min-h-0 flex-1 overflow-auto',
+          maxHeight,
+        )}
       >
         {virtualize ? (
           <div

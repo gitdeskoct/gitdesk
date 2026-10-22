@@ -222,6 +222,28 @@ const PUSH_MESSAGES: Record<PushFailure, string> = {
     'HEAD is not on a branch, so there is nothing to push. Switch to a branch first.',
 };
 
+// `log --format=%H%x00%P%x00%an%x00%ae%x00%ct%x00%s%x00%D%x1e`, one record per commit.
+export function parseCommitRows(output: string): CommitRow[] {
+  return output
+    .split('\x1e')
+    .map((record) => record.replace(/^\n/, '').split('\0'))
+    .filter(([oid, , , , at]) => OID.test(oid ?? '') && Number(at) > 0)
+    .map(([oid, parents, author, email, at, subject, refs]) => ({
+      oid: oid!,
+      parents: (parents ?? '').split(' ').filter((p) => OID.test(p)),
+      author: (author ?? '').slice(0, 100),
+      email: (email ?? '').slice(0, 254),
+      at: Number(at) * 1000,
+      subject: (subject ?? '').slice(0, 300),
+      refs: (refs ?? '')
+        .split(', ')
+        .map((ref) => ref.replace(/^HEAD -> /, '').trim())
+        .filter((ref) => ref && ref !== 'HEAD')
+        .slice(0, 10)
+        .map((ref) => ref.slice(0, 100)),
+    }));
+}
+
 // Git's refusal to switch names the files in the way, one per tab-indented line.
 export function parseBlockedFiles(text: string): string[] {
   const files: string[] = [];
@@ -1166,6 +1188,11 @@ export function createWorkspaceService(deps: {
     push: (input: { id: string; jobId: string }) =>
       pushBranch(input.id, input.jobId),
 
+    // Pull request merges, conflict steps and reverts share the per-repository mutation lock.
+    serial,
+    operationInProgress: (id: string) => operationInProgress(rootOf(id)),
+    rootOf,
+
     cancelPush(jobId: string): void {
       pushes.get(jobId)?.abort();
     },
@@ -1223,24 +1250,7 @@ export function createWorkspaceService(deps: {
         snapshot,
         '--',
       ]);
-      const commits: CommitRow[] = output
-        .split('\x1e')
-        .map((record) => record.replace(/^\n/, '').split('\0'))
-        .filter(([oid, , , , at]) => OID.test(oid ?? '') && Number(at) > 0)
-        .map(([oid, parents, author, email, at, subject, refs]) => ({
-          oid: oid!,
-          parents: (parents ?? '').split(' ').filter((p) => OID.test(p)),
-          author: (author ?? '').slice(0, 100),
-          email: (email ?? '').slice(0, 254),
-          at: Number(at) * 1000,
-          subject: (subject ?? '').slice(0, 300),
-          refs: (refs ?? '')
-            .split(', ')
-            .map((ref) => ref.replace(/^HEAD -> /, '').trim())
-            .filter((ref) => ref && ref !== 'HEAD')
-            .slice(0, 10)
-            .map((ref) => ref.slice(0, 100)),
-        }));
+      const commits = parseCommitRows(output);
       return {
         snapshot,
         commits: commits.slice(0, HISTORY_PAGE),

@@ -103,7 +103,8 @@ export function CommitForm({
       onSubmit={submit}
       aria-label="Commit"
       className={cn(
-        'grid gap-2',
+        // A shrinkable column, so the folded row's summary truncates instead of pushing past the pane.
+        'grid grid-cols-[minmax(0,1fr)] gap-2',
         compact ? 'p-3' : 'pt-3',
         compact && !open && 'py-2',
       )}
@@ -116,6 +117,7 @@ export function CommitForm({
             variant="ghost"
             aria-expanded={false}
             aria-controls="commit-fields"
+            className="shrink-0"
             onClick={() => setOpen(true)}
           >
             <ChevronUp />
@@ -131,6 +133,7 @@ export function CommitForm({
             type="submit"
             size="sm"
             variant="primary"
+            className="shrink-0"
             pending={commit.isPending}
             aria-disabled={staged === 0 || conflicts > 0 || undefined}
           >

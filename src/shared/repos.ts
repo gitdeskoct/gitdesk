@@ -75,6 +75,8 @@ export type LocalActivity = {
     | 'fetched'
     | 'pushed'
     | 'hosted-remote-added'
+    | 'pr-merged'
+    | 'pr-reverted'
     | 'branch-created';
   at: number;
   detail: string | null;

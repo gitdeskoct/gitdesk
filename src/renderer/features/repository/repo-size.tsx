@@ -9,8 +9,13 @@ import { formatBytes, relativeTime, useNow } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { useMeasureRepo, useRepoSize } from '../../lib/queries';
 
-const percent = (part: number, whole: number) =>
-  whole > 0 ? Math.round((part / whole) * 100) : 0;
+// Rounding never says 0% or 100% about a part that is neither none nor all of the folder.
+const percent = (part: number, whole: number) => {
+  const value = whole > 0 ? Math.round((part / whole) * 100) : 0;
+  if (value === 0 && part > 0) return 'under 1';
+  if (value === 100 && part < whole) return 'over 99';
+  return String(value);
+};
 
 // Where the folder's bytes are: Git's own data, the files in the last commit, and everything else
 // on disk (untracked and ignored files, unsaved edits). Measured by main, read only.
@@ -137,7 +142,11 @@ export function RepoSizeSection({ repo }: { repo: RepositorySummary }) {
         </div>
         <p className="mt-2 text-[0.8125rem] text-muted">
           {data.total
-            ? `${biggest.label} takes the most space, ${percent(biggest.bytes, data.total)}% of the folder. Git history is ${percent(data.git, data.total)}%.`
+            ? `${biggest.label} takes the most space, ${percent(biggest.bytes, data.total)}% of the folder. ${
+                biggest.key === 'git'
+                  ? `Tracked files are ${percent(data.tracked, data.total)}%.`
+                  : `Git history is ${percent(data.git, data.total)}%.`
+              }`
             : 'The folder is empty.'}
         </p>
         {data.truncated && (

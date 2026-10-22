@@ -153,3 +153,158 @@ export const activity = sqliteTable(
     index('activity_repository').on(t.repositoryId),
   ],
 );
+
+// Pull requests: review records only. Git computes comparisons and merges on the desktop, which
+// reports the commits it saw; those OIDs are client-reported facts, never verified here.
+export const PULL_STATUSES = ['open', 'closed', 'merged'] as const;
+export const REVIEW_DECISIONS = ['approved', 'changes_requested', 'commented'] as const;
+export const MERGEABILITY = ['unknown', 'mergeable', 'conflicts', 'needs_refresh', 'unavailable'] as const;
+
+export const pullRequests = sqliteTable(
+  'pull_requests',
+  {
+    id: text('id').primaryKey(),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    authorAccountId: text('author_account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    number: integer('number').notNull(),
+    title: text('title').notNull(),
+    description: text('description').notNull(),
+    sourceRef: text('source_ref').notNull(),
+    targetRef: text('target_ref').notNull(),
+    status: text('status', { enum: PULL_STATUSES }).notNull().default('open'),
+    isDraft: integer('is_draft', { mode: 'boolean' }).notNull().default(false),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    closedAt: integer('closed_at'),
+    mergedAt: integer('merged_at'),
+    mergeCommitOid: text('merge_commit_oid'),
+    latestSourceOid: text('latest_source_oid'),
+    latestTargetOid: text('latest_target_oid'),
+    comparisonVersion: integer('comparison_version').notNull().default(0),
+    idempotencyKey: text('idempotency_key'),
+  },
+  (t) => [
+    uniqueIndex('pull_requests_repository_number').on(t.repositoryId, t.number),
+    uniqueIndex('pull_requests_repository_idempotency').on(t.repositoryId, t.idempotencyKey),
+    index('pull_requests_repository_status_updated').on(t.repositoryId, t.status, t.updatedAt, t.id),
+    check('pull_requests_status', sql`status in ('open', 'closed', 'merged')`),
+  ],
+);
+
+export const pullRequestSnapshots = sqliteTable(
+  'pull_request_snapshots',
+  {
+    id: text('id').primaryKey(),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: 'cascade' }),
+    version: integer('version').notNull(),
+    sourceOid: text('source_oid').notNull(),
+    targetOid: text('target_oid').notNull(),
+    mergeBaseOid: text('merge_base_oid'),
+    mergeability: text('mergeability', { enum: MERGEABILITY }).notNull().default('unknown'),
+    reason: text('reason'),
+    // JSON array of conflicted paths, at most 200.
+    conflicts: text('conflicts').notNull().default('[]'),
+    checkedAt: integer('checked_at'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [uniqueIndex('pull_request_snapshots_version').on(t.pullRequestId, t.version)],
+);
+
+export const pullRequestReviews = sqliteTable(
+  'pull_request_reviews',
+  {
+    id: text('id').primaryKey(),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: 'cascade' }),
+    reviewerAccountId: text('reviewer_account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    decision: text('decision', { enum: REVIEW_DECISIONS }).notNull(),
+    body: text('body').notNull(),
+    sourceOid: text('source_oid').notNull(),
+    targetOid: text('target_oid').notNull(),
+    comparisonVersion: integer('comparison_version').notNull(),
+    submittedAt: integer('submitted_at').notNull(),
+  },
+  (t) => [
+    index('pull_request_reviews_pull').on(t.pullRequestId, t.submittedAt),
+    check('pull_request_reviews_decision', sql`decision in ('approved', 'changes_requested', 'commented')`),
+  ],
+);
+
+export const pullRequestComments = sqliteTable(
+  'pull_request_comments',
+  {
+    id: text('id').primaryKey(),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: 'cascade' }),
+    authorAccountId: text('author_account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    parentCommentId: text('parent_comment_id'),
+    body: text('body').notNull(),
+    createdAt: integer('created_at').notNull(),
+    updatedAt: integer('updated_at').notNull(),
+    deletedAt: integer('deleted_at'),
+    resolvedAt: integer('resolved_at'),
+  },
+  (t) => [index('pull_request_comments_pull').on(t.pullRequestId, t.createdAt)],
+);
+
+// A line comment's place in one snapshot: the commits, the file, the side and the line's text hash.
+export const pullRequestCommentAnchors = sqliteTable(
+  'pull_request_comment_anchors',
+  {
+    commentId: text('comment_id')
+      .primaryKey()
+      .references(() => pullRequestComments.id, { onDelete: 'cascade' }),
+    comparisonVersion: integer('comparison_version').notNull(),
+    sourceOid: text('source_oid').notNull(),
+    targetOid: text('target_oid').notNull(),
+    path: text('path').notNull(),
+    side: text('side', { enum: ['old', 'new'] }).notNull(),
+    oldLine: integer('old_line'),
+    newLine: integer('new_line'),
+    contextHash: text('context_hash').notNull(),
+    isOutdated: integer('is_outdated', { mode: 'boolean' }).notNull().default(false),
+  },
+  (t) => [check('pull_request_comment_anchors_side', sql`side in ('old', 'new')`)],
+);
+
+export const pullRequestActivity = sqliteTable(
+  'pull_request_activity',
+  {
+    id: text('id').primaryKey(),
+    pullRequestId: text('pull_request_id')
+      .notNull()
+      .references(() => pullRequests.id, { onDelete: 'cascade' }),
+    actorAccountId: text('actor_account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    // The actor's name when it happened, so history reads the same after a rename.
+    actorName: text('actor_name').notNull(),
+    eventType: text('event_type').notNull(),
+    eventPayload: text('event_payload'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [index('pull_request_activity_pull').on(t.pullRequestId, t.createdAt, t.id)],
+);
+
+// One row per reported merge, keyed by the desktop's operation id: a retried report is a no-op.
+export const pullRequestMergeResults = sqliteTable('pull_request_merge_results', {
+  operationId: text('operation_id').primaryKey(),
+  pullRequestId: text('pull_request_id')
+    .notNull()
+    .references(() => pullRequests.id, { onDelete: 'cascade' }),
+  mergeCommitOid: text('merge_commit_oid').notNull(),
+  targetOid: text('target_oid').notNull(),
+  createdAt: integer('created_at').notNull(),
+});
