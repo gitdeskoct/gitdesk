@@ -13,7 +13,7 @@ import type {
 } from '../../shared/ipc';
 import type {
   CloneInput,
-  CloneProgressEvent,
+  ProgressEvent,
   CreateRepositoryInput,
   RemoteListInput,
   RemoteUpdateInput,
@@ -157,6 +157,8 @@ export function useRevokeOtherSessions() {
 
 export const useOpenLogs = () =>
   useMutation({ mutationFn: () => desktop().app.openLogs() });
+export const useTestNotification = () =>
+  useMutation({ mutationFn: () => desktop().app.testNotification() });
 export const useOpenGitInstallPage = () =>
   useMutation({ mutationFn: () => desktop().git.openInstallPage() });
 export const useCopyDiagnostics = () =>
@@ -188,6 +190,14 @@ export const useRepositoryActivity = () =>
     queryFn: () => repos().activity(),
     staleTime: Infinity,
   });
+
+export function useClearActivity() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => repos().clearActivity(),
+    onSettled: () => qc.invalidateQueries({ queryKey: repoKeys.activity }),
+  });
+}
 
 // Keyed by the snapshot time, so a new status check fetches the file list again and nothing else does.
 export const useRepositoryChanges = (
@@ -325,14 +335,12 @@ export const useCancelClone = () =>
   useMutation({ mutationFn: (jobId: string) => repos().cancelClone(jobId) });
 
 // The latest progress main reported for one clone job.
-export function useCloneProgress(
-  jobId: string | null,
-): CloneProgressEvent | null {
-  const [progress, setProgress] = useState<CloneProgressEvent | null>(null);
+export function useJobProgress(jobId: string | null): ProgressEvent | null {
+  const [progress, setProgress] = useState<ProgressEvent | null>(null);
   useEffect(() => {
     setProgress(null);
     if (!jobId) return;
-    return repos().onCloneProgress((event) => {
+    return repos().onProgress((event) => {
       if (event.jobId === jobId) setProgress(event);
     });
   }, [jobId]);

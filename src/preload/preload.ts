@@ -1,8 +1,13 @@
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from 'electron';
-import { IPC, type AuthStatus, type DesktopApi } from '../shared/ipc';
+import {
+  IPC,
+  type AppNotice,
+  type AuthStatus,
+  type DesktopApi,
+} from '../shared/ipc';
 import {
   REPOS_IPC as R,
-  type CloneProgressEvent,
+  type ProgressEvent,
   type RepositorySummary,
 } from '../shared/repos';
 
@@ -15,6 +20,18 @@ const api: DesktopApi = {
       ipcRenderer.invoke(IPC.appSetOpenAtLogin, enabled),
     openLogs: () => ipcRenderer.invoke(IPC.appOpenLogs),
     copyDiagnostics: () => ipcRenderer.invoke(IPC.appCopyDiagnostics),
+    testNotification: () => ipcRenderer.invoke(IPC.appTestNotification),
+    onNotice(callback) {
+      const listener = (_event: IpcRendererEvent, notice: AppNotice) =>
+        callback(notice);
+      ipcRenderer.on(IPC.appNotice, listener);
+      return () => ipcRenderer.removeListener(IPC.appNotice, listener);
+    },
+    onOpenRepository(callback) {
+      const listener = (_event: IpcRendererEvent, id: string) => callback(id);
+      ipcRenderer.on(IPC.appOpenRepository, listener);
+      return () => ipcRenderer.removeListener(IPC.appOpenRepository, listener);
+    },
   },
   window: {
     command: (command) => ipcRenderer.invoke(IPC.windowCommand, command),
@@ -62,17 +79,18 @@ const api: DesktopApi = {
     create: (input) => ipcRenderer.invoke(R.create, input),
     linkRemote: (id) => ipcRenderer.invoke(R.linkRemote, id),
     activity: () => ipcRenderer.invoke(R.activity),
+    clearActivity: () => ipcRenderer.invoke(R.clearActivity),
     remoteOverview: (force) => ipcRenderer.invoke(R.remoteOverview, { force }),
     remoteList: (input) => ipcRenderer.invoke(R.remoteList, input),
     remoteUpdate: (input) => ipcRenderer.invoke(R.remoteUpdate, input),
     remoteDelete: (id) => ipcRenderer.invoke(R.remoteDelete, id),
     clone: (input) => ipcRenderer.invoke(R.clone, input),
     cancelClone: (jobId) => ipcRenderer.invoke(R.cloneCancel, jobId),
-    onCloneProgress(callback) {
-      const listener = (_event: IpcRendererEvent, event: CloneProgressEvent) =>
+    onProgress(callback) {
+      const listener = (_event: IpcRendererEvent, event: ProgressEvent) =>
         callback(event);
-      ipcRenderer.on(R.cloneProgress, listener);
-      return () => ipcRenderer.removeListener(R.cloneProgress, listener);
+      ipcRenderer.on(R.progress, listener);
+      return () => ipcRenderer.removeListener(R.progress, listener);
     },
     onChanged(callback) {
       const listener = (

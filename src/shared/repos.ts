@@ -103,8 +103,20 @@ export const createRepositoryInputSchema = z.object({
   locationToken: tokenSchema,
   readme: z.boolean(),
   remote: z.boolean(),
+  // Lets the panel follow this create's steps on the progress channel.
+  jobId: z.uuid().optional(),
 });
 export type CreateRepositoryInput = z.infer<typeof createRepositoryInputSchema>;
+
+// The order create works through; a step that doesn't apply (no README, no remote) is skipped.
+export const CREATE_STEPS = [
+  'folder',
+  'init',
+  'readme',
+  'register',
+  'remote',
+] as const;
+export type CreateStep = (typeof CREATE_STEPS)[number];
 
 export type CreateRepositoryResult = {
   repository: RepositorySummary;
@@ -115,6 +127,8 @@ export type CreateRepositoryResult = {
     | { status: 'failed'; message: string };
   // A README the identity could not commit is left in place, uncommitted.
   readmeCommitted: boolean | null;
+  // Measured, not estimated: the whole create, and the server round trip for the remote step.
+  timing: { totalMs: number; remoteMs: number | null };
 };
 
 // Cloning from your account needs the sync transport (Git objects in R2 behind a Git-compatible
@@ -131,10 +145,15 @@ export type CloneInput = z.infer<typeof cloneInputSchema>;
 export type CloneResult =
   | { status: 'unavailable' }
   | { status: 'cloned'; repository: RepositorySummary };
-export type CloneProgressEvent = {
+// Progress of one long job (a clone or a create), pushed from main as it happens.
+// receivedBytes and bytesPerSecond come from Git's own transfer line, so they are null until
+// Git reports them and stay null for work that moves no data over the network.
+export type ProgressEvent = {
   jobId: string;
   stage: string;
   percent: number;
+  receivedBytes: number | null;
+  bytesPerSecond: number | null;
 };
 
 export const pinInputSchema = z.object({
@@ -235,10 +254,11 @@ export const REPOS_IPC = {
   create: 'repos:create',
   linkRemote: 'repos:link-remote',
   activity: 'repos:activity',
+  clearActivity: 'repos:clear-activity',
   changed: 'repos:changed',
   clone: 'repos:clone',
   cloneCancel: 'repos:clone-cancel',
-  cloneProgress: 'repos:clone-progress',
+  progress: 'repos:progress',
   remoteOverview: 'remote:overview',
   remoteList: 'remote:list',
   remoteUpdate: 'remote:update',
@@ -262,6 +282,8 @@ export interface ReposApi {
   create(input: CreateRepositoryInput): Promise<CreateRepositoryResult>;
   linkRemote(id: string): Promise<RemoteRepository>;
   activity(): Promise<LocalActivity[]>;
+  // Empties this computer's activity list; repositories and their history are not touched.
+  clearActivity(): Promise<void>;
   remoteOverview(force: boolean): Promise<RemoteOverview>;
   remoteList(input: RemoteListInput): Promise<RemotePage>;
   remoteUpdate(input: RemoteUpdateInput): Promise<RemoteRepository>;
@@ -269,6 +291,6 @@ export interface ReposApi {
   remoteDelete(id: string): Promise<void>;
   clone(input: CloneInput): Promise<CloneResult>;
   cancelClone(jobId: string): Promise<void>;
-  onCloneProgress(callback: (event: CloneProgressEvent) => void): () => void;
+  onProgress(callback: (event: ProgressEvent) => void): () => void;
   onChanged(callback: (repositories: RepositorySummary[]) => void): () => void;
 }

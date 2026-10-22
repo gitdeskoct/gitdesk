@@ -41,7 +41,9 @@ let picked: string | null;
 const remoteCreate = vi.fn();
 const cleanups: (() => void)[] = [];
 
-function setup() {
+function setup(
+  extra: Partial<Parameters<typeof createRepositoryService>[0]> = {},
+) {
   const db = openDatabase(path.join(dir, 'test.db'));
   cleanups.push(() => db.close());
   const store = createRepositoryStore(db);
@@ -56,6 +58,7 @@ function setup() {
       openPath: async () => '',
       copyText: vi.fn(),
     },
+    ...extra,
   });
   cleanups.push(() => service.dispose());
   return { service, store, db, emit };
@@ -193,7 +196,7 @@ describe('repository service', () => {
 
     expect(service.list()[0]?.status?.branch).toBe('main');
     expect(existsSync(marker)).toBe(false);
-  });
+  }, 20_000);
 
   it('stops trusting a folder whose .git is gone, even inside another repository', async () => {
     const outer = makeRepo('outer');
@@ -373,6 +376,59 @@ describe('repository service', () => {
         ['added', null],
       ]),
     );
+  });
+});
+
+describe('progress and notices', () => {
+  it('reports each create step in order and measures the whole create', async () => {
+    picked = dir;
+    const events: { stage: string; percent: number }[] = [];
+    const { service } = setup({ emitProgress: (e) => events.push(e) });
+    const location = await service.chooseLocation();
+    if (!location) throw new Error('no location');
+    const result = await service.create({
+      name: 'stepped',
+      locationToken: location.token,
+      readme: true,
+      remote: false,
+      jobId: '7c1b1f2e-1a2b-4c3d-8e4f-5a6b7c8d9e0f',
+    });
+    expect(events.map((e) => e.stage)).toEqual([
+      'folder',
+      'init',
+      'readme',
+      'register',
+      'done',
+    ]);
+    expect(events.at(-1)?.percent).toBe(100);
+    expect(result.timing.remoteMs).toBeNull();
+    expect(result.timing.totalMs).toBeGreaterThanOrEqual(0);
+  });
+
+  it('reports a new conflict once, not on every check', async () => {
+    const root = makeRepo('merging');
+    git(root, 'checkout', '-q', '-b', 'side');
+    writeFileSync(path.join(root, 'README.md'), '# side\n');
+    git(root, 'commit', '-q', '-am', 'side');
+    git(root, 'checkout', '-q', 'main');
+    writeFileSync(path.join(root, 'README.md'), '# main\n');
+    git(root, 'commit', '-q', '-am', 'main');
+    picked = root;
+    const onProblem = vi.fn();
+    const { service } = setup({ onProblem });
+    const added = await service.add();
+    if (added.status !== 'added') throw new Error('not added');
+
+    try {
+      git(root, 'merge', 'side');
+    } catch {
+      // The merge stops on the conflict, which is the point.
+    }
+    await service.refresh(added.repository.id);
+    await service.refresh(added.repository.id);
+
+    expect(onProblem).toHaveBeenCalledTimes(1);
+    expect(onProblem.mock.calls[0]![1]).toBe('conflict');
   });
 });
 

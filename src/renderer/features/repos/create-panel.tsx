@@ -1,20 +1,27 @@
-import { CircleAlert, CircleCheck } from 'lucide-react';
+import { Check, Circle, CircleAlert, CircleCheck } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import { z } from 'zod';
 import {
+  CREATE_STEPS,
   descriptionSchema,
   repositoryNameSchema,
   type CreateRepositoryResult,
+  type CreateStep,
 } from '../../../shared/repos';
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
+import { JobProgress } from '../../components/ui/job-progress';
+import { Spinner } from '../../components/ui/spinner';
 import { InlineStatus } from '../../components/ui/status';
 import { TextField } from '../../components/ui/text-field';
+import { cn } from '../../lib/cn';
+import { formatDuration } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useAuthStatus,
   useChooseLocation,
   useCreateRepository,
+  useJobProgress,
   useLinkRemote,
 } from '../../lib/queries';
 import { useOpenRepo } from './repo-row';
@@ -135,6 +142,11 @@ function Result({
           </div>
         </>
       )}
+      <p className="text-[0.8125rem] text-muted">
+        Finished in {formatDuration(result.timing.totalMs)}
+        {result.timing.remoteMs !== null &&
+          ` · the server answered in ${Math.round(result.timing.remoteMs)} ms`}
+      </p>
       <div className="flex gap-2 pt-1">
         <Button
           variant="primary"
@@ -147,6 +159,80 @@ function Result({
         </Button>
         <Button variant="ghost" onClick={onClose}>
           Done
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+const STEP_TEXT: Record<CreateStep, { doing: string; done: string }> = {
+  folder: { doing: 'Creating the folder', done: 'Folder created' },
+  init: { doing: 'Initializing Git', done: 'Git initialized' },
+  readme: { doing: 'Committing the README', done: 'README committed' },
+  register: { doing: 'Adding it to gitdesk', done: 'Added to gitdesk' },
+  remote: {
+    doing: 'Creating the private remote',
+    done: 'Private remote created',
+  },
+};
+
+// Each step as main reports it: done, running, or still to come. Only the remote step uses the
+// network, so only it shows the connection line.
+function CreateSteps({
+  jobId,
+  name,
+  readme,
+  remote,
+}: {
+  jobId: string;
+  name: string;
+  readme: boolean;
+  remote: boolean;
+}) {
+  const progress = useJobProgress(jobId);
+  const steps = CREATE_STEPS.filter(
+    (s) => (s !== 'readme' || readme) && (s !== 'remote' || remote),
+  );
+  const current = Math.max(0, steps.indexOf(progress?.stage as CreateStep));
+  const step = steps[current]!;
+  return (
+    <div className="grid gap-5" role="status">
+      <JobProgress
+        label={`Creating ${name}`}
+        stage={STEP_TEXT[step].doing}
+        right={`Step ${current + 1} of ${steps.length}`}
+        percent={progress?.percent ?? 0}
+        network={step === 'remote'}
+      />
+      <ol className="grid gap-2 text-sm">
+        {steps.map((s, index) => (
+          <li
+            key={s}
+            className={cn(
+              'flex items-center gap-2.5',
+              index > current ? 'text-muted' : 'text-ink',
+              index === current && 'font-medium',
+            )}
+          >
+            <span className="grid size-4 shrink-0 place-items-center">
+              {index < current ? (
+                <Check aria-hidden className="size-4 text-success" />
+              ) : index === current ? (
+                <Spinner className="size-3.5 text-muted" />
+              ) : (
+                <Circle aria-hidden className="size-2.5 text-faint" />
+              )}
+            </span>
+            {index < current ? STEP_TEXT[s].done : STEP_TEXT[s].doing}
+          </li>
+        ))}
+      </ol>
+      <div className="flex gap-2">
+        <Button variant="primary" pending>
+          Creating…
+        </Button>
+        <Button variant="ghost" aria-disabled>
+          Cancel
         </Button>
       </div>
     </div>
@@ -172,6 +258,7 @@ export function CreatePanel({ onClose }: { onClose: () => void }) {
   } | null>(null);
   const [readme, setReadme] = useState(true);
   const [remote, setRemote] = useState(online);
+  const [jobId, setJobId] = useState<string | null>(null);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -186,12 +273,15 @@ export function CreatePanel({ onClose }: { onClose: () => void }) {
     };
     setErrors(next);
     if (!parsed.success || !location) return;
+    const id = crypto.randomUUID();
+    setJobId(id);
     create.mutate({
       name: parsed.data.name,
       description: parsed.data.description || undefined,
       locationToken: location.token,
       readme,
       remote: remote && online,
+      jobId: id,
     });
   };
 
@@ -203,6 +293,13 @@ export function CreatePanel({ onClose }: { onClose: () => void }) {
     >
       {create.isSuccess ? (
         <Result result={create.data} onClose={onClose} />
+      ) : create.isPending && jobId ? (
+        <CreateSteps
+          jobId={jobId}
+          name={values.name.trim()}
+          readme={readme}
+          remote={remote && online}
+        />
       ) : (
         <form onSubmit={submit} noValidate className="grid gap-5">
           <TextField
