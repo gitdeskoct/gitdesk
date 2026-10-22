@@ -35,6 +35,7 @@ import {
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
 import { EmptyState } from '../../components/ui/empty-state';
+import { MiddleTruncate } from '../../components/ui/long-value';
 import { Pager, usePage } from '../../components/ui/pager';
 import { Segmented } from '../../components/ui/segmented';
 import { Spinner } from '../../components/ui/spinner';
@@ -271,9 +272,10 @@ function LocalRow({
                 </span>
                 <RepoTags local remote={!!repo.remoteId} compact />
               </span>
-              <span className="block truncate font-mono text-xs text-muted">
-                {repo.displayPath}
-              </span>
+              <MiddleTruncate
+                value={repo.displayPath}
+                className="font-mono text-xs text-muted"
+              />
             </button>
           </td>
           <td className="max-w-0 py-3 pr-4">

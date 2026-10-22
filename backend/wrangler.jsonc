@@ -36,7 +36,9 @@
     // Writes spend the free plan's 100,000 daily D1 row writes; one account gets 10 a minute.
     { "name": "WRITE_LIMITER", "namespace_id": "4104", "simple": { "limit": 10, "period": 60 } },
     // Git tokens: one per fetch or push, which the desktop reuses until a minute before expiry.
-    { "name": "GIT_LIMITER", "namespace_id": "4105", "simple": { "limit": 30, "period": 60 } }
+    { "name": "GIT_LIMITER", "namespace_id": "4105", "simple": { "limit": 30, "period": 60 } },
+    // Pull request writes: comments, reviews and snapshots come in bursts during a review.
+    { "name": "PULL_LIMITER", "namespace_id": "4106", "simple": { "limit": 60, "period": 60 } }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]

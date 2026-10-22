@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { PullsApi } from './pulls';
 import type { ReposApi } from './repos';
 import type { Settings, SettingsPatch } from './settings';
 import type { WorkspaceApi } from './workspace';
@@ -174,4 +175,5 @@ export interface DesktopApi {
   };
   repos: ReposApi;
   workspace: WorkspaceApi;
+  pulls: PullsApi;
 }

@@ -1,6 +1,6 @@
 import { app, session } from 'electron';
 import { CSP } from './protocol';
-import { isAllowedRendererUrl } from './config';
+import { isAllowedPermission, isAllowedRendererUrl } from './config';
 
 // Vite's dev server needs inline scripts for the React refresh preamble and a websocket for HMR.
 const DEV_CSP = CSP.replace(
@@ -25,10 +25,18 @@ export function hardenApp(
   });
 
   const ses = session.defaultSession;
-  ses.setPermissionRequestHandler((_wc, _permission, callback) =>
-    callback(false),
+  ses.setPermissionRequestHandler((contents, permission, callback, details) =>
+    callback(
+      isAllowedPermission(
+        permission,
+        details.requestingUrl ?? contents.getURL(),
+        origins,
+      ),
+    ),
   );
-  ses.setPermissionCheckHandler(() => false);
+  ses.setPermissionCheckHandler((_contents, permission, requestingOrigin) =>
+    isAllowedPermission(permission, requestingOrigin, origins),
+  );
 
   if (devServerUrl) {
     const devOrigin = new URL(devServerUrl).origin;

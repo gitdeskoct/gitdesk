@@ -4,11 +4,16 @@ import type {
   RepositorySummary,
 } from '../../../shared/repos';
 import { Button } from '../../components/ui/button';
+import { LongValue } from '../../components/ui/long-value';
 import { InlineStatus } from '../../components/ui/status';
 import { relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import type { RepoItem } from '../../lib/repo-status';
-import { useLocateRepository, useProvisionRemote } from '../../lib/queries';
+import {
+  useCopyRepositoryPath,
+  useLocateRepository,
+  useProvisionRemote,
+} from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
 import { ManageBand, type ManageMode } from '../repos/manage';
 import {
@@ -62,6 +67,7 @@ function LocalInspector({
 }) {
   const openRepo = useOpenRepo();
   const locate = useLocateRepository();
+  const copyPath = useCopyRepositoryPath();
   const [mode, setMode] = useState<ManageMode | null>(null);
   const { actions } = useRepoActions(repo, setMode, remote);
   const present = repo.availability === 'available';
@@ -121,11 +127,12 @@ function LocalInspector({
       )}
       <dl className={dlClass}>
         <dt className="text-muted">Location</dt>
-        <dd
-          className="truncate font-mono text-[0.78125rem] text-ink"
-          title={repo.displayPath}
-        >
-          {repo.displayPath}
+        <dd className="min-w-0 text-[0.78125rem] text-ink">
+          <LongValue
+            value={repo.displayPath}
+            label="path"
+            copy={() => copyPath.mutateAsync(repo.id)}
+          />
         </dd>
         {present && (
           <>

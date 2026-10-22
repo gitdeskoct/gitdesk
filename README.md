@@ -17,7 +17,7 @@ The app is split into three zones. Each one trusts the zone below it in this lis
 How the boundaries are enforced:
 
 - **Renderer to main.** `src/preload/preload.ts` exposes one method per fixed IPC channel (no generic invoke, no raw `ipcRenderer`). Every handler goes through `createHandle` in `src/main/ipc/handle.ts`, which rejects calls from any sender other than the main window's top frame on an allowed origin, then parses the input with a zod schema.
-- **Window hardening.** `src/main/security.ts` blocks navigation and redirects away from the app origin, denies `window.open` and webviews, and refuses every permission request. `src/main/window.ts` sets `contextIsolation`, `sandbox` and `nodeIntegration: false`.
+- **Window hardening.** `src/main/security.ts` blocks navigation and redirects away from the app origin, denies `window.open` and webviews, and refuses every permission request except plain-text clipboard writes from its own pages (the copy buttons); reading the clipboard stays refused. `src/main/window.ts` sets `contextIsolation`, `sandbox` and `nodeIntegration: false`.
 - **Renderer content.** Packaged builds load from the `app://gitdesk` scheme (`src/main/protocol.ts`), which serves only files inside the renderer build directory and sets a strict CSP.
 - **Local Git workspace.** `src/main/repos/workspace-service.ts` runs every Git command for diffs, staging, commits, branches, fetch, history and analytics. The renderer sends a repository id and, for file actions only, a repository-relative path. Main acts on a path only when a fresh `git status` reports it, resolves it inside the registered root, and runs Git with literal pathspecs, so a crafted name can't read or touch anything else. Reads never run repository programs: `core.fsmonitor`, external diff and textconv drivers and colors are off. Commits, switches and fetches run hooks as a terminal would. Fetch only allows HTTPS, SSH and local paths. Editors are found by main (registry, app bundles, known paths) and started without a shell; the renderer only names an editor id.
 - **Main to Worker.** `src/main/auth/api-client.ts` validates every Worker response with zod, because a misconfigured or compromised server is still untrusted input. The Worker origin comes from `VITE_API_ORIGIN` and must be https in packaged builds (`src/main/config.ts`).
@@ -57,6 +57,17 @@ After sign-in:
 - **Sign-out.** Local credentials are always cleared. Remote revocation through `/api/v1/auth/logout` is best effort, and the UI is told if it could not be confirmed.
 - **Offline.** If the Worker is unreachable at startup, main reports `offline` with the cached account summary and retries.
 
+## Pull requests
+
+A pull request compares a source branch with a target branch on this computer and records the review. The records of an unlinked repository live in gitdesk's SQLite file (`src/main/pulls/local-records.ts`); a linked repository's live in the account (`src/main/pulls/account-records.ts`, `backend/src/modules/pull-requests`). One service (`src/main/pulls/pull-service.ts`) works with either.
+
+- **Comparison.** `git merge-base`, `git log target..source` and the diff from the merge base to the source: what the source adds, not what the target gained meanwhile (`src/main/pulls/pull-git.ts`).
+- **Snapshots.** Each comparison records the source, target and merge-base commits. A new version starts only when a commit moves. Reviews and line comments name their version; an older approval is shown stale, and a line comment is found again in the latest diff by side and the SHA-1 of its line, or marked outdated.
+- **Mergeability.** `git merge-tree --write-tree --name-only -z --messages` (Git 2.38+) tests the merge without touching the index or working tree. A conflict is any message whose type starts with CONFLICT, as Git's documentation advises.
+- **Merging** runs under the repository's mutation lock: the refs must still be the confirmed commits, tracked files must be clean, then gitdesk switches to the target, runs `git merge [--no-ff]`, checks the result contains the source, optionally pushes, and only then records the pull request as merged. Each step is a row in `merge_operations`, so a merge that worked here but couldn't push or reach the account is finished later with the same operation id.
+- **Conflicts** are read from the index stages (`git ls-files -u`), resolved with `checkout --ours/--theirs` or by staging the edited file (refused while markers remain), and finished with `git commit --no-edit` or aborted with `git merge --abort`.
+- **Revert** creates one commit with `git revert --no-commit` (with `-m` and the chosen parent for a merge commit) on a new branch or the target. The pull request stays merged.
+
 ## Git hosting
 
 A repository linked to your account gets a private Git URL on Cloudflare Artifacts, `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/gitdesk/<id>.git`, when the Worker has Git hosting on (see [backend/README.md](backend/README.md#git-hosting-srclibgit-hostts)). The URL holds no credentials, so it is shown and copied freely.
@@ -77,6 +88,7 @@ src/
     editors/         code editor detection and launch
     git/             Git identity and which Git binary runs
     ipc/             handle() guard and channel registration
+    pulls/           pull requests: Git comparison and merge, local and account records
     remote/          account repositories, and Git tokens for the hosted URL
     repos/           registry, status, watchers and the local Git workspace
     settings/        user settings and theme
@@ -100,6 +112,7 @@ backend/
     middleware/      validation, rate limits, requireAuth, error handler
     modules/auth/    Google OAuth, desktop handoff, sessions, tokens
     modules/repositories/  repository metadata, lifecycle and Git credentials
+    modules/pull-requests/ pull request records, reviews, comments, activity
   drizzle/migrations/
   test/
 ```

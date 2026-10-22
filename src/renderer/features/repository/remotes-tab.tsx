@@ -4,6 +4,7 @@ import { RemoteArt, OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { JobProgress } from '../../components/ui/job-progress';
+import { LongValue } from '../../components/ui/long-value';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
@@ -115,19 +116,23 @@ export function RemotesTab({ repo }: { repo: RepositorySummary }) {
                   )}
                 </b>
                 <div className="min-w-0">
-                  <div
-                    className="truncate font-mono text-[0.78125rem] text-ink"
-                    title={entry.fetchUrl}
-                  >
-                    {entry.fetchUrl}
-                  </div>
+                  <LongValue
+                    value={entry.fetchUrl}
+                    label="remote URL"
+                    className="text-[0.78125rem] text-ink"
+                  />
                   <div className="text-xs text-muted">
                     {PROTOCOL[entry.protocol]}
                     {hosted && sameGitUrl(entry.fetchUrl, hosted)
                       ? ' · signed in through your account'
                       : ''}
-                    {entry.pushUrl && ` · pushes to ${entry.pushUrl}`}
                   </div>
+                  {entry.pushUrl && (
+                    <div className="flex min-w-0 items-center gap-1 text-xs text-muted">
+                      <span className="shrink-0">Pushes to</span>
+                      <LongValue value={entry.pushUrl} label="push URL" />
+                    </div>
+                  )}
                 </div>
                 {running ? (
                   <Button size="sm" onClick={action.cancel}>

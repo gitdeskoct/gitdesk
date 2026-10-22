@@ -3,6 +3,8 @@ import { useSettings } from '../../lib/queries';
 import { useNavigation, type Route } from '../../app/navigation';
 import { HomePage } from '../home/home-page';
 import { NotBuiltPage } from '../not-built/not-built-page';
+import { PullRequestPage } from '../pulls/pull-request-page';
+import { PullsPage } from '../pulls/pulls-page';
 import { RepositoriesPage } from '../repos/repositories-page';
 import { RemoteRepositoryPage } from '../repository/remote-repository-page';
 import { RepositoryPage } from '../repository/repository-page';
@@ -14,6 +16,8 @@ import { TitleBar } from './title-bar';
 function routeKey(route: Route): string {
   if (route.name === 'repository' || route.name === 'remote-repository')
     return `${route.name}:${route.id}`;
+  // The tab is left out so switching tabs never remounts the review.
+  if (route.name === 'pull-request') return `pull-request:${route.id}`;
   if (route.name === 'repositories')
     return `repositories:${route.show ?? 'all'}:${route.scope ?? 'all'}`;
   return route.name;
@@ -34,6 +38,12 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
       return <RepositoryPage id={route.id} tab={route.tab} />;
     case 'remote-repository':
       return <RemoteRepositoryPage id={route.id} />;
+    case 'pull-request':
+      return (
+        <PullRequestPage repoId={route.repoId} id={route.id} tab={route.tab} />
+      );
+    case 'pulls':
+      return <PullsPage />;
     case 'settings':
       return <SettingsLayout status={status} section={route.section} />;
     default:

@@ -20,7 +20,30 @@ import {
   repoUpdateInputSchema,
   REPOS_IPC,
 } from '../../shared/repos';
+import {
+  activityInputSchema,
+  addCommentInputSchema,
+  commentRefSchema,
+  compareInputSchema,
+  conflictPathInputSchema,
+  createPullInputSchema,
+  editCommentInputSchema,
+  mergeInputSchema,
+  pullFileDiffInputSchema,
+  pullListInputSchema,
+  pullRefSchema,
+  pullStatusInputSchema,
+  PULLS_IPC as P,
+  resolveConflictInputSchema,
+  revertInputSchema,
+  statsInputSchema,
+  submitReviewInputSchema,
+  updatePullInputSchema,
+  viewedInputSchema,
+  viewedQuerySchema,
+} from '../../shared/pulls';
 import { settingsPatchSchema } from '../../shared/settings';
+import type { PullService } from '../pulls/pull-service';
 import {
   analyticsInputSchema,
   commitDetailInputSchema,
@@ -83,6 +106,7 @@ export function registerIpc(
     notifier: Notifier;
     workspace: WorkspaceService;
     gitInstall: GitInstallService;
+    pulls: PullService;
   },
 ): void {
   const {
@@ -95,7 +119,150 @@ export function registerIpc(
     notifier,
     workspace,
     gitInstall,
+    pulls,
   } = services;
+  // Pull requests: every input is checked against its schema; repository ids, refs and paths are
+  // resolved in main against the registry and Git, never trusted from the renderer.
+  handle(
+    P.list,
+    pullListInputSchema,
+    userFacing((input) => pulls.list(input)),
+  );
+  handle(
+    P.overview,
+    none,
+    userFacing(() => pulls.overview()),
+  );
+  handle(
+    P.compare,
+    compareInputSchema,
+    userFacing((input) => pulls.compare(input)),
+  );
+  handle(
+    P.create,
+    createPullInputSchema,
+    userFacing((input) => pulls.create(input)),
+  );
+  handle(
+    P.get,
+    pullRefSchema,
+    userFacing((input) => pulls.get(input)),
+  );
+  handle(
+    P.update,
+    updatePullInputSchema,
+    userFacing((input) => pulls.update(input)),
+  );
+  handle(
+    P.setStatus,
+    pullStatusInputSchema,
+    userFacing((input) => pulls.setStatus(input)),
+  );
+  handle(
+    P.fileDiff,
+    pullFileDiffInputSchema,
+    userFacing((input) => pulls.fileDiff(input)),
+  );
+  handle(
+    P.checkMergeability,
+    pullRefSchema,
+    userFacing((input) => pulls.checkMergeability(input)),
+  );
+  handle(
+    P.comments,
+    pullRefSchema,
+    userFacing((input) => pulls.comments(input)),
+  );
+  handle(
+    P.addComment,
+    addCommentInputSchema,
+    userFacing((input) => pulls.addComment(input)),
+  );
+  handle(
+    P.editComment,
+    editCommentInputSchema,
+    userFacing((input) => pulls.editComment(input)),
+  );
+  handle(
+    P.deleteComment,
+    commentRefSchema,
+    userFacing((input) => pulls.deleteComment(input)),
+  );
+  handle(
+    P.reviews,
+    pullRefSchema,
+    userFacing((input) => pulls.reviews(input)),
+  );
+  handle(
+    P.submitReview,
+    submitReviewInputSchema,
+    userFacing((input) => pulls.submitReview(input)),
+  );
+  handle(
+    P.activity,
+    activityInputSchema,
+    userFacing((input) => pulls.activity(input)),
+  );
+  handle(
+    P.viewed,
+    viewedQuerySchema,
+    userFacing((input) => pulls.viewed(input)),
+  );
+  handle(
+    P.setViewed,
+    viewedInputSchema,
+    userFacing((input) => pulls.setViewed(input)),
+  );
+  handle(
+    P.merge,
+    mergeInputSchema,
+    userFacing((input) => pulls.merge(input)),
+  );
+  handle(
+    P.conflicts,
+    repoIdSchema,
+    userFacing((repoId) => pulls.conflicts(repoId)),
+  );
+  handle(
+    P.conflictSides,
+    conflictPathInputSchema,
+    userFacing((input) => pulls.conflictSides(input)),
+  );
+  handle(
+    P.resolveConflict,
+    resolveConflictInputSchema,
+    userFacing((input) => pulls.resolveConflict(input)),
+  );
+  handle(
+    P.continueMerge,
+    repoIdSchema,
+    userFacing((repoId) => pulls.continueMerge(repoId)),
+  );
+  handle(
+    P.abortMerge,
+    repoIdSchema,
+    userFacing((repoId) => pulls.abortMerge(repoId)),
+  );
+  handle(
+    P.revertInfo,
+    pullRefSchema,
+    userFacing((input) => pulls.revertInfo(input)),
+  );
+  handle(
+    P.revert,
+    revertInputSchema,
+    userFacing((input) => pulls.revert(input)),
+  );
+  handle(
+    P.deleteBranch,
+    pullRefSchema,
+    userFacing((input) => pulls.deleteBranch(input)),
+  );
+  handle(
+    P.stats,
+    statsInputSchema,
+    userFacing((input) => pulls.stats(input)),
+  );
   handle(IPC.appTestNotification, none, () => notifier.test());
   handle(IPC.appGetInfo, none, () => app.info());
   handle(IPC.appSetOpenAtLogin, z.boolean(), (enabled) =>

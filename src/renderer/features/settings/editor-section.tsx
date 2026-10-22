@@ -34,11 +34,13 @@ function Option({
   name,
   detail,
   icon,
+  path = false,
 }: {
   value: EditorId;
   name: string;
   detail: string;
   icon: ReactNode;
+  path?: boolean;
 }) {
   return (
     <RadioGroup.Item
@@ -59,7 +61,10 @@ function Option({
           {name}
         </span>
         <span
-          className="block truncate font-mono text-xs text-muted"
+          className={cn(
+            'block truncate text-xs text-muted',
+            path && 'font-mono',
+          )}
           title={detail}
         >
           {detail}
@@ -141,6 +146,7 @@ export function EditorSection() {
               value={editor.id}
               name={editor.name}
               detail={editor.location}
+              path
               icon={initials(editor.name)}
             />
           ))}

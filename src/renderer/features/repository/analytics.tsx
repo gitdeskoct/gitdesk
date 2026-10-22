@@ -44,13 +44,13 @@ const bucketName = (start: number, bucket: 'week' | 'month') =>
       }).format(start);
 
 // A clean scale top: a round number at or above the largest value, never below 4.
-function scaleTop(max: number): number {
+export function scaleTop(max: number): number {
   if (max <= 4) return 4;
   const step = 10 ** Math.floor(Math.log10(max));
   return Math.ceil(max / (step / 2)) * (step / 2);
 }
 
-function ChartTable({
+export function ChartTable({
   caption,
   head,
   rows,
@@ -90,7 +90,7 @@ function ChartTable({
   );
 }
 
-function Bar({
+export function Bar({
   label,
   height,
   className,
@@ -122,7 +122,7 @@ function Bar({
   );
 }
 
-function Axis({ labels }: { labels: string[] }) {
+export function Axis({ labels }: { labels: string[] }) {
   return (
     <div className="flex flex-col justify-between text-right text-xs text-muted tabular-nums">
       {labels.map((label, i) => (

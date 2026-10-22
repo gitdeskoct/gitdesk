@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   APP_ORIGIN,
   allowedRendererOrigins,
+  isAllowedPermission,
   isAllowedRendererUrl,
   resolveApiOrigin,
 } from './config';
@@ -47,6 +48,31 @@ describe('resolveApiOrigin', () => {
 
   it('throws on a malformed URL', () => {
     expect(() => resolveApiOrigin('not a url', false)).toThrow();
+  });
+});
+
+describe('isAllowedPermission', () => {
+  const origins = allowedRendererOrigins('http://localhost:5173/');
+
+  it('allows only clipboard writes, and only from the app', () => {
+    expect(
+      isAllowedPermission(
+        'clipboard-sanitized-write',
+        'http://localhost:5173/',
+        origins,
+      ),
+    ).toBe(true);
+    expect(
+      isAllowedPermission(
+        'clipboard-sanitized-write',
+        'https://evil.example/',
+        origins,
+      ),
+    ).toBe(false);
+    for (const permission of ['clipboard-read', 'media', 'notifications'])
+      expect(
+        isAllowedPermission(permission, 'http://localhost:5173/', origins),
+      ).toBe(false);
   });
 });
 

@@ -33,3 +33,16 @@ export function isAllowedRendererUrl(url: string, origins: string[]): boolean {
     return false;
   }
 }
+
+// Every permission is refused except plain-text clipboard writes from gitdesk's own pages, which
+// the copy buttons need. Reading the clipboard stays refused.
+export function isAllowedPermission(
+  permission: string,
+  url: string,
+  origins: string[],
+): boolean {
+  return (
+    permission === 'clipboard-sanitized-write' &&
+    isAllowedRendererUrl(url, origins)
+  );
+}

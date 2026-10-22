@@ -14,12 +14,14 @@ import {
 } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
+import { LongValue } from '../../components/ui/long-value';
 import { Pager, usePage } from '../../components/ui/pager';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { formatDate, relativeTime, useNow } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useAuthStatus,
+  useCopyRepositoryPath,
   useProvisionRemote,
   useRemoteActivity,
   useRemoteRepository,
@@ -159,6 +161,7 @@ function RemoteView({
   const provision = useProvisionRemote();
   const openRepo = useOpenRepo();
   const local = useRepositories().data?.find((r) => r.remoteId === id);
+  const copyPath = useCopyRepositoryPath();
   const [mode, setMode] = useState<ManageMode | null>(null);
   const [cloning, setCloning] = useState(false);
   const { actions } = useRemoteActions(remote, setMode);
@@ -313,11 +316,17 @@ function RemoteView({
               </Button>
             }
           >
-            Linked to <b className="font-semibold">{local.name}</b> at{' '}
-            <span className="font-mono text-[0.8125rem]">
-              {local.displayPath}
+            <span className="flex min-w-0 items-center gap-1">
+              <span className="shrink-0">
+                Linked to <b className="font-semibold">{local.name}</b> at
+              </span>
+              <LongValue
+                value={local.displayPath}
+                label="path"
+                className="text-[0.8125rem]"
+                copy={() => copyPath.mutateAsync(local.id)}
+              />
             </span>
-            .
           </InlineStatus>
         ) : (
           <InlineStatus

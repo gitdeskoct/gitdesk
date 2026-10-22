@@ -107,6 +107,12 @@ export const settingsSchema = z.object({
   ]),
   // An editor id from the detected list, or system for the OS default app. Main only ever
   // launches an executable it found itself, so this can't name a program.
+  // Pull requests: list layout and what the Merge tab starts with.
+  pullRequestsLayout: z.enum(['auto', 'centered', 'split']),
+  pullMergeMethod: z.enum(['default', 'no-ff']),
+  pullPushAfterMerge: z.boolean(),
+  pullOfferDeleteBranch: z.boolean(),
+  pullWarnBeforeMerge: z.boolean(),
   // Git hosting: the remote name used when linking adds the account's Git URL, and how long a
   // token in a copied terminal command lasts, in seconds.
   hostingRemoteName: z.enum(['auto', 'gitdesk', 'none']),
@@ -167,6 +173,11 @@ export const DEFAULT_SETTINGS: Settings = {
   commitSummaryGuide: 72,
   commitSignoff: false,
   autoFetch: 0,
+  pullRequestsLayout: 'auto',
+  pullMergeMethod: 'default',
+  pullPushAfterMerge: true,
+  pullOfferDeleteBranch: false,
+  pullWarnBeforeMerge: true,
   hostingRemoteName: 'auto',
   hostingTokenLifetime: 3600,
   editor: 'system',

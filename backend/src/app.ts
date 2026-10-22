@@ -9,6 +9,7 @@ import { notFound, onError } from './middleware/error-handler';
 import type { GoogleProvider } from './modules/auth/google';
 import { authRoutes } from './modules/auth/routes';
 import { activityRoutes } from './modules/activity/routes';
+import { pullRequestRoutes } from './modules/pull-requests/routes';
 import { dashboardRoutes, repositoryRoutes } from './modules/repositories/routes';
 
 export type AppDeps = {
@@ -33,14 +34,13 @@ export function createApp(deps: AppDeps) {
     c.header('Cache-Control', 'no-store');
     c.header('X-Request-Id', c.get('requestId'));
   });
-  app.use(
-    bodyLimit({
-      maxSize: 8 * 1024,
-      onError: () => {
-        throw new ApiError('PAYLOAD_TOO_LARGE', 'The request body is too large.');
-      },
-    }),
-  );
+  // Pull request descriptions and comments run to 10,000 characters; everything else stays small.
+  const tooLarge = () => {
+    throw new ApiError('PAYLOAD_TOO_LARGE', 'The request body is too large.');
+  };
+  const smallBody = bodyLimit({ maxSize: 8 * 1024, onError: tooLarge });
+  const pullBody = bodyLimit({ maxSize: 64 * 1024, onError: tooLarge });
+  app.use((c, next) => (c.req.path.includes('/pull-requests') ? pullBody(c, next) : smallBody(c, next)));
 
   app.get('/health', (c) => c.json({ ok: true }));
   app.route('/api/v1/auth', authRoutes(deps.google));
@@ -48,6 +48,7 @@ export function createApp(deps: AppDeps) {
   app.route('/api/v1/dashboard', dashboardRoutes(gitHost));
   app.route('/api/v1/repositories', repositoryRoutes(gitHost));
   app.route('/api/v1/activity', activityRoutes());
+  app.route('/api/v1/pull-requests', pullRequestRoutes());
 
   app.onError(onError);
   app.notFound(notFound);

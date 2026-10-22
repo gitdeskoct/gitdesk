@@ -236,6 +236,10 @@ One rule: a **system notification** while gitdesk is in the background, the **in
 
 Lists on Home show 6 items per page by default (Settings › Workspace offers 10 and 20). The count sits on the left ("7–12 of 31"), the pages on the right: previous, numbers that collapse with an ellipsis past five pages, next. The current page is the `control` fill in `ink`; arrow keys turn pages while the pager has focus. One page needs no pager.
 
+## Long paths and URLs
+
+A folder path, remote URL or Git URL that doesn't fit loses its middle, never its end: the last segment (`\search-app`, `<id>.git`) stays whole and the start shortens with an ellipsis (`LongValue` / `MiddleTruncate` in `components/ui/long-value.tsx`). Where the value is something to reuse, a ghost copy button sits right after it and copies the whole value; a folder is copied by main, so `~` comes out as the real path. Rows that are buttons themselves show the shortened value only, with Copy path in their menu.
+
 ## Repositories
 
 - **One list, three overlapping sets.** Local is registered on this computer, Remote is in the account, Linked is both. The statistics strip is the filter and says the counts overlap. State filters (Changed, Ahead and so on) only match repositories on this computer.
@@ -254,6 +258,19 @@ Lists on Home show 6 items per page by default (Settings › Workspace offers 10
 - **The commit message folds away.** In the split file pane, Hide folds the summary and description into one row (Show message, the summary so far, Commit). The choice is remembered on this computer. Committing with no summary opens the fields and focuses Summary instead of failing out of sight.
 - **Authors are 6px squares.** Your own commits (matched by your gitdesk account email or your global Git email) show your gitdesk account picture, or initials on the accent tint when there is no picture. Everyone else gets initials on `control`. gitdesk never asks another service for pictures.
 - **Size is measured, not guessed.** Repository Settings shows the folder on disk split into Git history (`chart-1`), files in the last commit (`chart-2`) and everything else (`faint`), with a stacked bar, a sentence and the largest tracked files. It re-measures after status changes (cached 30 seconds) and on Measure again. A very large folder stops counting and says the numbers are a lower bound. Rounding never says 0% or 100% about a part that is neither.
+
+## Pull requests
+
+- **Git decides, the record describes.** Comparisons, checks, merges, conflicts and reverts are Git's on this computer. The record (title, comments, reviews, activity) lives on this computer for an unlinked repository and in the account for a linked one, and every list and page says which with a Local or Account tag.
+- **Two layouts, one set of components.** Centered lists pull requests in the content column with the Open, Merged and Closed counts as the filter. Split shows the list beside the selected one; arrows move the selection and Enter opens the review. Under 860px of workspace (1100px for Auto) split falls back to the list. The choice lives in Settings › Pull requests.
+- **New is inline.** Creating a pull request happens in the tab, never a modal, and the comparison (commits, files, lines, merge base) shows before anything is saved. Pairs Git can't compare are refused with a reason, and a reversed pair offers Swap.
+- **Snapshots, not branch names.** A review, a line comment and a check name the exact commits they saw. When either branch moves, a new snapshot starts: an older approval is marked stale, a moved line keeps its comment, and a line that changed marks its thread Outdated rather than pinning it somewhere wrong.
+- **Mergeability is words.** Not checked, Mergeable, a count of conflicts, or Unavailable with the reason (Git too old, no shared history). A check never touches the working tree, and it is redone before a merge.
+- **Merging asks first, inline.** The Merge tab lists what was checked, the two methods (default, or always a merge commit) and the push choice, then confirms in a band that names both branches. Uncommitted changes refuse the merge; gitdesk never stashes. A stale approval, requested changes and unresolved threads are warnings, never blocks.
+- **Partial success says so.** A merge that worked here but couldn't push reads "Merged locally · Push pending" with Push again. One the account hasn't heard about yet is retried with the same operation, so it is never recorded twice.
+- **Conflicts are a screen, not a toast.** Each conflicted file shows the target and source versions with a Use button each, the working file with its markers labelled, Open in editor, and Mark resolved, which stays unavailable while markers remain. Continue stays unavailable until Git reports no unmerged file; Abort confirms in a `danger-soft` band.
+- **Revert adds, never erases.** A merged pull request offers a revert onto a new branch or the target. For a merge commit the side to keep is a choice that names both parents. The pull request stays merged.
+- **Choice lists use round radio marks.** The one exception to the 6px rule: a radio is round so it never reads as a checkbox.
 
 ## Git hosting
 

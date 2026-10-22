@@ -1,22 +1,16 @@
 import type { ReactNode } from 'react';
-import { IssuesArt, PullRequestsArt } from '../../components/illustrations';
+import { IssuesArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { useNavigation } from '../../app/navigation';
 import { Page } from '../shell/page';
 
-type Unbuilt = 'pulls' | 'issues';
+type Unbuilt = 'issues';
 
 const pages: Record<
   Unbuilt,
   { label: string; art: ReactNode; title: string; body: string }
 > = {
-  pulls: {
-    label: 'Pull requests',
-    art: <PullRequestsArt />,
-    title: 'Pull requests are not built yet',
-    body: 'Reviewing and merging branches arrives in a later feature.',
-  },
   issues: {
     label: 'Issues',
     art: <IssuesArt />,
