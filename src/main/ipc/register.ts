@@ -26,6 +26,7 @@ import type { AppService } from '../app/app-service';
 import type { AuthService } from '../auth/auth-service';
 import type { createGitIdentity } from '../git/git-identity';
 import type { SettingsService } from '../settings/settings-service';
+import type { Notifier } from '../notifier';
 import type { Handle } from './handle';
 
 const none = z.undefined();
@@ -56,9 +57,11 @@ export function registerIpc(
     git: ReturnType<typeof createGitIdentity>;
     repos: RepositoryService;
     remote: RemoteService;
+    notifier: Notifier;
   },
 ): void {
-  const { app, auth, settings, git, repos, remote } = services;
+  const { app, auth, settings, git, repos, remote, notifier } = services;
+  handle(IPC.appTestNotification, none, () => notifier.test());
   handle(IPC.appGetInfo, none, () => app.info());
   handle(IPC.appSetOpenAtLogin, z.boolean(), (enabled) =>
     app.setOpenAtLogin(enabled),
@@ -178,6 +181,11 @@ export function registerIpc(
     r.activity,
     none,
     userFacing(() => repos.activity()),
+  );
+  handle(
+    r.clearActivity,
+    none,
+    userFacing(() => repos.clearActivity()),
   );
   handle(
     r.remoteOverview,

@@ -228,6 +228,14 @@ Short results of actions whose own UI has already closed: a menu item, a bulk ac
 
 _Why: a closed menu can't show its own spinner or error, and a result that vanishes silently reads as nothing happened._
 
+## Notifications
+
+One rule: a **system notification** while gitdesk is in the background, the **in-app toast** while it is in front. The same notice never goes out twice within a minute, and nothing notifies about ordinary edits. Clicking a system notification brings gitdesk forward and opens the repository it names.
+
+## Pagination
+
+Lists on Home show 6 items per page by default (Settings › Workspace offers 10 and 20). The count sits on the left ("7–12 of 31"), the pages on the right: previous, numbers that collapse with an ellipsis past five pages, next. The current page is the `control` fill in `ink`; arrow keys turn pages while the pager has focus. One page needs no pager.
+
 ## Destructive confirmations
 
 Removing a repository from gitdesk, removing several, and deleting a remote repository all confirm **inline**, in a `danger-soft` band where the action was taken. Deleting a remote also asks for its name to be typed, because it can't be undone.
@@ -236,7 +244,12 @@ There are no centered modals. _Why: the CSP blocks the style tag a modal's scrol
 
 ## Progress
 
-Long work with a known end (cloning) shows a 6px `accent` bar on a `control` track with a 4px corner, its stage, its percent and a Cancel button. Work without a known end uses the spinner.
+Long work with a known end (cloning, creating) shows a 6px `accent` bar on a `control` track with a 4px corner, with its stage on the left and its percent or step on the right. Under the bar:
+
+- **Transfer**, when Git reports it: speed in bold, bytes received, time left. These are measured from Git's own progress line.
+- **Connection**, while the step uses the network: four bars plus words ("Good connection · 45 ms · about 10 Mbps"). The values are the system's estimate and read "about"; the words carry the meaning, the bar color only repeats it.
+
+Work without a known end uses the spinner.
 
 ## Focus
 

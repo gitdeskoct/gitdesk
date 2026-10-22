@@ -1,4 +1,4 @@
-import * as Progress from '@radix-ui/react-progress';
+import { JobProgress } from '../../components/ui/job-progress';
 import * as RadioGroup from '@radix-ui/react-radio-group';
 import { Check, Lock } from 'lucide-react';
 import { useState } from 'react';
@@ -20,7 +20,7 @@ import {
   useAuthStatus,
   useCancelClone,
   useChooseLocation,
-  useCloneProgress,
+  useJobProgress,
   useCloneRepository,
   useRemoteList,
   useRepositories,
@@ -44,28 +44,20 @@ function Running({
   name: string;
   onCancel: () => void;
 }) {
-  const progress = useCloneProgress(jobId);
+  const progress = useJobProgress(jobId);
   const cancel = useCancelClone();
   const percent = progress?.percent ?? 0;
   return (
     <div className="grid gap-4">
       <div className="grid gap-2">
-        <div className="flex justify-between text-sm">
-          <span className="font-medium text-ink capitalize">
-            {progress ? `${progress.stage}` : 'Connecting…'}
-          </span>
-          <span className="text-muted tabular-nums">{percent}%</span>
-        </div>
-        <Progress.Root
-          value={percent}
-          aria-label={`Cloning ${name}`}
-          className="h-1.5 overflow-hidden rounded-[4px] bg-control"
-        >
-          <Progress.Indicator
-            className="h-full bg-accent transition-[width]"
-            style={{ width: `${percent}%` }}
-          />
-        </Progress.Root>
+        <JobProgress
+          label={`Cloning ${name}`}
+          stage={progress?.stage ?? 'Connecting…'}
+          right={`${percent}%`}
+          percent={percent}
+          progress={progress}
+          network
+        />
         <p className="text-[0.8125rem] text-muted">
           Written to a temporary folder first, then moved into place.
         </p>

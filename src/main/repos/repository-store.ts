@@ -213,6 +213,10 @@ export function createRepositoryStore(db: AppDatabase) {
       db.prepare('DELETE FROM local_repositories WHERE id = ?').run(id);
     },
 
+    clearActivity(): void {
+      db.exec('DELETE FROM local_activity');
+    },
+
     removeAll(): void {
       db.exec('DELETE FROM local_repositories');
     },

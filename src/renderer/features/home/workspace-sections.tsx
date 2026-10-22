@@ -25,6 +25,7 @@ import type {
 import { ActivityArt, OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
+import { Pager, usePage } from '../../components/ui/pager';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { useToast } from '../../components/ui/toast';
 import { relativeTime } from '../../lib/format';
@@ -36,6 +37,7 @@ import {
   useRefreshRemote,
   useRepositoryActivity,
 } from '../../lib/queries';
+import { useNavigation } from '../../app/navigation';
 import { useWorkspaceUi } from '../../app/workspace-ui';
 import { RemoveConfirm, useOpenRepo } from '../repos/repo-row';
 
@@ -180,44 +182,48 @@ function AttentionRow({ repo, kind }: Attention) {
 export function AttentionList({
   items,
   remote,
-  limit = 6,
+  pageSize,
 }: {
   items: Attention[];
   remote: RemoteOverview | undefined;
-  limit?: number;
+  pageSize: number;
 }) {
   const refresh = useRefreshRemote();
+  const paged = usePage(items, pageSize);
   // Ahead and behind are only as fresh as the last fetch, so stale remote data is itself worth saying.
   const stale = remote && remote.state === 'cached' && remote.fetchedAt;
   return (
-    <ul className="border-t border-line">
-      {stale && (
-        <li className="flex items-center gap-3 border-b border-line py-2.5">
-          <Clock aria-hidden className="size-4 shrink-0 text-warning" />
-          <div className="min-w-0 flex-1">
-            <div className="truncate text-[0.84375rem] font-medium text-ink">
-              Remote details are from {relativeTime(remote.fetchedAt!)}
+    <>
+      <ul className="border-t border-line">
+        {stale && (
+          <li className="flex items-center gap-3 border-b border-line py-2.5">
+            <Clock aria-hidden className="size-4 shrink-0 text-warning" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[0.84375rem] font-medium text-ink">
+                Remote details are from {relativeTime(remote.fetchedAt!)}
+              </div>
+              <div className="truncate text-xs text-muted">
+                {remote.error === 'offline'
+                  ? "You're offline."
+                  : "The server didn't answer."}{' '}
+                Counts may have changed since.
+              </div>
             </div>
-            <div className="truncate text-xs text-muted">
-              {remote.error === 'offline'
-                ? "You're offline."
-                : "The server didn't answer."}{' '}
-              Counts may have changed since.
-            </div>
-          </div>
-          <Button
-            size="sm"
-            pending={refresh.isPending}
-            onClick={() => refresh.mutate()}
-          >
-            Retry
-          </Button>
-        </li>
-      )}
-      {items.slice(0, limit).map((item) => (
-        <AttentionRow key={item.repo.id} {...item} />
-      ))}
-    </ul>
+            <Button
+              size="sm"
+              pending={refresh.isPending}
+              onClick={() => refresh.mutate()}
+            >
+              Retry
+            </Button>
+          </li>
+        )}
+        {paged.items.map((item) => (
+          <AttentionRow key={item.repo.id} {...item} />
+        ))}
+      </ul>
+      <Pager label="Needs attention pages" onPage={paged.setPage} {...paged} />
+    </>
   );
 }
 
@@ -249,13 +255,44 @@ type Entry = {
 };
 
 // Local events and the account's events in one list, each labelled with where it happened.
+// Settings › Workspace decides which sources show and whether opens count.
 export function ActivityList({
   remote,
+  pageSize,
+  source,
+  includeOpens,
 }: {
   remote: RemoteOverview | undefined;
+  pageSize: number;
+  source: 'both' | 'local' | 'account';
+  includeOpens: boolean;
 }) {
   const activity = useRepositoryActivity();
   const { addRepository, adding } = useWorkspaceUi();
+  const { navigate } = useNavigation();
+
+  const entries: Entry[] = [
+    ...(source === 'account' ? [] : (activity.data ?? []))
+      .filter((item) => includeOpens || item.type !== 'opened')
+      .map((item) => ({
+        key: `local:${item.id}`,
+        name: item.repositoryName,
+        icon: LOCAL[item.type].icon,
+        text: `${LOCAL[item.type].label}${item.detail ? `: ${item.detail}` : ''}`,
+        at: item.at,
+        source: 'This computer',
+      })),
+    ...(source === 'local' ? [] : (remote?.activity ?? [])).map((item) => ({
+      key: `remote:${item.id}`,
+      name: item.repositoryName,
+      icon: Cloud,
+      text: REMOTE[item.type],
+      at: item.createdAt,
+      source: 'Your account',
+    })),
+  ].sort((a, b) => b.at - a.at);
+  const paged = usePage(entries, pageSize);
+
   if (activity.isPending) return <Loading label="Loading activity…" />;
   if (activity.isError)
     return (
@@ -280,29 +317,33 @@ export function ActivityList({
       </EmptyState>
     );
 
-  const entries: Entry[] = [
-    ...activity.data.map((item) => ({
-      key: `local:${item.id}`,
-      name: item.repositoryName,
-      icon: LOCAL[item.type].icon,
-      text: `${LOCAL[item.type].label}${item.detail ? `: ${item.detail}` : ''}`,
-      at: item.at,
-      source: 'This computer',
-    })),
-    ...(remote?.activity ?? []).map((item) => ({
-      key: `remote:${item.id}`,
-      name: item.repositoryName,
-      icon: Cloud,
-      text: REMOTE[item.type],
-      at: item.createdAt,
-      source: 'Your account',
-    })),
-  ]
-    .sort((a, b) => b.at - a.at)
-    .slice(0, 6);
-
   if (!entries.length)
-    return (
+    return activity.data?.length || remote?.activity.length ? (
+      // Something exists but the filters hide it: say so, and offer the way to change them.
+      <EmptyState
+        compact
+        art={<ActivityArt />}
+        title="Nothing matches these activity settings"
+        action={
+          <Button
+            size="sm"
+            onClick={() =>
+              navigate({
+                name: 'settings',
+                section: 'workspace',
+                row: 'activity-source',
+              })
+            }
+          >
+            Change activity settings
+          </Button>
+        }
+      >
+        {source === 'account'
+          ? "Your account hasn't recorded any remote changes yet."
+          : 'Opens are hidden, and nothing else has happened yet.'}
+      </EmptyState>
+    ) : (
       <EmptyState
         compact
         art={<ActivityArt />}
@@ -313,28 +354,34 @@ export function ActivityList({
           </Button>
         }
       >
-        Opens and new commits on this computer show up here.
+        New commits, branch switches and remote changes show up here.
       </EmptyState>
     );
   return (
-    <ul className="border-t border-line">
-      {entries.map((entry) => (
-        <li key={entry.key} className="flex gap-3 border-b border-line py-2.5">
-          <entry.icon
-            aria-hidden
-            className="mt-0.5 size-4 shrink-0 text-muted"
-          />
-          <div className="min-w-0">
-            <div className="truncate text-[0.84375rem] font-medium text-ink">
-              {entry.name}
+    <>
+      <ul className="border-t border-line">
+        {paged.items.map((entry) => (
+          <li
+            key={entry.key}
+            className="flex gap-3 border-b border-line py-2.5"
+          >
+            <entry.icon
+              aria-hidden
+              className="mt-0.5 size-4 shrink-0 text-muted"
+            />
+            <div className="min-w-0">
+              <div className="truncate text-[0.84375rem] font-medium text-ink">
+                {entry.name}
+              </div>
+              <div className="truncate text-xs text-muted" title={entry.text}>
+                {entry.text} · {relativeTime(entry.at)} · {entry.source}
+              </div>
             </div>
-            <div className="truncate text-xs text-muted" title={entry.text}>
-              {entry.text} · {relativeTime(entry.at)} · {entry.source}
-            </div>
-          </div>
-        </li>
-      ))}
-    </ul>
+          </li>
+        ))}
+      </ul>
+      <Pager label="Recent activity pages" onPage={paged.setPage} {...paged} />
+    </>
   );
 }
 

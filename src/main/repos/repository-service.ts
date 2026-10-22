@@ -4,9 +4,11 @@ import { mkdir, rmdir, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
+  CREATE_STEPS,
   repositoryNameSchema,
+  type CreateStep,
   type CloneInput,
-  type CloneProgressEvent,
+  type ProgressEvent,
   type CloneResult,
   type AddRepositoryResult,
   type CreateRepositoryInput,
@@ -69,7 +71,22 @@ export function createRepositoryService(deps: {
   desktop: Desktop;
   settings: () => Settings;
   emit: (repositories: RepositorySummary[]) => void;
-  emitCloneProgress?: (event: CloneProgressEvent) => void;
+  emitProgress?: (event: ProgressEvent) => void;
+  // A background check found a new problem: called once when it appears, not on every check.
+  onProblem?: (
+    repository: RepositorySummary,
+    kind: 'conflict' | 'missing',
+  ) => void;
+  onCloneDone?: (
+    outcome:
+      | {
+          ok: true;
+          repository: RepositorySummary;
+          bytes: number | null;
+          ms: number;
+        }
+      | { ok: false; name: string; message: string },
+  ) => void;
   // Where a remote repository can be fetched from. Null until the sync transport exists.
   resolveCloneUrl?: (remoteId: string) => Promise<string | null>;
   cloneProtocols?: string[];
@@ -154,6 +171,17 @@ export function createRepositoryService(deps: {
         'saving an inspection failed',
         err instanceof Error ? err.message : err,
       );
+    }
+    // Only a change of state is news; an unresolved conflict is reported once, not every check.
+    const after = store.get(id);
+    if (after && row.availability === 'available') {
+      if (result.availability === 'missing')
+        deps.onProblem?.(toSummary(after), 'missing');
+      else if (
+        (row.status?.conflicts ?? 0) === 0 &&
+        (result.status?.conflicts ?? 0) > 0
+      )
+        deps.onProblem?.(toSummary(after), 'conflict');
     }
     syncWatcher(id);
   }
@@ -483,12 +511,31 @@ export function createRepositoryService(deps: {
     async create(
       input: CreateRepositoryInput,
     ): Promise<CreateRepositoryResult> {
+      const startedAt = now();
+      // Steps that apply to this create, so the bar fills evenly and finishes at 100%.
+      const steps = CREATE_STEPS.filter(
+        (s) =>
+          (s !== 'readme' || input.readme) && (s !== 'remote' || input.remote),
+      );
+      const step = (stage: CreateStep | 'done') =>
+        input.jobId &&
+        deps.emitProgress?.({
+          jobId: input.jobId,
+          stage,
+          percent:
+            stage === 'done'
+              ? 100
+              : Math.round((steps.indexOf(stage) / steps.length) * 100),
+          receivedBytes: null,
+          bytesPerSecond: null,
+        });
       const parent = redeem(input.locationToken);
       const target = path.join(parent, input.name);
       if (path.dirname(target) !== parent)
         throw new RepoError("That name can't be used as a folder.");
       // Checked before anything touches disk, so a refusal leaves nothing behind.
       assertRoom();
+      step('folder');
       try {
         await mkdir(target);
       } catch (err) {
@@ -499,6 +546,7 @@ export function createRepositoryService(deps: {
         );
       }
       const git = gitAt(target);
+      step('init');
       try {
         await git.raw([
           'init',
@@ -514,6 +562,7 @@ export function createRepositoryService(deps: {
       const leftAt = `The repository was created at ${displayPath(target)}; open it from there.`;
       let readmeCommitted: boolean | null = null;
       if (input.readme) {
+        step('readme');
         const body = `# ${input.name}\n${input.description ? `\n${input.description}\n` : ''}`;
         try {
           await writeFile(path.join(target, 'README.md'), body, { flag: 'wx' });
@@ -530,6 +579,7 @@ export function createRepositoryService(deps: {
       }
 
       let repository: RepositorySummary;
+      step('register');
       try {
         ({ repository } = await register(
           await canonicalPath(target),
@@ -544,16 +594,28 @@ export function createRepositoryService(deps: {
         );
       }
 
-      if (!input.remote)
-        return { repository, remote: { status: 'skipped' }, readmeCommitted };
+      if (!input.remote) {
+        step('done');
+        return {
+          repository,
+          remote: { status: 'skipped' },
+          readmeCommitted,
+          timing: { totalMs: now() - startedAt, remoteMs: null },
+        };
+      }
+      step('remote');
+      const remoteStart = now();
       try {
         const remote = await createRemoteFor(rowOrThrow(repository.id));
+        step('done');
         return {
           repository: toSummary(rowOrThrow(repository.id)),
           remote: { status: 'created', remote },
           readmeCommitted,
+          timing: { totalMs: now() - startedAt, remoteMs: now() - remoteStart },
         };
       } catch (err) {
+        step('done');
         return {
           repository,
           remote: {
@@ -564,6 +626,7 @@ export function createRepositoryService(deps: {
                 : 'The remote was not created.',
           },
           readmeCommitted,
+          timing: { totalMs: now() - startedAt, remoteMs: now() - remoteStart },
         };
       }
     },
@@ -585,6 +648,8 @@ export function createRepositoryService(deps: {
       assertRoom();
       const controller = new AbortController();
       clones.set(input.jobId, controller);
+      const startedAt = now();
+      let bytes: number | null = null;
       try {
         const target = await cloneInto({
           url,
@@ -592,8 +657,10 @@ export function createRepositoryService(deps: {
           name: input.name,
           signal: controller.signal,
           protocols: deps.cloneProtocols,
-          onProgress: ({ stage, percent }) =>
-            deps.emitCloneProgress?.({ jobId: input.jobId, stage, percent }),
+          onProgress: (progress) => {
+            bytes = progress.receivedBytes ?? bytes;
+            deps.emitProgress?.({ jobId: input.jobId, ...progress });
+          },
         });
         const { repository } = await register(
           await canonicalPath(target),
@@ -602,7 +669,23 @@ export function createRepositoryService(deps: {
             remoteId: input.remoteId,
           },
         );
+        deps.onCloneDone?.({
+          ok: true,
+          repository,
+          bytes,
+          ms: now() - startedAt,
+        });
         return { status: 'cloned', repository };
+      } catch (err) {
+        // A cancel is the person's own choice, so it isn't news.
+        if (!controller.signal.aborted)
+          deps.onCloneDone?.({
+            ok: false,
+            name: input.name,
+            message:
+              err instanceof UserError ? err.message : 'The clone stopped.',
+          });
+        throw err;
       } finally {
         clones.delete(input.jobId);
       }
@@ -618,7 +701,12 @@ export function createRepositoryService(deps: {
       changed();
     },
 
-    activity: (): LocalActivity[] => store.activity(20),
+    // Enough for several pages on Home; the store keeps at most 200.
+    activity: (): LocalActivity[] => store.activity(120),
+
+    clearActivity(): void {
+      store.clearActivity();
+    },
 
     // Startup, focus and settings hooks, called from main.
     start(): void {

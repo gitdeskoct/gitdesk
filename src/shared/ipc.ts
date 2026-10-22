@@ -103,6 +103,10 @@ export const IPC = {
   appSetOpenAtLogin: 'app:set-open-at-login',
   appOpenLogs: 'app:open-logs',
   appCopyDiagnostics: 'app:copy-diagnostics',
+  appTestNotification: 'app:test-notification',
+  // Pushed from main: news to show as a toast, and a notification click to follow.
+  appNotice: 'app:notice',
+  appOpenRepository: 'app:open-repository',
   windowCommand: 'window:command',
   authGetStatus: 'auth:get-status',
   authRetry: 'auth:retry',
@@ -121,6 +125,17 @@ export const IPC = {
   gitOpenInstallPage: 'git:open-install-page',
 } as const;
 
+// One piece of news. Main sends it as a system notification when gitdesk is in the background,
+// or to the window as an AppNotice toast when it is in front.
+export type AppNotice = {
+  title: string;
+  body: string;
+  tone: 'success' | 'danger' | 'info';
+  repositoryId: string | null;
+};
+
+export type TestNotificationResult = 'shown' | 'unsupported' | 'off';
+
 export interface DesktopApi {
   platform: AppInfo['platform'];
   app: {
@@ -128,6 +143,9 @@ export interface DesktopApi {
     setOpenAtLogin(enabled: boolean): Promise<AppInfo>;
     openLogs(): Promise<void>;
     copyDiagnostics(): Promise<void>;
+    testNotification(): Promise<TestNotificationResult>;
+    onNotice(callback: (notice: AppNotice) => void): () => void;
+    onOpenRepository(callback: (id: string) => void): () => void;
   };
   window: {
     command(command: WindowCommand): Promise<void>;

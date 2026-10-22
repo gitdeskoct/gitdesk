@@ -83,11 +83,15 @@ function install(list: () => Promise<RepositorySummary[]>) {
     pin: vi.fn(never),
     refresh: vi.fn(async () => undefined),
     onChanged: vi.fn(() => () => {}),
-    onCloneProgress: vi.fn(() => () => {}),
+    onProgress: vi.fn(() => () => {}),
   };
   window.desktop = {
     platform: 'win32',
-    app: { getInfo: vi.fn(never) },
+    app: {
+      getInfo: vi.fn(never),
+      onNotice: vi.fn(() => () => {}),
+      onOpenRepository: vi.fn(() => () => {}),
+    },
     window: { command: vi.fn() },
     auth: {
       getStatus: vi.fn(async () => status),
@@ -211,8 +215,60 @@ describe('workspace', () => {
       screen.getByRole('button', { name: 'Refresh status' }),
     );
     expect(await screen.findByText('1 of 2 checked')).toBeInTheDocument();
+    // Radix also copies a toast's text into its screen-reader announcer, so it can appear twice.
     expect(
-      screen.getByText(/second: Git took too long to answer/),
-    ).toBeInTheDocument();
+      screen.getAllByText(/second: Git took too long to answer/).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe('home sections', () => {
+  const many = Array.from({ length: 9 }, (_, i) =>
+    repo({
+      id: `00000000-0000-4000-8000-00000000000${i}`,
+      name: `repo-${i}`,
+      lastOpenedAt: Date.now() - i * 1000,
+    }),
+  );
+
+  it('pages Needs attention six at a time', async () => {
+    install(async () => many);
+    renderApp();
+    const pager = await screen.findByRole('navigation', {
+      name: 'Needs attention pages',
+    });
+    expect(within(pager).getByText('1–6 of 9')).toBeInTheDocument();
+    await userEvent.click(
+      within(pager).getByRole('button', { name: 'Next page' }),
+    );
+    expect(within(pager).getByText('7–9 of 9')).toBeInTheDocument();
+    expect(
+      within(pager).getByRole('button', { name: 'Page 2' }),
+    ).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('leaves opens out of Recent activity unless the setting asks for them', async () => {
+    install(async () => [repo()]);
+    repos.activity = vi.fn(async () => [
+      {
+        id: 1,
+        repositoryId: repo().id,
+        repositoryName: 'desktop-git',
+        type: 'opened',
+        at: Date.now() - 5_000,
+        detail: null,
+      },
+      {
+        id: 2,
+        repositoryId: repo().id,
+        repositoryName: 'desktop-git',
+        type: 'commit',
+        at: Date.now() - 9_000,
+        detail: 'Fix it',
+      },
+    ]);
+    renderApp();
+    expect(await screen.findByText(/New commit: Fix it/)).toBeInTheDocument();
+    expect(screen.queryByText(/^Opened ·/)).not.toBeInTheDocument();
   });
 });
