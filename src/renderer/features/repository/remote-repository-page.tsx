@@ -1,6 +1,11 @@
-import { CircleAlert, CircleCheck, Clock, RefreshCw } from 'lucide-react';
+import {
+  CircleAlert,
+  CircleCheck,
+  Clock,
+  CloudDownload,
+  RefreshCw,
+} from 'lucide-react';
 import { useState } from 'react';
-import { SYNC_TRANSPORT_READY } from '../../../shared/repos';
 import {
   ActivityArt,
   NoResultsArt,
@@ -9,6 +14,7 @@ import {
 } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
+import { Pager, usePage } from '../../components/ui/pager';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { formatDate, relativeTime, useNow } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
@@ -25,8 +31,10 @@ import { useNavigation } from '../../app/navigation';
 import { REMOTE_ACTIVITY } from '../home/workspace-sections';
 import { ManageBand, type ManageMode } from '../repos/manage';
 import { RepoMenuButton, useRemoteActions } from '../repos/repo-actions';
+import { ClonePanel } from '../repos/clone-panel';
 import { useOpenRepo } from '../repos/repo-row';
 import { Page, PageTitle } from '../shell/page';
+import { GitUrlField } from './git-url';
 import { REMOTE_STATUS, RepoTags, Section } from './history';
 
 // A repository in the account. Everything shown comes from the server; nothing here touches disk.
@@ -147,12 +155,15 @@ function RemoteView({
   const query = useRemoteRepository(id, true);
   const remote = query.data!;
   const activity = useRemoteActivity(id, true);
+  const activityPage = usePage(activity.data ?? [], 10);
   const provision = useProvisionRemote();
   const openRepo = useOpenRepo();
   const local = useRepositories().data?.find((r) => r.remoteId === id);
   const [mode, setMode] = useState<ManageMode | null>(null);
+  const [cloning, setCloning] = useState(false);
   const { actions } = useRemoteActions(remote, setMode);
   const gone = () => navigate({ name: 'repositories', scope: 'remote' });
+  const canClone = !local && remote.status === 'ready' && !!remote.gitUrl;
   const status = REMOTE_STATUS[remote.status];
 
   const header = (
@@ -169,12 +180,26 @@ function RemoteView({
         {!query.isFetching && <RefreshCw />}
         Refresh
       </Button>
+      {canClone && (
+        <Button size="sm" variant="primary" onClick={() => setCloning(true)}>
+          <CloudDownload />
+          Clone to this computer
+        </Button>
+      )}
       <RepoMenuButton name={remote.name} actions={actions} />
     </>
   );
 
   return (
-    <Page crumbs={crumbs} actions={header}>
+    <Page
+      crumbs={crumbs}
+      actions={header}
+      aside={
+        cloning ? (
+          <ClonePanel initial={remote} onClose={() => setCloning(false)} />
+        ) : undefined
+      }
+    >
       <PageTitle title={remote.name}>
         {remote.description || 'No description.'}
       </PageTitle>
@@ -247,6 +272,17 @@ function RemoteView({
             )}
             {status.label}
           </dd>
+          <dt className="text-muted">Git URL</dt>
+          <dd className="min-w-0">
+            {remote.gitUrl ? (
+              <GitUrlField url={remote.gitUrl} />
+            ) : (
+              <span className="text-muted">
+                None yet. The gitdesk server gives one once Git hosting is
+                turned on.
+              </span>
+            )}
+          </dd>
           <dt className="text-muted">Visibility</dt>
           <dd className="text-ink">
             Private · only your signed-in account can see it
@@ -284,10 +320,19 @@ function RemoteView({
             .
           </InlineStatus>
         ) : (
-          <InlineStatus className="border-y border-line py-3">
-            {SYNC_TRANSPORT_READY
-              ? 'No copy on this computer yet. Clone it to work on it here.'
-              : "No copy on this computer. Cloning comes with the sync service, which isn't available yet; until then this repository holds its name, description and settings."}
+          <InlineStatus
+            className="border-y border-line py-3"
+            action={
+              canClone ? (
+                <Button size="sm" onClick={() => setCloning(true)}>
+                  Clone
+                </Button>
+              ) : undefined
+            }
+          >
+            {remote.gitUrl
+              ? 'No copy on this computer yet. Clone it to work on it here; it stays linked to this repository.'
+              : 'No copy on this computer. Without a Git URL this repository holds its name, description and settings only.'}
           </InlineStatus>
         )}
       </Section>
@@ -318,21 +363,28 @@ function RemoteView({
             {ipcErrorMessage(activity.error, 'The server did not answer.')}
           </EmptyState>
         ) : activity.data.length ? (
-          <ul className="border-t border-line">
-            {activity.data.map((item) => (
-              <li
-                key={item.id}
-                className="flex items-center gap-3 border-b border-line py-2.5 text-[0.84375rem]"
-              >
-                <span className="min-w-0 flex-1 truncate font-medium text-ink">
-                  {REMOTE_ACTIVITY[item.type]}
-                </span>
-                <span className="shrink-0 text-xs text-muted">
-                  {relativeTime(item.createdAt)}
-                </span>
-              </li>
-            ))}
-          </ul>
+          <>
+            <ul className="border-t border-line">
+              {activityPage.items.map((item) => (
+                <li
+                  key={item.id}
+                  className="flex items-center gap-3 border-b border-line py-2.5 text-[0.84375rem]"
+                >
+                  <span className="min-w-0 flex-1 truncate font-medium text-ink">
+                    {REMOTE_ACTIVITY[item.type]}
+                  </span>
+                  <span className="shrink-0 text-xs text-muted">
+                    {relativeTime(item.createdAt)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <Pager
+              label="Activity pages"
+              onPage={activityPage.setPage}
+              {...activityPage}
+            />
+          </>
         ) : (
           <EmptyState
             compact

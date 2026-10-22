@@ -1,4 +1,4 @@
-import { ExternalLink } from 'lucide-react';
+import { CircleCheck, ExternalLink } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { z } from 'zod';
 import {
@@ -10,16 +10,24 @@ import { GitMissingArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { Segmented } from '../../components/ui/segmented';
+import { Switch } from '../../components/ui/switch';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { TextField } from '../../components/ui/text-field';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
+  useChooseGit,
   useGitDefaultsMutation,
   useGitIdentity,
+  useGitInstall,
   useOpenGitInstallPage,
   useSetGitIdentity,
+  useSetGlobalPrune,
+  useSettings,
+  useUpdateSettings,
+  useUsePathGit,
 } from '../../lib/queries';
+import type { Settings } from '../../../shared/settings';
 import { PageTitle } from '../shell/page';
 
 type FieldErrors = Partial<Record<'name' | 'email', string>>;
@@ -206,6 +214,202 @@ function DefaultsForm({
   );
 }
 
+// Which Git runs: the one on PATH, or one picked here. Main checks a picked program answers as Git.
+function GitInstallGroup() {
+  const install = useGitInstall();
+  const choose = useChooseGit();
+  const usePath = useUsePathGit();
+  const failure = choose.error ?? usePath.error;
+  const data = install.data;
+  return (
+    <SettingGroup title="Git on this computer">
+      <SettingRow
+        id="git-install"
+        label={
+          install.isPending
+            ? 'Checking Git…'
+            : data?.available
+              ? `Git ${data.version}`
+              : 'Git not found'
+        }
+        description={
+          data?.available ? (
+            <span className="font-mono text-[0.78125rem]">
+              {data.location ?? 'On your PATH'}
+            </span>
+          ) : (
+            'gitdesk could not run Git with the current choice.'
+          )
+        }
+      >
+        <Button
+          size="sm"
+          pending={install.isFetching}
+          onClick={() => void install.refetch()}
+        >
+          Check again
+        </Button>
+      </SettingRow>
+      <SettingRow
+        id="git-binary"
+        label="Which Git to use"
+        description="The one on your PATH, or a Git you pick. gitdesk checks it answers as Git before using it."
+        stacked={!!failure}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            variant={data && !data.custom ? 'secondary' : 'ghost'}
+            aria-pressed={!!data && !data.custom}
+            pending={usePath.isPending}
+            onClick={() => usePath.mutate(undefined)}
+          >
+            {data && !data.custom && !usePath.isPending && <CircleCheck />}
+            From PATH
+          </Button>
+          <Button
+            size="sm"
+            variant={data?.custom ? 'secondary' : 'ghost'}
+            aria-pressed={!!data?.custom}
+            pending={choose.isPending}
+            onClick={() => choose.mutate(undefined)}
+          >
+            {data?.custom && !choose.isPending && <CircleCheck />}
+            Choose…
+          </Button>
+        </div>
+        {failure && (
+          <InlineStatus tone="danger">
+            {ipcErrorMessage(failure, "That Git wasn't used. Try another.")}
+          </InlineStatus>
+        )}
+      </SettingRow>
+    </SettingGroup>
+  );
+}
+
+const GUIDES = [
+  { value: '50', label: '50' },
+  { value: '72', label: '72' },
+  { value: '0', label: 'Off' },
+] as const;
+const FETCH_INTERVALS = [
+  { value: '0', label: 'Off' },
+  { value: '5', label: '5 min' },
+  { value: '15', label: '15 min' },
+  { value: '30', label: '30 min' },
+] as const;
+
+function CommitFetchGroups() {
+  const { data: settings } = useSettings();
+  const update = useUpdateSettings();
+  const install = useGitInstall();
+  const prune = useSetGlobalPrune();
+  if (!settings) return null;
+  const data = install.data?.available ? install.data : null;
+  return (
+    <>
+      <SettingGroup title="Committing">
+        <SettingRow
+          id="commit-guide"
+          label="Summary length guide"
+          description="The commit form counts characters and marks a summary past this length. It never blocks the commit."
+        >
+          <Segmented
+            label="Summary length guide"
+            value={String(settings.commitSummaryGuide) as '0' | '50' | '72'}
+            options={GUIDES}
+            onChange={(next) =>
+              update.mutate({
+                commitSummaryGuide: Number(
+                  next,
+                ) as Settings['commitSummaryGuide'],
+              })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="commit-signoff"
+          label="Add Signed-off-by"
+          description="Appends your name and email as a sign-off line (git commit --signoff)."
+        >
+          <Switch
+            aria-label="Add Signed-off-by"
+            checked={settings.commitSignoff}
+            onCheckedChange={(commitSignoff) =>
+              update.mutate({ commitSignoff })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="commit-signing"
+          label="Signed commits"
+          description={
+            data?.signing
+              ? 'commit.gpgsign is on in your Git config, so Git signs each commit with your own key.'
+              : 'commit.gpgsign is off in your Git config. Turn it on in a terminal once your GPG or SSH key is set up.'
+          }
+        >
+          <span className="text-xs text-muted">Read from Git</span>
+        </SettingRow>
+        <SettingRow
+          id="git-hooks"
+          label="Git hooks"
+          description="Hooks in a repository run on commit, switch and fetch, the same as in a terminal. Viewing status, diffs and history never runs them."
+        >
+          <span className="text-xs text-muted">Always</span>
+        </SettingRow>
+      </SettingGroup>
+      <SettingGroup title="Fetching">
+        <SettingRow
+          id="auto-fetch"
+          label="Fetch automatically"
+          description="Only for the repository you have open, from its default remote, and never while you are offline. Fetch never changes your files."
+        >
+          <Segmented
+            label="Fetch automatically"
+            value={String(settings.autoFetch) as '0' | '5' | '15' | '30'}
+            options={FETCH_INTERVALS}
+            onChange={(next) =>
+              update.mutate({
+                autoFetch: Number(next) as Settings['autoFetch'],
+              })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="fetch-prune"
+          label="Prune deleted remote branches"
+          description="Removes local copies of branches deleted on the remote when you fetch. Your own branches stay. Global: fetch.prune"
+        >
+          <Switch
+            aria-label="Prune deleted remote branches"
+            checked={data?.prune ?? false}
+            disabled={!data || prune.isPending}
+            onCheckedChange={(enabled) => prune.mutate(enabled)}
+          />
+        </SettingRow>
+        <SettingRow
+          id="git-credentials"
+          label="Credentials"
+          description={
+            data?.credentialHelper
+              ? `Git uses ${data.credentialHelper} to sign in to remotes. gitdesk never asks for or stores Git passwords.`
+              : 'No credential helper is set, so private remotes need SSH keys or a helper. gitdesk never asks for or stores Git passwords.'
+          }
+        >
+          <span className="text-xs text-muted">Read from Git</span>
+        </SettingRow>
+      </SettingGroup>
+      {prune.isError && (
+        <InlineStatus tone="danger" className="mt-3">
+          {ipcErrorMessage(prune.error, "fetch.prune wasn't saved. Try again.")}
+        </InlineStatus>
+      )}
+    </>
+  );
+}
+
 export function GitSection() {
   const identity = useGitIdentity();
   const install = useOpenGitInstallPage();
@@ -234,34 +438,47 @@ export function GitSection() {
     );
   if (!identity.data.available) {
     return (
-      <EmptyState
-        art={<GitMissingArt />}
-        title="Git is not installed"
-        action={
-          <Button pending={install.isPending} onClick={() => install.mutate()}>
-            {!install.isPending && <ExternalLink />}
-            Download Git
-          </Button>
-        }
-      >
-        gitdesk uses the Git on your computer for every commit, so install it
-        and reopen this page.
-      </EmptyState>
+      <>
+        <EmptyState
+          art={<GitMissingArt />}
+          title="Git is not installed"
+          action={
+            <Button
+              pending={install.isPending}
+              onClick={() => install.mutate()}
+            >
+              {!install.isPending && <ExternalLink />}
+              Download Git
+            </Button>
+          }
+        >
+          gitdesk uses the Git on your computer for every commit, so install it
+          and reopen this page.
+        </EmptyState>
+        <GitInstallGroup />
+      </>
     );
   }
 
   return (
     <>
-      <PageTitle title="Commit identity">
-        Written into every commit on this computer. Saved to your global Git
-        config; repository settings are left alone.
+      <PageTitle title="Git">
+        Rows here change your global Git config, which your terminal and editor
+        use too. Each repository can override them on its own Settings tab.
       </PageTitle>
+      <GitInstallGroup />
+      <h2 className="mt-12 mb-3 text-[0.8125rem] font-medium text-muted">
+        Commit identity
+      </h2>
       <IdentityForm
         initial={{
           name: identity.data.name ?? '',
           email: identity.data.email ?? '',
         }}
       />
+      <div className="mt-12">
+        <CommitFetchGroups />
+      </div>
       <DefaultsForm
         defaultBranch={identity.data.defaultBranch}
         autocrlf={identity.data.autocrlf}

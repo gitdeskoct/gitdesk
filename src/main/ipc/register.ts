@@ -21,6 +21,26 @@ import {
   REPOS_IPC,
 } from '../../shared/repos';
 import { settingsPatchSchema } from '../../shared/settings';
+import {
+  analyticsInputSchema,
+  commitDetailInputSchema,
+  commitInputSchema,
+  createBranchInputSchema,
+  diffInputSchema,
+  fetchInputSchema,
+  pushInputSchema,
+  logInputSchema,
+  openInEditorInputSchema,
+  pathsInputSchema,
+  repoConfigInputSchema,
+  repoFileInputSchema,
+  repoPreferencesInputSchema,
+  repoSizeInputSchema,
+  switchInputSchema,
+  WORKSPACE_IPC,
+} from '../../shared/workspace';
+import type { GitInstallService } from '../git/git-install';
+import type { WorkspaceService } from '../repos/workspace-service';
 import log from 'electron-log/main';
 import { UserError } from '../errors';
 import type { RemoteService } from '../remote/remote-service';
@@ -61,9 +81,21 @@ export function registerIpc(
     repos: RepositoryService;
     remote: RemoteService;
     notifier: Notifier;
+    workspace: WorkspaceService;
+    gitInstall: GitInstallService;
   },
 ): void {
-  const { app, auth, settings, git, repos, remote, notifier } = services;
+  const {
+    app,
+    auth,
+    settings,
+    git,
+    repos,
+    remote,
+    notifier,
+    workspace,
+    gitInstall,
+  } = services;
   handle(IPC.appTestNotification, none, () => notifier.test());
   handle(IPC.appGetInfo, none, () => app.info());
   handle(IPC.appSetOpenAtLogin, z.boolean(), (enabled) =>
@@ -242,6 +274,21 @@ export function registerIpc(
     userFacing((remoteId) => remote.activity(remoteId)),
   );
   handle(
+    r.addHostedRemote,
+    id,
+    userFacing((repoId) => repos.addHostedRemote(repoId)),
+  );
+  handle(
+    r.copyGitCommand,
+    id,
+    userFacing((repoId) => repos.copyGitCommand(repoId)),
+  );
+  handle(
+    r.revokeGitTokens,
+    id,
+    userFacing((repoId) => repos.revokeGitTokens(repoId)),
+  );
+  handle(
     r.history,
     id,
     userFacing((repoId) => repos.history(repoId)),
@@ -260,5 +307,159 @@ export function registerIpc(
     r.trash,
     repoTrashInputSchema,
     userFacing((input) => repos.trash(input)),
+  );
+
+  const w = WORKSPACE_IPC;
+  handle(
+    w.diff,
+    diffInputSchema,
+    userFacing((input) => workspace.diff(input)),
+  );
+  handle(
+    w.stage,
+    pathsInputSchema,
+    userFacing((input) => workspace.stage(input)),
+  );
+  handle(
+    w.stageAll,
+    id,
+    userFacing((repoId) => workspace.stageAll(repoId)),
+  );
+  handle(
+    w.unstage,
+    pathsInputSchema,
+    userFacing((input) => workspace.unstage(input)),
+  );
+  handle(
+    w.discard,
+    pathsInputSchema,
+    userFacing((input) => workspace.discard(input)),
+  );
+  handle(
+    w.commit,
+    commitInputSchema,
+    userFacing((input) => workspace.commit(input)),
+  );
+  handle(
+    w.branches,
+    id,
+    userFacing((repoId) => workspace.branches(repoId)),
+  );
+  handle(
+    w.switchBranch,
+    switchInputSchema,
+    userFacing((input) => workspace.switchBranch(input)),
+  );
+  handle(
+    w.createBranch,
+    createBranchInputSchema,
+    userFacing((input) => workspace.createBranch(input)),
+  );
+  handle(
+    w.fetch,
+    fetchInputSchema,
+    userFacing((input) => workspace.fetch(input)),
+  );
+  handle(w.cancelFetch, z.uuid(), (jobId) => workspace.cancelFetch(jobId));
+  handle(
+    w.push,
+    pushInputSchema,
+    userFacing((input) => workspace.push(input)),
+  );
+  handle(w.cancelPush, z.uuid(), (jobId) => workspace.cancelPush(jobId));
+  handle(
+    w.remotes,
+    id,
+    userFacing((repoId) => workspace.remotes(repoId)),
+  );
+  handle(
+    w.log,
+    logInputSchema,
+    userFacing((input) => workspace.log(input)),
+  );
+  handle(
+    w.commitDetail,
+    commitDetailInputSchema,
+    userFacing((input) => workspace.commitDetail(input)),
+  );
+  handle(
+    w.analytics,
+    analyticsInputSchema,
+    userFacing((input) => workspace.analytics(input)),
+  );
+  handle(
+    w.revealFile,
+    repoFileInputSchema,
+    userFacing((input) => workspace.revealFile(input)),
+  );
+  handle(
+    w.copyFilePath,
+    repoFileInputSchema,
+    userFacing((input) => workspace.copyFilePath(input)),
+  );
+  handle(
+    w.watch,
+    id,
+    userFacing((repoId) => workspace.watch(repoId)),
+  );
+  handle(
+    w.unwatch,
+    id,
+    userFacing((repoId) => workspace.unwatch(repoId)),
+  );
+  handle(
+    w.editors,
+    z.boolean(),
+    userFacing((refresh) => workspace.editors(refresh)),
+  );
+  handle(
+    w.openInEditor,
+    openInEditorInputSchema,
+    userFacing((input) => workspace.openInEditor(input)),
+  );
+  handle(
+    w.gitConfig,
+    id,
+    userFacing((repoId) => workspace.gitConfig(repoId)),
+  );
+  handle(
+    w.setGitConfig,
+    repoConfigInputSchema,
+    userFacing((input) => workspace.setGitConfig(input)),
+  );
+  handle(
+    w.preferences,
+    id,
+    userFacing((repoId) => workspace.preferences(repoId)),
+  );
+  handle(
+    w.setPreferences,
+    repoPreferencesInputSchema,
+    userFacing((input) => workspace.setPreferences(input)),
+  );
+  handle(
+    w.gitInstall,
+    none,
+    userFacing(() => gitInstall.get()),
+  );
+  handle(
+    w.chooseGit,
+    none,
+    userFacing(() => gitInstall.choose()),
+  );
+  handle(
+    w.usePathGit,
+    none,
+    userFacing(() => gitInstall.usePath()),
+  );
+  handle(
+    w.setGlobalPrune,
+    z.boolean(),
+    userFacing((enabled) => gitInstall.setGlobalPrune(enabled)),
+  );
+  handle(
+    w.size,
+    repoSizeInputSchema,
+    userFacing((input) => workspace.size(input)),
   );
 }

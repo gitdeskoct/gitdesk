@@ -1,7 +1,8 @@
 import { z } from 'zod';
 
 // The repository contract between main and the renderer. The renderer gets ids and display
-// strings only: it never sends a filesystem path, a Git argument or a command.
+// strings only: it never sends a filesystem path, a Git argument or a command. The one exception,
+// repository-relative paths for diffs and staging, lives in workspace.ts and is checked in main.
 
 // Local working-tree and upstream state from `git status --porcelain=v2 --branch`. Local change
 // state and synchronization are separate fields on purpose: a clean tree can still be behind.
@@ -20,6 +21,8 @@ export type RepoStatus = {
   operation: 'merge' | 'rebase' | 'cherry-pick' | 'revert' | null;
   hasRemotes: boolean;
   lastCommit: { oid: string; at: number; subject: string } | null;
+  // When any fetch last wrote FETCH_HEAD, from this app or a terminal. Missing in older snapshots.
+  fetchedAt?: number | null;
 };
 
 export type RepoAvailability = 'available' | 'missing' | 'not-a-repo';
@@ -49,6 +52,9 @@ export type ChangedFile = {
   kind: 'staged' | 'modified' | 'untracked' | 'conflict';
   // Git's one-letter status for this side: M, A, D, R, C, T, ? or U.
   code: string;
+  // The path before a rename or copy.
+  origPath?: string | null;
+  submodule?: boolean;
 };
 
 export type RepositoryChanges = { files: ChangedFile[]; truncated: boolean };
@@ -65,7 +71,11 @@ export type LocalActivity = {
     | 'checkout'
     | 'cloned'
     | 'renamed'
-    | 'unlinked';
+    | 'unlinked'
+    | 'fetched'
+    | 'pushed'
+    | 'hosted-remote-added'
+    | 'branch-created';
   at: number;
   detail: string | null;
 };
@@ -145,7 +155,13 @@ export type RepositoryHistory = {
   // More commits fell in the window than were read, so the weekly counts are a lower bound.
   weeksTruncated: boolean;
   // Author names come from Git config and are not verified identities.
-  recent: { oid: string; at: number; author: string; subject: string }[];
+  recent: {
+    oid: string;
+    at: number;
+    author: string;
+    email: string;
+    subject: string;
+  }[];
 };
 
 export const createRepositoryInputSchema = z.object({
@@ -182,10 +198,6 @@ export type CreateRepositoryResult = {
   timing: { totalMs: number; remoteMs: number | null };
 };
 
-// Cloning from your account needs the sync transport (Git objects in R2 behind a Git-compatible
-// endpoint). Until that ships, the clone flow runs up to its final step and says why it stops.
-export const SYNC_TRANSPORT_READY = false;
-
 export const cloneInputSchema = z.object({
   jobId: z.uuid(),
   remoteId: z.uuid(),
@@ -214,6 +226,26 @@ export const pinInputSchema = z.object({
 export const initializeInputSchema = z.object({ token: tokenSchema });
 export const refreshInputSchema = repoIdSchema.nullable();
 
+// A hosted Git remote: plain https with no user name, password, query or fragment. A server that
+// sends anything else is refused, so gitdesk never adds a URL that carries a secret.
+export const gitUrlSchema = z
+  .string()
+  .max(2048)
+  .refine((value) => {
+    try {
+      const url = new URL(value);
+      return (
+        url.protocol === 'https:' &&
+        !url.username &&
+        !url.password &&
+        !url.search &&
+        !url.hash
+      );
+    } catch {
+      return false;
+    }
+  });
+
 // Remote metadata from the Worker. Treated as untrusted input and validated on arrival.
 export const remoteRepositorySchema = z.object({
   id: z.string().min(1).max(64),
@@ -229,6 +261,8 @@ export const remoteRepositorySchema = z.object({
   status: z
     .enum(['provisioning', 'ready', 'failed', 'deleting'])
     .default('ready'),
+  // Where Git clones and pushes. null while the server has Git hosting off or setup hasn't run.
+  gitUrl: gitUrlSchema.nullable().default(null),
   createdAt: z.number(),
   updatedAt: z.number(),
 });
@@ -308,7 +342,12 @@ export type RemoteOverview = {
   // Manual refreshes are spaced out; until this time a refresh returns the cache.
   nextRefreshAt: number | null;
   requestsToday: number;
+  // Whether the server gives linked repositories a Git URL. null until the server has said.
+  gitHosting: boolean | null;
 };
+
+// added: a new Git remote was written to .git/config. existing: a remote already had the URL.
+export type HostedRemoteResult = { name: string; added: boolean };
 
 export const remoteOverviewInputSchema = z.object({ force: z.boolean() });
 
@@ -346,6 +385,9 @@ export const REPOS_IPC = {
   remoteGet: 'remote:get',
   remoteProvision: 'remote:provision',
   remoteActivity: 'remote:activity',
+  addHostedRemote: 'repos:add-hosted-remote',
+  copyGitCommand: 'repos:copy-git-command',
+  revokeGitTokens: 'repos:revoke-git-tokens',
 } as const;
 
 export interface ReposApi {
@@ -378,6 +420,12 @@ export interface ReposApi {
   // Retries storage setup for a repository whose setup failed or stopped.
   remoteProvision(id: string): Promise<RemoteRepository>;
   remoteActivity(id: string): Promise<RemoteActivity[]>;
+  // Adds the account's Git URL to this repository's Git remotes, or names the one that has it.
+  addHostedRemote(id: string): Promise<HostedRemoteResult>;
+  // Copies a push command carrying a token to the clipboard. The token never reaches the renderer.
+  copyGitCommand(id: string): Promise<{ expiresAt: number }>;
+  // Revokes every token for the linked remote, including commands copied earlier.
+  revokeGitTokens(id: string): Promise<{ revoked: number }>;
   history(id: string): Promise<RepositoryHistory>;
   // Renames the registration (and its remote, when linked). The folder keeps its name.
   update(input: RepoUpdateInput): Promise<RepositorySummary>;

@@ -132,6 +132,35 @@ export const CommitsArt = () => (
   </Art>
 );
 
+// A changed file: two versions side by side, the changed line marked.
+export const DiffArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <rect x="6" y="6" width="22" height="40" rx="3" />
+    <rect x="36" y="6" width="22" height="40" rx="3" />
+    <path d="M11 14h12M11 21h12M11 35h8M41 14h12M41 35h10" />
+    <path d="M11 28h10M41 28h12" {...accent} />
+  </Art>
+);
+
+// Two branches leaving one line of history.
+export const BranchesArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <circle cx="16" cy="10" r="4" />
+    <circle cx="16" cy="42" r="4" />
+    <circle cx="46" cy="18" r="4" {...accent} />
+    <path d="M16 14v24M46 22c0 10-12 8-27 18" />
+  </Art>
+);
+
+// An editor window: the place a file opens in.
+export const EditorArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <rect x="6" y="8" width="52" height="34" rx="4" />
+    <path d="m22 20-6 5 6 5M42 20l6 5-6 5" />
+    <circle cx="32" cy="25" r="3" {...accent} />
+  </Art>
+);
+
 // Bleeding drawings for the sign-in tiles: larger, on a solid tile color.
 export const CommitGraphArt = ({ className }: { className?: string }) => (
   <Art

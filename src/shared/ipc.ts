@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { ReposApi } from './repos';
 import type { Settings, SettingsPatch } from './settings';
+import type { WorkspaceApi } from './workspace';
 
 export const accountSummarySchema = z.object({
   id: z.string(),
@@ -172,4 +173,5 @@ export interface DesktopApi {
     openInstallPage(): Promise<void>;
   };
   repos: ReposApi;
+  workspace: WorkspaceApi;
 }

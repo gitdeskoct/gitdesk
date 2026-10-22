@@ -4,13 +4,18 @@ import { requestId } from 'hono/request-id';
 import { secureHeaders } from 'hono/secure-headers';
 import type { AppEnv } from './env';
 import { ApiError } from './lib/errors';
+import type { GitHost } from './lib/git-host';
 import { notFound, onError } from './middleware/error-handler';
 import type { GoogleProvider } from './modules/auth/google';
 import { authRoutes } from './modules/auth/routes';
 import { activityRoutes } from './modules/activity/routes';
 import { dashboardRoutes, repositoryRoutes } from './modules/repositories/routes';
 
-export type AppDeps = { google: GoogleProvider };
+export type AppDeps = {
+  google: GoogleProvider;
+  // Production passes gitHostFor; tests leave it out (no hosting) or pass a fake.
+  gitHost?: (env: CloudflareBindings) => GitHost | null;
+};
 
 export function createApp(deps: AppDeps) {
   const app = new Hono<AppEnv>();
@@ -39,8 +44,9 @@ export function createApp(deps: AppDeps) {
 
   app.get('/health', (c) => c.json({ ok: true }));
   app.route('/api/v1/auth', authRoutes(deps.google));
-  app.route('/api/v1/dashboard', dashboardRoutes());
-  app.route('/api/v1/repositories', repositoryRoutes());
+  const gitHost = deps.gitHost ?? (() => null);
+  app.route('/api/v1/dashboard', dashboardRoutes(gitHost));
+  app.route('/api/v1/repositories', repositoryRoutes(gitHost));
   app.route('/api/v1/activity', activityRoutes());
 
   app.onError(onError);

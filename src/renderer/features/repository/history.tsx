@@ -1,10 +1,4 @@
-import {
-  Cloud,
-  GitCommitHorizontal,
-  HardDrive,
-  Link,
-  Lock,
-} from 'lucide-react';
+import { Cloud, HardDrive, Link, Lock } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type {
   RemoteRepository,
@@ -17,6 +11,7 @@ import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
 import { relativeTime } from '../../lib/format';
 import { changeCount } from '../../lib/repo-status';
+import { AuthorAvatar } from './author-avatar';
 
 const plural = (n: number, one: string, many: string) =>
   `${n} ${n === 1 ? one : many}`;
@@ -326,10 +321,7 @@ export function RecentCommits({
           key={commit.oid}
           className="flex items-center gap-3 border-b border-line py-2.5"
         >
-          <GitCommitHorizontal
-            aria-hidden
-            className="size-4 shrink-0 text-muted"
-          />
+          <AuthorAvatar name={commit.author} email={commit.email} />
           <div className="min-w-0 flex-1">
             <div
               className="truncate text-[0.84375rem] font-medium text-ink"

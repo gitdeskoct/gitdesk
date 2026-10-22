@@ -16,6 +16,7 @@ import {
   type AddRepositoryResult,
   type CreateRepositoryInput,
   type CreateRepositoryResult,
+  type HostedRemoteResult,
   type LocalActivity,
   type RemoteRepository,
   type RepositoryChanges,
@@ -24,6 +25,7 @@ import {
 import { gitDefaultsSchema } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import { UserError } from '../errors';
+import { sameUrl } from '../remote/git-auth';
 import type { RemoteService } from '../remote/remote-service';
 import {
   canonicalPath,
@@ -65,6 +67,29 @@ const WATCH_DEBOUNCE_MS = 1500;
 const FOCUS_GAP_MS = 30_000;
 const TOKEN_TTL_MS = 10 * 60_000;
 
+// Git hosting for linked repositories, built in main from the remote service and the token cache.
+export type Hosting = {
+  hostedUrl(remoteId: string): Promise<string | null>;
+  // Creates the Git repository on the server when the link predates hosting.
+  provision(remoteId: string): Promise<RemoteRepository>;
+  envFor(
+    remoteId: string,
+    url: string,
+    scope: 'read' | 'write',
+  ): Promise<Record<string, string> | null>;
+  // A write token for a command the person runs themself; not cached.
+  terminalToken(
+    remoteId: string,
+    lifetime: Settings['hostingTokenLifetime'],
+  ): Promise<{ token: string; expiresAt: number }>;
+  revoke(remoteId: string): Promise<number>;
+};
+
+// What may go into a command the person pastes into a shell: nothing a shell would expand.
+const SHELL_SAFE_URL = /^https:\/\/[A-Za-z0-9.-]+(:\d+)?\/[A-Za-z0-9._~/-]+$/;
+const SHELL_SAFE_TOKEN = /^[A-Za-z0-9_.?=:+/-]+$/;
+const SHELL_SAFE_NAME = /^[A-Za-z0-9._-]+$/;
+
 // Changes inside .git that mean the status may differ: staging, commits, checkouts, fetches.
 const WATCHED =
   /^(index|HEAD|ORIG_HEAD|FETCH_HEAD|MERGE_HEAD|packed-refs|refs)/;
@@ -100,8 +125,8 @@ export function createRepositoryService(deps: {
         }
       | { ok: false; name: string; message: string },
   ) => void;
-  // Where a remote repository can be fetched from. Null until the sync transport exists.
-  resolveCloneUrl?: (remoteId: string) => Promise<string | null>;
+  // Absent when gitdesk runs without an account; clone and the hosted remote are then unavailable.
+  hosting?: Hosting;
   cloneProtocols?: string[];
   now?: () => number;
   log?: Pick<Console, 'warn'>;
@@ -258,7 +283,6 @@ export function createRepositoryService(deps: {
       row.availability === 'available';
     if (!wanted) return unwatch(id);
     if (watchers.has(id) || watchers.size >= MAX_WATCHERS) return;
-    const gitDir = path.join(row.rootPath, '.git');
     const schedule = () => {
       clearTimeout(watchTimers.get(id));
       watchTimers.set(
@@ -266,18 +290,26 @@ export function createRepositoryService(deps: {
         setTimeout(() => void enqueue([id]), WATCH_DEBOUNCE_MS),
       );
     };
-    void stat(gitDir)
-      .then((info) => {
-        // A worktree's .git is a file pointing elsewhere; those rely on focus and interval checks.
-        if (!info.isDirectory() || watchers.has(id)) return;
-        const top = watch(gitDir, { persistent: false }, (_event, file) => {
-          if (!file || WATCHED.test(String(file))) schedule();
-        });
-        const opened = [top];
+    // Git reports where its data lives: a linked worktree or submodule has a .git file that points
+    // elsewhere, and its refs live in the shared common directory.
+    void gitAt(row.rootPath)
+      .raw(['rev-parse', '--absolute-git-dir', '--git-common-dir'])
+      .then(async (output) => {
+        const [own, common] = output.split('\n').map((line) => line.trim());
+        if (!own || !common || watchers.has(id)) return;
+        const gitDir = path.resolve(row.rootPath, own);
+        const commonDir = path.resolve(row.rootPath, common);
+        if (!(await stat(gitDir)).isDirectory() || watchers.has(id)) return;
+        const shallow = (dir: string) =>
+          watch(dir, { persistent: false }, (_event, file) => {
+            if (!file || WATCHED.test(String(file))) schedule();
+          });
+        const opened = [shallow(gitDir)];
+        if (commonDir !== gitDir) opened.push(shallow(commonDir));
         try {
           opened.push(
             watch(
-              path.join(gitDir, 'refs'),
+              path.join(commonDir, 'refs'),
               { persistent: false, recursive: true },
               schedule,
             ),
@@ -376,7 +408,74 @@ export function createRepositoryService(deps: {
     );
     store.setRemote(row.id, remote.id);
     changed();
+    // The link stands even if the remote can't be added; the Remotes tab offers it again.
+    if (remote.gitUrl && deps.settings().hostingRemoteName !== 'none')
+      await addHosted(rowOrThrow(row.id)).catch((err: unknown) =>
+        log.warn('hosted remote not added', err),
+      );
     return remote;
+  }
+
+  async function hostedUrlFor(row: RepoRow): Promise<string> {
+    if (!row.remoteId)
+      throw new RepoError('Link this repository to your account first.');
+    if (!deps.hosting)
+      throw new RepoError('Sign in to use the Git URL from your account.');
+    const url =
+      (await deps.hosting.hostedUrl(row.remoteId)) ??
+      (await deps.hosting.provision(row.remoteId)).gitUrl;
+    if (!url)
+      throw new RepoError(
+        "The gitdesk server doesn't have Git hosting turned on, so there's no Git URL for this repository.",
+      );
+    return url;
+  }
+
+  // The Git remote whose URL is the hosted one, if any. Names come from .git/config.
+  async function hostedRemoteName(
+    root: string,
+    url: string,
+  ): Promise<{ name: string | null; names: string[] }> {
+    const git = gitAt(root);
+    const names = (await git.raw(['remote']))
+      .split('\n')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    for (const name of names) {
+      const current = await git
+        .raw(['remote', 'get-url', '--', name])
+        .catch(() => '');
+      if (sameUrl(current.trim(), url)) return { name, names };
+    }
+    return { name: null, names };
+  }
+
+  // Adds the hosted URL as a Git remote: origin when free (or always "gitdesk" if chosen), and
+  // never replaces a remote that points elsewhere. The URL carries no credentials.
+  async function addHosted(row: RepoRow): Promise<HostedRemoteResult> {
+    const url = await hostedUrlFor(row);
+    const { name: existing, names } = await hostedRemoteName(row.rootPath, url);
+    if (existing) return { name: existing, added: false };
+    const preferOrigin = deps.settings().hostingRemoteName !== 'gitdesk';
+    const name =
+      preferOrigin && !names.includes('origin')
+        ? 'origin'
+        : !names.includes('gitdesk')
+          ? 'gitdesk'
+          : null;
+    if (!name)
+      throw new RepoError(
+        'This repository already has a remote named gitdesk that points somewhere else. Rename it to add the Git URL.',
+      );
+    try {
+      await gitAt(row.rootPath).raw(['remote', 'add', name, url]);
+    } catch (err) {
+      throw new RepoError(describeGitError(err));
+    }
+    store.addActivity(row.id, 'hosted-remote-added', name, now());
+    // hasRemotes changes, so the status is read again before the caller hears back.
+    await enqueue([row.id]);
+    return { name, added: true };
   }
 
   return {
@@ -743,10 +842,51 @@ export function createRepositoryService(deps: {
       return createRemoteFor(row);
     },
 
+    async addHostedRemote(id: string): Promise<HostedRemoteResult> {
+      return addHosted(rowOrThrow(id));
+    },
+
+    // The command pushes HEAD, so no branch name (which may hold shell characters) is pasted.
+    async copyGitCommand(id: string): Promise<{ expiresAt: number }> {
+      const row = rowOrThrow(id);
+      const url = await hostedUrlFor(row);
+      const { name } = await hostedRemoteName(row.rootPath, url).catch(() => ({
+        name: null,
+      }));
+      if (!SHELL_SAFE_URL.test(url))
+        throw new RepoError(
+          "This Git URL has characters that aren't safe to paste into a terminal.",
+        );
+      const { token, expiresAt } = await deps.hosting!.terminalToken(
+        row.remoteId!,
+        deps.settings().hostingTokenLifetime,
+      );
+      if (!SHELL_SAFE_TOKEN.test(token))
+        throw new RepoError(
+          "The server sent a token that isn't safe to paste into a terminal.",
+        );
+      const target = name && SHELL_SAFE_NAME.test(name) ? name : url;
+      deps.desktop.copyText(
+        `git -c "http.${url}.extraHeader=Authorization: Bearer ${token}" push ${target} HEAD`,
+      );
+      return { expiresAt };
+    },
+
+    async revokeGitTokens(id: string): Promise<{ revoked: number }> {
+      const row = rowOrThrow(id);
+      if (!row.remoteId || !deps.hosting)
+        throw new RepoError('This repository is not linked to your account.');
+      return { revoked: await deps.hosting.revoke(row.remoteId) };
+    },
+
     // The URL is resolved before the folder token is spent, so an unavailable transport costs nothing.
     async clone(input: CloneInput): Promise<CloneResult> {
-      const url = (await deps.resolveCloneUrl?.(input.remoteId)) ?? null;
+      const url = deps.hosting
+        ? await deps.hosting.hostedUrl(input.remoteId)
+        : null;
       if (!url) return { status: 'unavailable' };
+      const auth =
+        (await deps.hosting!.envFor(input.remoteId, url, 'read')) ?? undefined;
       if (clones.has(input.jobId))
         throw new RepoError('That clone is already running.');
       const parent = redeem(input.locationToken);
@@ -758,6 +898,7 @@ export function createRepositoryService(deps: {
       try {
         const target = await cloneInto({
           url,
+          auth,
           parent,
           name: input.name,
           signal: controller.signal,

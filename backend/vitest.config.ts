@@ -6,6 +6,7 @@ export default defineConfig({
   plugins: [
     cloudflareTest(async () => ({
       wrangler: { configPath: './wrangler.jsonc' },
+      remoteBindings: false,
       miniflare: {
         bindings: {
           TEST_MIGRATIONS: await readD1Migrations(

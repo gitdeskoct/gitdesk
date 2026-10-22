@@ -58,6 +58,14 @@ const MIGRATIONS = [
    UPDATE repository_cache SET status_at = inspected_at WHERE status_json IS NOT NULL`,
   // The server's lifecycle state for cached remotes (provisioning, ready, failed, deleting).
   `ALTER TABLE remote_repository_cache ADD COLUMN status TEXT NOT NULL DEFAULT 'ready'`,
+  // gitdesk's own per-repository choices; Git settings stay in the repository's .git/config.
+  `CREATE TABLE repository_preferences (
+     repository_id TEXT PRIMARY KEY REFERENCES local_repositories (id) ON DELETE CASCADE,
+     value TEXT NOT NULL,
+     updated_at INTEGER NOT NULL
+   )`,
+  // The hosted Git URL the server gave a remote, so fetch and push know it without asking again.
+  `ALTER TABLE remote_repository_cache ADD COLUMN git_url TEXT`,
 ];
 
 export type AppDatabase = DatabaseSync;

@@ -27,7 +27,19 @@ export const AUTO_GAP_MS = 10 * 60_000;
 export const MANUAL_GAP_MS = 30_000;
 export const RETRY_GAP_MS = 2 * 60_000;
 
-type CachedOverview = { accountId: string; total: number; fetchedAt: number };
+type CachedOverview = {
+  accountId: string;
+  total: number;
+  fetchedAt: number;
+  gitHosting?: boolean | null;
+};
+
+export type GitCredentials = {
+  remote: string;
+  token: string;
+  scope: 'read' | 'write';
+  expiresAt: number;
+};
 type CachedActivity = { accountId: string; items: RemoteActivity[] };
 type Usage = { day: string; count: number };
 
@@ -56,6 +68,14 @@ function userError(err: unknown, fallback: string): UserError {
     if (err.code === 'INVALID_STATE')
       return new UserError(
         'That remote repository is being deleted, so it takes no changes.',
+      );
+    if (err.code === 'GIT_HOSTING_UNAVAILABLE')
+      return new UserError(
+        "The gitdesk server doesn't have Git hosting turned on, so this repository has no Git URL.",
+      );
+    if (err.code === 'GIT_HOST_ERROR')
+      return new UserError(
+        "The Git host didn't answer. Try again in a moment.",
       );
     if (err.status === 429)
       return new UserError('Too many requests. Try again in a minute.');
@@ -144,6 +164,7 @@ export function createRemoteService(deps: {
         accountId,
         total: result.total,
         fetchedAt,
+        gitHosting: result.gitHosting,
       } satisfies CachedOverview);
       writeState(deps.db, 'remote_activity', {
         accountId,
@@ -174,6 +195,7 @@ export function createRemoteService(deps: {
         activity: [],
         fetchedAt: null,
         error: null,
+        gitHosting: null,
       };
     const cached = cachedFor(accountId);
     if (!cached)
@@ -185,6 +207,7 @@ export function createRemoteService(deps: {
         activity: [],
         fetchedAt: null,
         error: status.status === 'offline' ? 'offline' : lastError,
+        gitHosting: null,
       };
     return {
       ...base,
@@ -194,6 +217,7 @@ export function createRemoteService(deps: {
       activity: activityFor(accountId),
       fetchedAt: cached.fetchedAt,
       error: status.status === 'offline' ? 'offline' : lastError,
+      gitHosting: cached.gitHosting ?? null,
     };
   }
 
@@ -328,6 +352,51 @@ export function createRemoteService(deps: {
         return repository;
       } catch (err) {
         throw userError(err, "The server couldn't set up storage.");
+      }
+    },
+
+    // The hosted Git URL for a linked remote: from the cache when it has one, else from the server.
+    // null when signed out, local-only, or the server has no Git hosting.
+    async hostedUrl(id: string): Promise<string | null> {
+      const status = deps.auth.getStatus();
+      const accountId = accountIdOf(status);
+      if (!accountId || deps.settings().localOnly) return null;
+      const cached = deps.store.readRemote(accountId).find((r) => r.id === id);
+      if (cached?.gitUrl) return cached.gitUrl;
+      if (status.status !== 'authenticated') return null;
+      try {
+        const { repository } = await call((token) =>
+          deps.api.getRepository(token, id),
+        );
+        return repository.gitUrl;
+      } catch (err) {
+        throw userError(err, "Couldn't load that remote repository.");
+      }
+    },
+
+    // A short-lived token for one remote. Callers keep it in memory only.
+    async gitCredentials(
+      id: string,
+      scope: 'read' | 'write',
+      lifetime: 900 | 3600 | 28_800,
+    ): Promise<GitCredentials> {
+      signedInAccount();
+      try {
+        return await call((token) =>
+          deps.api.gitCredentials(token, id, { scope, lifetime }),
+        );
+      } catch (err) {
+        throw userError(err, "Couldn't get Git access for this repository.");
+      }
+    },
+
+    async revokeGitCredentials(id: string): Promise<number> {
+      signedInAccount();
+      try {
+        return (await call((token) => deps.api.revokeGitCredentials(token, id)))
+          .revoked;
+      } catch (err) {
+        throw userError(err, "The server couldn't revoke the tokens.");
       }
     },
 

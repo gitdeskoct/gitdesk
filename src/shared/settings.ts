@@ -1,5 +1,40 @@
 import { z } from 'zod';
 
+// Each name is a Shiki light and dark theme pair, resolved in the renderer's highlighter.
+export const CODE_THEMES = [
+  'github',
+  'github-high-contrast',
+  'one',
+  'catppuccin',
+  'solarized',
+  'rose-pine',
+] as const;
+export type CodeTheme = (typeof CODE_THEMES)[number];
+
+export const EDITOR_IDS = [
+  'system',
+  'vscode',
+  'vscode-insiders',
+  'vscodium',
+  'cursor',
+  'windsurf',
+  'zed',
+  'sublime',
+  'notepadpp',
+  'webstorm',
+  'intellij',
+  'intellij-ce',
+  'pycharm',
+  'pycharm-ce',
+  'phpstorm',
+  'goland',
+  'rider',
+  'clion',
+  'rubymine',
+  'rustrover',
+] as const;
+export type EditorId = (typeof EDITOR_IDS)[number];
+
 // No `.default()` here: a partial patch must never be filled with defaults and overwrite saved values.
 export const settingsSchema = z.object({
   theme: z.enum(['system', 'light', 'dark']),
@@ -38,6 +73,51 @@ export const settingsSchema = z.object({
   notifyClone: z.boolean(),
   notifyProblems: z.boolean(),
   notifyOnlyInBackground: z.boolean(),
+  // The repository workspace: Changes beside the diff, or one centered column.
+  workspaceLayout: z.enum(['auto', 'centered', 'split']),
+  // Code and diffs. The font is applied through a CSS variable, so it is limited to name characters.
+  codeTheme: z.enum(CODE_THEMES),
+  codeFont: z
+    .string()
+    .max(80)
+    .regex(/^[A-Za-z0-9 _-]*$/),
+  codeSize: z.union([
+    z.literal(12),
+    z.literal(13),
+    z.literal(14),
+    z.literal(15),
+  ]),
+  codeLineHeight: z.enum(['compact', 'default', 'relaxed']),
+  codeTabWidth: z.union([z.literal(2), z.literal(4), z.literal(8)]),
+  codeLigatures: z.boolean(),
+  diffLayout: z.enum(['auto', 'unified', 'split']),
+  diffContext: z.union([z.literal(3), z.literal(5), z.literal(10)]),
+  diffWordHighlight: z.boolean(),
+  diffIgnoreWhitespace: z.boolean(),
+  diffWrap: z.boolean(),
+  diffSyntax: z.boolean(),
+  // Committing and fetching. 0 turns the summary guide or automatic fetch off.
+  commitSummaryGuide: z.union([z.literal(0), z.literal(50), z.literal(72)]),
+  commitSignoff: z.boolean(),
+  autoFetch: z.union([
+    z.literal(0),
+    z.literal(5),
+    z.literal(15),
+    z.literal(30),
+  ]),
+  // An editor id from the detected list, or system for the OS default app. Main only ever
+  // launches an executable it found itself, so this can't name a program.
+  // Git hosting: the remote name used when linking adds the account's Git URL, and how long a
+  // token in a copied terminal command lasts, in seconds.
+  hostingRemoteName: z.enum(['auto', 'gitdesk', 'none']),
+  hostingTokenLifetime: z.union([
+    z.literal(900),
+    z.literal(3600),
+    z.literal(28_800),
+  ]),
+  editor: z.enum(EDITOR_IDS),
+  editorGotoLine: z.boolean(),
+  editorOpenFolder: z.boolean(),
 });
 
 export const settingsPatchSchema = settingsSchema.partial().strict();
@@ -71,6 +151,27 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyClone: true,
   notifyProblems: true,
   notifyOnlyInBackground: true,
+  workspaceLayout: 'auto',
+  codeTheme: 'github',
+  codeFont: '',
+  codeSize: 13,
+  codeLineHeight: 'default',
+  codeTabWidth: 4,
+  codeLigatures: false,
+  diffLayout: 'auto',
+  diffContext: 3,
+  diffWordHighlight: true,
+  diffIgnoreWhitespace: false,
+  diffWrap: false,
+  diffSyntax: true,
+  commitSummaryGuide: 72,
+  commitSignoff: false,
+  autoFetch: 0,
+  hostingRemoteName: 'auto',
+  hostingTokenLifetime: 3600,
+  editor: 'system',
+  editorGotoLine: true,
+  editorOpenFolder: true,
 };
 
 // Field by field, so one bad or retired value falls back alone instead of resetting everything.

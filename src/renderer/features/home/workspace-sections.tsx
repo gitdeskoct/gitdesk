@@ -5,6 +5,7 @@ import {
   Clock,
   CloudDownload,
   CloudOff,
+  CloudUpload,
   Cloud,
   FolderOpen,
   FolderPlus,
@@ -12,6 +13,7 @@ import {
   GitBranch,
   GitCommitHorizontal,
   GitMerge,
+  Link2,
   Pencil,
   Unlink,
   type LucideIcon,
@@ -241,6 +243,10 @@ const LOCAL: Record<
   checkout: { icon: GitBranch, label: 'Switched to' },
   renamed: { icon: Pencil, label: 'Renamed to' },
   unlinked: { icon: Unlink, label: 'Disconnected from its remote' },
+  fetched: { icon: CloudDownload, label: 'Fetched from' },
+  pushed: { icon: CloudUpload, label: 'Pushed' },
+  'hosted-remote-added': { icon: Link2, label: 'Added the Git URL' },
+  'branch-created': { icon: GitBranch, label: 'New branch' },
 };
 
 export const REMOTE_ACTIVITY: Record<RemoteActivity['type'], string> = {

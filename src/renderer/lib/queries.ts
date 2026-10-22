@@ -26,6 +26,14 @@ import {
   type Settings,
   type SettingsPatch,
 } from '../../shared/settings';
+import type {
+  AnalyticsRange,
+  CommitInput,
+  DiffInput,
+  GitInstall,
+  RepoConfigInput,
+  RepoPreferencesInput,
+} from '../../shared/workspace';
 
 // Only AuthStatus and account summaries ever reach this cache; tokens never leave the main process.
 export const keys = {
@@ -406,6 +414,324 @@ export function useCloneRepository() {
 
 export const useCancelClone = () =>
   useMutation({ mutationFn: (jobId: string) => repos().cancelClone(jobId) });
+
+// The local Git workspace. Reads are keyed by the status snapshot (statusAt) or a commit, so a
+// change Git reports refetches them and nothing else does; mutations name what they invalidate.
+export const workspaceKeys = {
+  diff: (id: string, input: Omit<DiffInput, 'id'>, statusAt: number | null) =>
+    ['ws-diff', id, input, statusAt] as const,
+  branches: (id: string, statusAt: number | null) =>
+    ['ws-branches', id, statusAt] as const,
+  remotes: (id: string, statusAt: number | null) =>
+    ['ws-remotes', id, statusAt] as const,
+  log: (id: string, pinned: string | null) => ['ws-log', id, pinned] as const,
+  commit: (id: string, oid: string) => ['ws-commit', id, oid] as const,
+  analytics: (id: string, head: string | null, range: AnalyticsRange) =>
+    ['ws-analytics', id, head, range] as const,
+  gitConfig: (id: string) => ['ws-git-config', id] as const,
+  preferences: (id: string) => ['ws-preferences', id] as const,
+  editors: ['ws-editors'] as const,
+  gitInstall: ['ws-git-install'] as const,
+};
+
+const workspace = () => desktop().workspace;
+
+function invalidateRepository(
+  qc: ReturnType<typeof useQueryClient>,
+  id: string,
+  scopes: ('changes' | 'diff' | 'history' | 'branches' | 'remotes')[],
+) {
+  const prefixes: Record<(typeof scopes)[number], string[]> = {
+    changes: ['repo-changes'],
+    diff: ['ws-diff'],
+    history: ['repo-history', 'ws-log', 'ws-analytics'],
+    branches: ['ws-branches'],
+    remotes: ['ws-remotes'],
+  };
+  for (const scope of scopes)
+    for (const prefix of prefixes[scope])
+      void qc.invalidateQueries({ queryKey: [prefix, id] });
+  void qc.invalidateQueries({ queryKey: repoKeys.activity });
+}
+
+export const useDiff = (
+  id: string,
+  input: Omit<DiffInput, 'id'> | null,
+  statusAt: number | null,
+) =>
+  useQuery({
+    queryKey: workspaceKeys.diff(
+      id,
+      input ?? {
+        path: '',
+        side: 'unstaged',
+        context: 3,
+        ignoreWhitespace: false,
+        full: false,
+      },
+      statusAt,
+    ),
+    queryFn: () => workspace().diff({ id, ...input! }),
+    enabled: !!input,
+    staleTime: Infinity,
+    // The previous diff stays on screen while the next file's diff loads.
+    placeholderData: (previous) => previous,
+  });
+
+function useWorkspaceMutation<I, R>(
+  id: string,
+  fn: (input: I) => Promise<R>,
+  scopes: Parameters<typeof invalidateRepository>[2],
+) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSettled: () => invalidateRepository(qc, id, scopes),
+  });
+}
+
+export const useStage = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (paths: string[]) => workspace().stage({ id, paths }),
+    ['changes', 'diff'],
+  );
+export const useStageAll = (id: string) =>
+  useWorkspaceMutation(id, () => workspace().stageAll(id), ['changes', 'diff']);
+export const useUnstage = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (paths: string[]) => workspace().unstage({ id, paths }),
+    ['changes', 'diff'],
+  );
+export const useDiscard = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (paths: string[]) => workspace().discard({ id, paths }),
+    ['changes', 'diff'],
+  );
+export const useCommit = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (input: Omit<CommitInput, 'id'>) => workspace().commit({ id, ...input }),
+    ['changes', 'diff', 'history', 'branches'],
+  );
+
+export const useBranches = (
+  id: string,
+  statusAt: number | null,
+  enabled = true,
+) =>
+  useQuery({
+    queryKey: workspaceKeys.branches(id, statusAt),
+    queryFn: () => workspace().branches(id),
+    enabled,
+    staleTime: Infinity,
+  });
+
+// A switch changes everything that depends on the branch, so all of it is read again.
+export const useSwitchBranch = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (input: { name: string; kind: 'local' | 'remote' }) =>
+      workspace().switchBranch({ id, ...input }),
+    ['changes', 'diff', 'history', 'branches'],
+  );
+export const useCreateBranch = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (name: string) => workspace().createBranch({ id, name }),
+    ['history', 'branches'],
+  );
+// Fetch updates remote-tracking refs only; the working tree and history of the branch stay.
+export const useFetch = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (input: { remote: string; jobId: string }) =>
+      workspace().fetch({ id, ...input }),
+    ['branches', 'remotes'],
+  );
+export const useCancelFetch = () =>
+  useMutation({
+    mutationFn: (jobId: string) => workspace().cancelFetch(jobId),
+  });
+// Push moves the remote's branch and the upstream ahead count; local files stay as they are.
+export const usePush = (id: string) =>
+  useWorkspaceMutation(id, (jobId: string) => workspace().push({ id, jobId }), [
+    'branches',
+    'remotes',
+    'history',
+  ]);
+export const useCancelPush = () =>
+  useMutation({
+    mutationFn: (jobId: string) => workspace().cancelPush(jobId),
+  });
+
+// The account's Git URL as a Git remote of this repository.
+export const useAddHostedRemote = (id: string) =>
+  useWorkspaceMutation(id, () => repos().addHostedRemote(id), ['remotes']);
+// The command and its token go straight from main to the clipboard; only the expiry comes back.
+export const useCopyGitCommand = () =>
+  useMutation({ mutationFn: (id: string) => repos().copyGitCommand(id) });
+export const useRevokeGitTokens = () =>
+  useMutation({ mutationFn: (id: string) => repos().revokeGitTokens(id) });
+
+export const useRemotes = (id: string, statusAt: number | null) =>
+  useQuery({
+    queryKey: workspaceKeys.remotes(id, statusAt),
+    queryFn: () => workspace().remotes(id),
+    staleTime: Infinity,
+  });
+
+// Pages come from one snapshot: every page after the first asks for the head the first page read.
+export const useHistoryLog = (id: string, pinned: string | null) =>
+  useInfiniteQuery({
+    queryKey: workspaceKeys.log(id, pinned),
+    queryFn: ({ pageParam }) => workspace().log({ id, ...pageParam }),
+    initialPageParam: { oid: pinned, skip: 0 } as {
+      oid: string | null;
+      skip: number;
+    },
+    getNextPageParam: (last) =>
+      last.nextSkip === null || !last.snapshot
+        ? undefined
+        : { oid: last.snapshot, skip: last.nextSkip },
+    staleTime: Infinity,
+  });
+
+export const useCommitDetail = (id: string, oid: string | null) =>
+  useQuery({
+    queryKey: workspaceKeys.commit(id, oid ?? ''),
+    queryFn: () => workspace().commitDetail({ id, oid: oid! }),
+    enabled: !!oid,
+    staleTime: Infinity,
+  });
+
+export const useAnalytics = (
+  id: string,
+  head: string | null,
+  range: AnalyticsRange,
+  enabled: boolean,
+) =>
+  useQuery({
+    queryKey: workspaceKeys.analytics(id, head, range),
+    queryFn: () => workspace().analytics({ id, range }),
+    enabled,
+    staleTime: Infinity,
+    placeholderData: (previous) => previous,
+  });
+
+// Keyed by the status snapshot, so the numbers follow edits as they happen; main spaces the walks.
+export const useRepoSize = (id: string, statusAt: number | null) =>
+  useQuery({
+    queryKey: ['ws-size', id, statusAt] as const,
+    queryFn: () => workspace().size({ id, force: false }),
+    staleTime: Infinity,
+    placeholderData: (previous) => previous,
+  });
+export function useMeasureRepo(id: string, statusAt: number | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => workspace().size({ id, force: true }),
+    onSuccess: (size) => qc.setQueryData(['ws-size', id, statusAt], size),
+  });
+}
+
+export const useRevealFile = (id: string) =>
+  useMutation({
+    mutationFn: (path: string) => workspace().revealFile({ id, path }),
+  });
+export const useCopyFilePath = (id: string) =>
+  useMutation({
+    mutationFn: (path: string) => workspace().copyFilePath({ id, path }),
+  });
+
+// The open workspace's files are watched while it is on screen, and only then.
+export function useWatchRepository(id: string, enabled: boolean): void {
+  useEffect(() => {
+    if (!enabled) return;
+    void workspace()
+      .watch(id)
+      .catch(() => undefined);
+    return () => {
+      void workspace()
+        .unwatch(id)
+        .catch(() => undefined);
+    };
+  }, [id, enabled]);
+}
+
+export const useEditors = () =>
+  useQuery({
+    queryKey: workspaceKeys.editors,
+    queryFn: () => workspace().editors(false),
+    staleTime: Infinity,
+  });
+export function useDetectEditors() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => workspace().editors(true),
+    onSuccess: (list) => qc.setQueryData(workspaceKeys.editors, list),
+  });
+}
+export const useOpenInEditor = (id: string) =>
+  useMutation({
+    mutationFn: (input: { path: string | null; line: number | null }) =>
+      workspace().openInEditor({ id, ...input }),
+  });
+
+export const useRepoGitConfig = (id: string) =>
+  useQuery({
+    queryKey: workspaceKeys.gitConfig(id),
+    queryFn: () => workspace().gitConfig(id),
+  });
+export function useSetRepoGitConfig(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Omit<RepoConfigInput, 'id'>) =>
+      workspace().setGitConfig({ id, ...input }),
+    onSuccess: (config) => qc.setQueryData(workspaceKeys.gitConfig(id), config),
+  });
+}
+
+export const useRepoPreferences = (id: string) =>
+  useQuery({
+    queryKey: workspaceKeys.preferences(id),
+    queryFn: () => workspace().preferences(id),
+    staleTime: Infinity,
+  });
+export function useSetRepoPreferences(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (input: Omit<RepoPreferencesInput, 'id'>) =>
+      workspace().setPreferences({ id, ...input }),
+    onSuccess: (prefs) => qc.setQueryData(workspaceKeys.preferences(id), prefs),
+  });
+}
+
+export const useGitInstall = () =>
+  useQuery({
+    queryKey: workspaceKeys.gitInstall,
+    queryFn: () => workspace().gitInstall(),
+  });
+function useGitInstallMutation<I>(fn: (input: I) => Promise<GitInstall>) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: fn,
+    onSuccess: (install) => {
+      qc.setQueryData(workspaceKeys.gitInstall, install);
+      void qc.invalidateQueries({ queryKey: keys.gitIdentity });
+    },
+  });
+}
+export const useChooseGit = () =>
+  useGitInstallMutation(() => workspace().chooseGit());
+export const useUsePathGit = () =>
+  useGitInstallMutation(() => workspace().usePathGit());
+export const useSetGlobalPrune = () =>
+  useGitInstallMutation((enabled: boolean) =>
+    workspace().setGlobalPrune(enabled),
+  );
 
 // The latest progress main reported for one clone job.
 export function useJobProgress(jobId: string | null): ProgressEvent | null {

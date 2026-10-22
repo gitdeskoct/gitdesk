@@ -91,11 +91,25 @@ export function WorkspaceSection() {
           />
         </SettingRow>
       </SettingGroup>
+      <SettingGroup title="Repository workspace">
+        <SettingRow
+          id="workspace-layout"
+          label="Layout"
+          description="Split shows the file list beside the diff. Auto splits when the window is wide enough. Each repository can choose its own on its Settings tab."
+        >
+          <Segmented
+            label="Repository workspace layout"
+            value={settings.workspaceLayout}
+            options={LAYOUTS}
+            onChange={(workspaceLayout) => update.mutate({ workspaceLayout })}
+          />
+        </SettingRow>
+      </SettingGroup>
       <SettingGroup title="Status checks">
         <SettingRow
           id="watch-repositories"
           label="Watch repositories for changes"
-          description="Checks a repository again soon after its branch, index or refs change."
+          description="Checks a repository again soon after its branch, index or refs change, and watches the open repository's files so edits from your editor show up on their own."
         >
           <Switch
             aria-label="Watch repositories for changes"

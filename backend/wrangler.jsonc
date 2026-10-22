@@ -7,8 +7,11 @@
   "upload_source_maps": true,
   // Public origin of this Worker; used to build the Google redirect URI and JWT issuer.
   // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY come from `wrangler secret put` (or .dev.vars locally).
+  // GIT_HOSTING "artifacts" gives linked repositories a Git URL through the ARTIFACTS binding
+  // (Workers Paid). "off" keeps them metadata only; .dev.vars sets it for `wrangler dev --local`.
   "vars": {
-    "PUBLIC_ORIGIN": "http://localhost:8787"
+    "PUBLIC_ORIGIN": "http://localhost:8787",
+    "GIT_HOSTING": "artifacts"
   },
   "secrets": {
     "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
@@ -20,6 +23,9 @@
       "migrations_dir": "drizzle/migrations"
     }
   ],
+  // One Git repository per account repository, named by its id. No local simulator exists, so it
+  // is always the remote service: `npm run dev` passes --local to leave it unreachable.
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
   // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
   "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
   // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.
@@ -28,7 +34,9 @@
     { "name": "REFRESH_LIMITER", "namespace_id": "4102", "simple": { "limit": 20, "period": 60 } },
     { "name": "API_LIMITER", "namespace_id": "4103", "simple": { "limit": 120, "period": 60 } },
     // Writes spend the free plan's 100,000 daily D1 row writes; one account gets 10 a minute.
-    { "name": "WRITE_LIMITER", "namespace_id": "4104", "simple": { "limit": 10, "period": 60 } }
+    { "name": "WRITE_LIMITER", "namespace_id": "4104", "simple": { "limit": 10, "period": 60 } },
+    // Git tokens: one per fetch or push, which the desktop reuses until a minute before expiry.
+    { "name": "GIT_LIMITER", "namespace_id": "4105", "simple": { "limit": 30, "period": 60 } }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]

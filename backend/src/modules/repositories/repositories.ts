@@ -3,6 +3,7 @@ import type { z } from 'zod';
 import type { Db } from '../../db/client';
 import { accounts, repositories } from '../../db/schema';
 import { encodeCursor } from '../../lib/cursor';
+import type { GitHost, GitScope } from '../../lib/git-host';
 import { logEvent } from '../../lib/log';
 import { recentActivity, recordActivity, toActivity } from '../activity/activity';
 import type { listQuery } from './schemas';
@@ -19,6 +20,9 @@ const STORAGE_KEY = /^repositories\/[0-9a-f-]{36}\/$/;
 type Row = typeof repositories.$inferSelect;
 type Remote = ReturnType<typeof toRemote>;
 
+// Where a repository's data lives. git is null when the deployment has Git hosting off.
+export type Storage = { bucket: R2Bucket; git: GitHost | null };
+
 // storage_key stays server-side: clients address a repository by id only.
 export const toRemote = (row: Row) => ({
   id: row.id,
@@ -27,6 +31,8 @@ export const toRemote = (row: Row) => ({
   visibility: row.visibility,
   defaultBranch: row.defaultBranch,
   status: row.status,
+  // A plain https URL with no credentials; safe to show and copy.
+  gitUrl: row.gitRemote,
   createdAt: row.createdAt,
   updatedAt: row.updatedAt,
 });
@@ -138,6 +144,8 @@ export async function createRepository(
             status: sql<'provisioning'>`'provisioning'`.as('status'),
             statusAt: sql<number>`${now}`.as('status_at'),
             storageKey: sql<string>`${`repositories/${id}/`}`.as('storage_key'),
+            // Insert-from-select needs every column; provisioning fills this in.
+            gitRemote: sql<string | null>`null`.as('git_remote'),
           })
           .from(accounts)
           .where(
@@ -184,28 +192,35 @@ export type ProvisionResult =
   | { status: 'not_found' }
   | { status: 'invalid_state' };
 
-// D1 and R2 can't commit together: the row exists first as `provisioning`, the storage marker is
-// written, then the row moves to `ready`. A failed write leaves `failed`; retrying is safe.
+// D1, R2 and the git host can't commit together: the row exists first as `provisioning`, the
+// storage marker and the Git repository are created, then the row moves to `ready` with its remote.
+// A failed step leaves `failed`; retrying is safe because every step is idempotent. A `ready` row
+// from before Git hosting was on gets its Git repository here too, without changing status.
 export async function provisionRepository(
   db: Db,
-  bucket: R2Bucket,
+  storage: Storage,
   accountId: string,
   id: string,
   now: number,
 ): Promise<ProvisionResult> {
   const [row] = await db.select().from(repositories).where(owned(accountId, id)).limit(1);
   if (!row) return { status: 'not_found' };
-  if (row.status === 'ready') return { status: 'done', repository: toRemote(row) };
   if (row.status === 'deleting') return { status: 'invalid_state' };
+  if (row.status === 'ready') {
+    if (row.gitRemote || !storage.git) return { status: 'done', repository: toRemote(row) };
+    return backfillRemote(db, storage.git, row);
+  }
   if (!STORAGE_KEY.test(row.storageKey)) throw new Error('repository has no valid storage key');
 
+  let gitRemote: string | null = null;
   let ok = true;
   try {
-    await bucket.put(
+    await storage.bucket.put(
       `${row.storageKey}meta.json`,
       JSON.stringify({ repositoryId: row.id, createdAt: row.createdAt }),
       { httpMetadata: { contentType: 'application/json' } },
     );
+    if (storage.git) gitRemote = await storage.git.ensure(row.id, row.defaultBranch);
   } catch (err) {
     ok = false;
     logEvent('repository_provision_failed', { accountId, error: String(err) }, 'warn');
@@ -214,7 +229,7 @@ export async function provisionRepository(
   const [updated] = await db.batch([
     db
       .update(repositories)
-      .set({ status, statusAt: now })
+      .set({ status, statusAt: now, ...(gitRemote ? { gitRemote } : {}) })
       .where(and(owned(accountId, id), inArray(repositories.status, ['provisioning', 'failed'])))
       .returning(),
     // Matches only the row this call just moved, so a concurrent retry isn't logged twice.
@@ -228,6 +243,70 @@ export async function provisionRepository(
   if (updated[0]) return { status: 'done', repository: toRemote(updated[0]) };
   const current = await getOwned(db, accountId, id);
   return current ? { status: 'done', repository: current } : { status: 'not_found' };
+}
+
+async function backfillRemote(db: Db, git: GitHost, row: Row): Promise<ProvisionResult> {
+  let gitRemote;
+  try {
+    gitRemote = await git.ensure(row.id, row.defaultBranch);
+  } catch (err) {
+    // The metadata is still fine; the repository has no Git URL until a later retry works.
+    const fields = { accountId: row.ownerAccountId, error: String(err) };
+    logEvent('git_remote_backfill_failed', fields, 'warn');
+    return { status: 'done', repository: toRemote(row) };
+  }
+  const [updated] = await db
+    .update(repositories)
+    .set({ gitRemote })
+    .where(and(owned(row.ownerAccountId, row.id), eq(repositories.status, 'ready')))
+    .returning();
+  return updated ? { status: 'done', repository: toRemote(updated) } : { status: 'invalid_state' };
+}
+
+export type CredentialsResult =
+  | { status: 'issued'; remote: string; token: string; scope: GitScope; expiresAt: number }
+  | { status: 'not_found' }
+  | { status: 'not_ready' }
+  | { status: 'unavailable' };
+
+// A token for one repository and one scope. The plaintext goes to the owner's client and nowhere
+// else: it is not stored, logged or recorded as activity.
+export async function gitCredentials(
+  db: Db,
+  git: GitHost | null,
+  accountId: string,
+  id: string,
+  input: { scope: GitScope; lifetime: number },
+): Promise<CredentialsResult> {
+  const [row] = await db.select().from(repositories).where(owned(accountId, id)).limit(1);
+  if (!row) return { status: 'not_found' };
+  if (row.status !== 'ready') return { status: 'not_ready' };
+  if (!git) return { status: 'unavailable' };
+  let remote = row.gitRemote;
+  if (!remote) {
+    const filled = await backfillRemote(db, git, row);
+    remote = filled.status === 'done' ? filled.repository.gitUrl : null;
+    if (!remote) return { status: 'unavailable' };
+  }
+  const { token, expiresAt } = await git.token(row.id, input.scope, input.lifetime);
+  return { status: 'issued', remote, token, scope: input.scope, expiresAt };
+}
+
+export type RevokeResult =
+  | { status: 'revoked'; count: number }
+  | { status: 'not_found' }
+  | { status: 'unavailable' };
+
+export async function revokeGitCredentials(
+  db: Db,
+  git: GitHost | null,
+  accountId: string,
+  id: string,
+): Promise<RevokeResult> {
+  const [row] = await db.select().from(repositories).where(owned(accountId, id)).limit(1);
+  if (!row) return { status: 'not_found' };
+  if (!git || !row.gitRemote) return { status: 'unavailable' };
+  return { status: 'revoked', count: await git.revokeAll(row.id) };
 }
 
 export type UpdateResult =
@@ -286,10 +365,14 @@ export type DeleteResult =
   | { status: 'incomplete'; repository: Remote };
 
 // Storage goes before the row: a row that outlives its data can be retried, data without a row is orphaned.
-async function finishDelete(db: Db, bucket: R2Bucket, row: Row, now: number): Promise<DeleteResult> {
+async function finishDelete(db: Db, storage: Storage, row: Row, now: number): Promise<DeleteResult> {
   const where = owned(row.ownerAccountId, row.id);
   try {
-    await removeStored(bucket, row.storageKey);
+    await removeStored(storage.bucket, row.storageKey);
+    // Deleting the Git repository also revokes every token issued for it.
+    if (storage.git) await storage.git.remove(row.id);
+    else if (row.gitRemote)
+      logEvent('git_repository_left_behind', { accountId: row.ownerAccountId }, 'warn');
   } catch (err) {
     const fields = { accountId: row.ownerAccountId, error: String(err) };
     logEvent('repository_delete_incomplete', fields, 'warn');
@@ -308,7 +391,7 @@ async function finishDelete(db: Db, bucket: R2Bucket, row: Row, now: number): Pr
 // Calling it again on a `deleting` row resumes the cleanup.
 export async function deleteRepository(
   db: Db,
-  bucket: R2Bucket,
+  storage: Storage,
   accountId: string,
   id: string,
   now: number,
@@ -319,12 +402,12 @@ export async function deleteRepository(
     .where(owned(accountId, id))
     .returning();
   if (!marked) return { status: 'not_found' };
-  return finishDelete(db, bucket, marked, now);
+  return finishDelete(db, storage, marked, now);
 }
 
 // Daily: provisioning that never finished becomes `failed` so its owner can retry, and stalled
 // deletions get another attempt. Bounded so one run stays well inside the cron CPU limit.
-export async function resumeLifecycle(db: Db, bucket: R2Bucket, now: number): Promise<void> {
+export async function resumeLifecycle(db: Db, storage: Storage, now: number): Promise<void> {
   const stale = now - STALE_LIFECYCLE_MS;
   await db
     .update(repositories)
@@ -335,5 +418,5 @@ export async function resumeLifecycle(db: Db, bucket: R2Bucket, now: number): Pr
     .from(repositories)
     .where(and(eq(repositories.status, 'deleting'), lt(repositories.statusAt, stale)))
     .limit(20);
-  for (const row of stuck) await finishDelete(db, bucket, row, now);
+  for (const row of stuck) await finishDelete(db, storage, row, now);
 }

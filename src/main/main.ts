@@ -28,6 +28,12 @@ import {
   writeState,
 } from './db/database';
 import { createGitIdentity } from './git/git-identity';
+import { createGitInstall } from './git/git-install';
+import { createTreeWatcher } from './repos/tree-watcher';
+import {
+  createWorkspaceService,
+  type WorkspaceService,
+} from './repos/workspace-service';
 import { createHandle } from './ipc/handle';
 import { registerIpc } from './ipc/register';
 import { createNotifier } from './notifier';
@@ -36,6 +42,7 @@ import {
   createRemoteService,
   type RemoteService,
 } from './remote/remote-service';
+import { createGitAuth, type GitAuth } from './remote/git-auth';
 import { createRepositoryService } from './repos/repository-service';
 import { createRepositoryStore } from './repos/repository-store';
 import { hardenApp } from './security';
@@ -94,7 +101,7 @@ if (started) {
     });
 }
 
-function start() {
+async function start() {
   // Needs the ready app (session.defaultSession); still runs before any window or webContents exists.
   hardenApp(origins, devServerUrl);
   const apiOrigin = resolveApiOrigin(
@@ -108,12 +115,16 @@ function start() {
     );
 
   const db = openDatabase(path.join(userData, 'gitdesk.db'));
+  // Assigned once the repository service exists; settings changes before that have nothing to apply to.
+  let workspace: WorkspaceService | null = null;
   const settings = new SettingsService(db, (patch) => {
     if (
       patch.watchRepositories !== undefined ||
       patch.backgroundRefresh !== undefined
     )
       repos.applySettings();
+    if (patch.watchRepositories !== undefined || patch.autoFetch !== undefined)
+      workspace?.applySettings();
     if (!mainWindow) return;
     if (patch.theme) applyChromeColors(mainWindow);
     if (patch.zoomLevel !== undefined)
@@ -137,6 +148,8 @@ function start() {
   const api = createApiClient(apiOrigin, (url, init) => net.fetch(url, init));
   // Assigned right after auth exists; auth's emit only fires after start-up.
   let remote: RemoteService | null = null;
+  // Held Git tokens; dropped on sign-out so the next account never reuses them.
+  let gitAuth: GitAuth | null = null;
   const auth = new AuthService({
     api,
     store: new CredentialStore(path.join(userData, 'session.bin'), safeStorage),
@@ -168,6 +181,7 @@ function start() {
       ),
     emit: (status) => {
       remote?.handleAuth(status);
+      if (status.status === 'signed-out') gitAuth?.forget();
       mainWindow?.webContents.send(IPC.authStatusChanged, status);
     },
   });
@@ -210,9 +224,23 @@ function start() {
     store,
     settings: () => settings.get(),
   });
+  const account = remote;
+  gitAuth = createGitAuth({ remote: account });
+  const tokens = gitAuth;
   const repos = createRepositoryService({
     store,
     remote,
+    hosting: {
+      hostedUrl: (remoteId) => account.hostedUrl(remoteId),
+      provision: (remoteId) => account.provision(remoteId),
+      envFor: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
+      terminalToken: (remoteId, lifetime) =>
+        account.gitCredentials(remoteId, 'write', lifetime),
+      async revoke(remoteId) {
+        tokens.forget(remoteId);
+        return account.revokeGitCredentials(remoteId);
+      },
+    },
     settings: () => settings.get(),
     emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
     emitProgress: (event) =>
@@ -274,7 +302,52 @@ function start() {
       ],
     },
   });
-  app.on('before-quit', () => repos.dispose());
+  const ws = createWorkspaceService({
+    store,
+    gitAuth: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
+    refresh: (id) => repos.refresh(id),
+    addActivity: (id, type, detail) =>
+      store.addActivity(id, type, detail, Date.now()),
+    settings: () => settings.get(),
+    watcher: createTreeWatcher({
+      onChange: (id) => void repos.refresh(id).catch(() => undefined),
+      onGone: (id) => void repos.refresh(id).catch(() => undefined),
+    }),
+    emitProgress: (event) =>
+      mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    log,
+    desktop: {
+      trashItem: (target) => shell.trashItem(target),
+      // Paths here were checked to be inside a registered repository.
+      showItemInFolder: (target) => shell.showItemInFolder(target),
+      openPath: (target) => shell.openPath(target),
+      copyText: (text) => clipboard.writeText(text),
+      isOnline: () => net.isOnline(),
+    },
+  });
+  workspace = ws;
+  const gitInstall = createGitInstall({
+    db,
+    async pickFile() {
+      const options: Electron.OpenDialogOptions = {
+        title: 'Choose the Git program',
+        properties: ['openFile', 'dontAddToRecent'],
+        filters:
+          process.platform === 'win32'
+            ? [{ name: 'Git', extensions: ['exe'] }]
+            : undefined,
+      };
+      const result = mainWindow
+        ? await dialog.showOpenDialog(mainWindow, options)
+        : await dialog.showOpenDialog(options);
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    },
+  });
+  await gitInstall.restore();
+  app.on('before-quit', () => {
+    ws.dispose();
+    repos.dispose();
+  });
 
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
@@ -286,6 +359,8 @@ function start() {
       repos,
       remote,
       notifier,
+      workspace: ws,
+      gitInstall,
     },
   );
 

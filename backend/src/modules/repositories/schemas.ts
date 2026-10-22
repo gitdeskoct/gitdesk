@@ -47,3 +47,14 @@ export const listQuery = z.union([
 ]);
 
 export const repositoryParams = z.object({ id: z.uuid() });
+
+// Read for fetch and clone, write only for push. Lifetimes are fixed steps: 15 minutes for the
+// desktop's own commands, 1 or 8 hours for a command copied to a terminal.
+export const GIT_TOKEN_LIFETIMES = [900, 3600, 28_800] as const;
+
+export const gitCredentialsBody = z
+  .object({
+    scope: z.enum(['read', 'write']),
+    lifetime: z.union(GIT_TOKEN_LIFETIMES.map((value) => z.literal(value))),
+  })
+  .strict();

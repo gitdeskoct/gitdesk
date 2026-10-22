@@ -21,13 +21,7 @@ import {
   RefreshCw,
   Search,
 } from 'lucide-react';
-import {
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type KeyboardEvent,
-} from 'react';
+import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
 import type {
   RemoteRepository,
   RepositorySummary,
@@ -41,6 +35,7 @@ import {
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
 import { EmptyState } from '../../components/ui/empty-state';
+import { Pager, usePage } from '../../components/ui/pager';
 import { Segmented } from '../../components/ui/segmented';
 import { Spinner } from '../../components/ui/spinner';
 import { InlineStatus, Loading } from '../../components/ui/status';
@@ -83,6 +78,7 @@ import { Page, PageTitle } from '../shell/page';
 import { ClonePanel } from './clone-panel';
 import { CreatePanel } from './create-panel';
 import { ManageBand, type ManageMode } from './manage';
+import { useWidth } from '../../lib/use-width';
 import { useOpenRepo } from './repo-row';
 import {
   RepoContextMenu,
@@ -96,6 +92,9 @@ type Show = RepoShow;
 
 // Below these widths the list and the selected repository can't both stay readable side by side.
 const SPLIT_MIN = { split: 860, auto: 1100 };
+
+// Big enough to scan at a glance, small enough that one page never turns into a long scroll.
+const PAGE_SIZE = 20;
 
 const features = tableFeatures({
   rowSortingFeature,
@@ -195,22 +194,6 @@ function matches(
       : `${item.remote.name} ${item.remote.defaultBranch} ${item.remote.description ?? ''}`
   ).toLowerCase();
   return words.every((word) => haystack.includes(word));
-}
-
-function useWidth() {
-  const ref = useRef<HTMLDivElement>(null);
-  const [width, setWidth] = useState(0);
-  useLayoutEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    setWidth(element.getBoundingClientRect().width);
-    const observer = new ResizeObserver(([entry]) =>
-      setWidth(entry?.contentRect.width ?? 0),
-    );
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, []);
-  return [ref, width] as const;
 }
 
 const STATUS_ICON = {
@@ -527,7 +510,14 @@ function BulkBar({
   );
 }
 
-function RepoTable({ items }: { items: RepoItem[] }) {
+function RepoTable({
+  items,
+  resetKey,
+}: {
+  items: RepoItem[];
+  // Changes when the filter or search does.
+  resetKey: string;
+}) {
   const [sorting, setSorting] = useState<SortingState>([
     { id: 'opened', desc: true },
   ]);
@@ -547,11 +537,22 @@ function RepoTable({ items }: { items: RepoItem[] }) {
     (state) => ({ sorting: state.sorting, rowSelection: state.rowSelection }),
   );
   const rows = table.getRowModel().rows;
-  // Hidden rows must not stay selected for a bulk action.
+  const paged = usePage(rows, PAGE_SIZE);
+  const { setPage } = paged;
+  // A new filter starts on its first page, and rows it hides must not stay selected for a bulk action.
+  useEffect(() => {
+    setPage(1);
+    setRowSelection({});
+  }, [resetKey, setPage]);
+  // Selection can span pages; "Select all shown" means the page on screen.
   const selected = rows
     .filter((row) => row.getIsSelected())
     .map((row) => local(row.original))
     .filter((repo): repo is RepositorySummary => !!repo);
+  const shown = paged.items.filter((row) => row.original.kind === 'local');
+  const allShown =
+    shown.length > 0 && shown.every((row) => row.getIsSelected());
+  const someShown = shown.some((row) => row.getIsSelected());
 
   return (
     <>
@@ -565,15 +566,12 @@ function RepoTable({ items }: { items: RepoItem[] }) {
               <th scope="col" className="w-10 py-2.5 pl-3 text-left">
                 <Checkbox
                   aria-label="Select all shown"
+                  aria-disabled={!shown.length || undefined}
                   checked={
-                    table.getIsAllRowsSelected()
-                      ? true
-                      : table.getIsSomeRowsSelected()
-                        ? 'indeterminate'
-                        : false
+                    allShown ? true : someShown ? 'indeterminate' : false
                   }
                   onCheckedChange={(next) =>
-                    table.toggleAllRowsSelected(next === true)
+                    shown.forEach((row) => row.toggleSelected(next === true))
                   }
                 />
               </th>
@@ -617,7 +615,7 @@ function RepoTable({ items }: { items: RepoItem[] }) {
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) =>
+            {paged.items.map((row) =>
               row.original.kind === 'local' ? (
                 <LocalRow
                   key={row.id}
@@ -633,19 +631,23 @@ function RepoTable({ items }: { items: RepoItem[] }) {
           </tbody>
         </table>
       </div>
+      <Pager label="Repository pages" onPage={setPage} {...paged} />
     </>
   );
 }
 
-// A listbox with one tab stop: arrows move the selection, Enter opens the full page.
+// A listbox with one tab stop: arrows move the selection, Enter opens the full page. The arrows
+// walk past the end of a page; the page follows them.
 function RepoList({
   items,
+  resetKey,
   selectedKey,
   onPick,
   onOpen,
   picking,
 }: {
   items: RepoItem[];
+  resetKey: string;
   selectedKey: string | null;
   onPick: (item: RepoItem) => void;
   onOpen: (item: RepoItem) => void;
@@ -653,81 +655,95 @@ function RepoList({
   picking: boolean;
 }) {
   const id = (item: RepoItem) => `repo-option-${item.key}`;
+  const paged = usePage(items, PAGE_SIZE);
+  const { setPage } = paged;
+  useEffect(() => setPage(1), [resetKey, setPage]);
+  const focusKey = paged.items.some((item) => item.key === selectedKey)
+    ? selectedKey
+    : paged.items[0]?.key;
   const move = (event: KeyboardEvent<HTMLUListElement>) => {
-    const index = items.findIndex((item) => item.key === selectedKey);
+    const index = items.findIndex((item) => item.key === focusKey);
     const step =
       event.key === 'ArrowDown' ? 1 : event.key === 'ArrowUp' ? -1 : 0;
     if (!step) return;
     event.preventDefault();
-    const next = items[Math.min(items.length - 1, Math.max(0, index + step))];
+    const nextIndex = Math.min(items.length - 1, Math.max(0, index + step));
+    const next = items[nextIndex];
     if (!next) return;
     onPick(next);
-    document.getElementById(id(next))?.focus();
+    setPage(Math.floor(nextIndex / PAGE_SIZE) + 1);
+    // The row may only exist after the page turns.
+    requestAnimationFrame(() => document.getElementById(id(next))?.focus());
   };
   return (
-    <ul
-      role="listbox"
-      aria-label="Repositories"
-      onKeyDown={move}
-      className="border-t border-line"
-    >
-      {items.map((item) => {
-        const selected = picking && item.key === selectedKey;
-        const repo = local(item);
-        return (
-          <li
-            key={item.key}
-            id={id(item)}
-            role="option"
-            aria-selected={selected}
-            tabIndex={item.key === (selectedKey ?? items[0]?.key) ? 0 : -1}
-            onClick={() => (picking ? onPick(item) : onOpen(item))}
-            onDoubleClick={() => onOpen(item)}
-            onKeyDown={(event) => event.key === 'Enter' && onOpen(item)}
-            className={cn(
-              'grid min-h-14 cursor-default gap-1 border-b border-l-2 border-b-line py-2.5 pr-3 pl-2.5 outline-offset-[-2px] transition-colors',
-              selected
-                ? 'border-l-accent bg-accent-soft'
-                : 'border-l-transparent hover:bg-row-hover',
-            )}
-          >
-            <span className="flex min-w-0 items-center gap-2">
-              <span
-                className={cn(
-                  'truncate text-sm font-semibold',
-                  repo && repo.availability !== 'available'
-                    ? 'text-muted'
-                    : 'text-ink',
-                )}
-              >
-                {itemName(item)}
-              </span>
-              <RepoTags
-                local={!!repo}
-                remote={item.kind === 'remote' || !!repo?.remoteId}
-                compact
-              />
-            </span>
-            <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-              {item.kind === 'local' ? (
-                <>
-                  <BranchLabel repo={item.repo} />
-                  <TreeChip repo={item.repo} />
-                  <SyncChip repo={item.repo} />
-                </>
-              ) : (
-                <>
-                  <span className="font-mono text-[0.78125rem] text-muted">
-                    {item.remote.defaultBranch}
-                  </span>
-                  <RemoteStatus remote={item.remote} />
-                </>
+    <>
+      <ul
+        role="listbox"
+        aria-label="Repositories"
+        onKeyDown={move}
+        className="border-t border-line"
+      >
+        {paged.items.map((item) => {
+          const selected = picking && item.key === selectedKey;
+          const repo = local(item);
+          return (
+            <li
+              key={item.key}
+              id={id(item)}
+              role="option"
+              aria-selected={selected}
+              tabIndex={item.key === focusKey ? 0 : -1}
+              onClick={() => (picking ? onPick(item) : onOpen(item))}
+              onDoubleClick={() => onOpen(item)}
+              onKeyDown={(event) => event.key === 'Enter' && onOpen(item)}
+              className={cn(
+                'grid min-h-14 cursor-default gap-1 border-b border-l-2 border-b-line py-2.5 pr-3 pl-2.5 outline-offset-[-2px] transition-colors',
+                selected
+                  ? 'border-l-accent bg-accent-soft'
+                  : 'border-l-transparent hover:bg-row-hover',
               )}
-            </span>
-          </li>
-        );
-      })}
-    </ul>
+            >
+              <span className="flex min-w-0 items-center gap-2">
+                <span
+                  className={cn(
+                    'truncate text-sm font-semibold',
+                    repo && repo.availability !== 'available'
+                      ? 'text-muted'
+                      : 'text-ink',
+                  )}
+                >
+                  {itemName(item)}
+                </span>
+                <RepoTags
+                  local={!!repo}
+                  remote={item.kind === 'remote' || !!repo?.remoteId}
+                  compact
+                />
+              </span>
+              <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
+                {item.kind === 'local' ? (
+                  <>
+                    <BranchLabel repo={item.repo} />
+                    <TreeChip repo={item.repo} />
+                    <SyncChip repo={item.repo} />
+                  </>
+                ) : (
+                  <>
+                    <span className="font-mono text-[0.78125rem] text-muted">
+                      {item.remote.defaultBranch}
+                    </span>
+                    <RemoteStatus remote={item.remote} />
+                  </>
+                )}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      <div className="sticky bottom-0 bg-surface px-2.5 pb-2">
+        <Pager label="Repository pages" onPage={setPage} {...paged} />
+      </div>
+    </>
   );
 }
 
@@ -816,6 +832,7 @@ export function RepositoriesPage({
   );
 
   const remoteWanted = scope === 'remote' || scope === 'linked';
+  const resetKey = `${scope}:${show}:${query}`;
   const body = () => {
     if (repos.isPending) return <Loading label="Loading your repositories…" />;
     if (repos.isError)
@@ -923,6 +940,7 @@ export function RepositoriesPage({
           <div className="sticky top-0 max-h-[calc(100dvh-8rem)] self-start overflow-auto border-r border-line">
             <RepoList
               items={shown}
+              resetKey={resetKey}
               selectedKey={selected.key}
               onPick={(item) => setSelectedKey(item.key)}
               onOpen={open}
@@ -939,6 +957,7 @@ export function RepositoriesPage({
         <>
           <RepoList
             items={shown}
+            resetKey={resetKey}
             selectedKey={null}
             onPick={open}
             onOpen={open}
@@ -949,7 +968,7 @@ export function RepositoriesPage({
           </p>
         </>
       );
-    return <RepoTable items={shown} />;
+    return <RepoTable items={shown} resetKey={resetKey} />;
   };
 
   return (

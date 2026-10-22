@@ -156,9 +156,17 @@ describe('repository service', () => {
     const changes = await service.changes(added.repository.id);
     expect(changes.files).toEqual(
       expect.arrayContaining([
-        { path: 'new.txt', kind: 'staged', code: 'A' },
-        { path: 'README.md', kind: 'modified', code: 'M' },
-        { path: 'untracked.txt', kind: 'untracked', code: '?' },
+        expect.objectContaining({ path: 'new.txt', kind: 'staged', code: 'A' }),
+        expect.objectContaining({
+          path: 'README.md',
+          kind: 'modified',
+          code: 'M',
+        }),
+        expect.objectContaining({
+          path: 'untracked.txt',
+          kind: 'untracked',
+          code: '?',
+        }),
       ]),
     );
   });

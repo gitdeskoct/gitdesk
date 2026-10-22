@@ -11,14 +11,19 @@ const AUTOCRLF = ['true', 'input', 'false'] as const;
 
 // Global config only. Values go to git as argv entries (no shell), and are validated before this
 // point. Runs from the home folder with the same environment allow-list and timeout as inspection.
-export function createGitIdentity(git: SimpleGit = gitAt(os.homedir())) {
+// A fresh client per call, so a Git picked in Settings › Git is used from then on.
+export function createGitIdentity(
+  client: () => SimpleGit = () => gitAt(os.homedir()),
+) {
   async function read(key: string): Promise<string | null> {
-    const { value } = await git.getConfig(key, 'global');
+    const { value } = await client().getConfig(key, 'global');
     return value || null;
   }
 
   async function get(): Promise<GitIdentity> {
-    const version = await git.version().catch(() => null);
+    const version = await client()
+      .version()
+      .catch(() => null);
     if (!version?.installed) return { available: false };
     const autocrlf = (await read('core.autocrlf'))?.toLowerCase();
     return {
@@ -33,11 +38,13 @@ export function createGitIdentity(git: SimpleGit = gitAt(os.homedir())) {
   return {
     get,
     async set(input: GitIdentityInput): Promise<GitIdentity> {
+      const git = client();
       await git.addConfig('user.name', input.name, false, 'global');
       await git.addConfig('user.email', input.email, false, 'global');
       return get();
     },
     async setDefaults(input: GitDefaults): Promise<GitIdentity> {
+      const git = client();
       await git.addConfig(
         'init.defaultBranch',
         input.defaultBranch,

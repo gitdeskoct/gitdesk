@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { accountSummarySchema, sessionInfoSchema } from '../../shared/ipc';
 import {
+  gitUrlSchema,
   remoteActivitySchema,
   remoteRepositorySchema,
 } from '../../shared/repos';
@@ -32,8 +33,22 @@ const overviewResponse = z.object({
   recent: z.array(remoteRepositorySchema).max(20),
   // Older Workers don't send it; an empty list is the honest reading.
   recentActivity: z.array(remoteActivitySchema).max(20).default([]),
+  // Older Workers don't say; null means unknown, not off.
+  gitHosting: z.boolean().nullable().default(null),
   serverTime: z.number(),
 });
+// The token is opaque to gitdesk: bounded in size and free of anything that could end a header.
+const credentialsResponse = z.object({
+  remote: gitUrlSchema,
+  token: z
+    .string()
+    .min(8)
+    .max(512)
+    .regex(/^[\x21-\x7e]+$/),
+  scope: z.enum(['read', 'write']),
+  expiresAt: z.number(),
+});
+const revokeResponse = z.object({ revoked: z.number().int().nonnegative() });
 const repositoryResponse = z.object({ repository: remoteRepositorySchema });
 // 204 has no body; 202 carries the repository that is still being deleted.
 const deleteResponse = repositoryResponse.nullable();
@@ -173,6 +188,22 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
           method: 'DELETE',
           token,
         },
+      ),
+    gitCredentials: (
+      token: string,
+      id: string,
+      body: { scope: 'read' | 'write'; lifetime: 900 | 3600 | 28_800 },
+    ) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/git-credentials`,
+        credentialsResponse,
+        { method: 'POST', body, token },
+      ),
+    revokeGitCredentials: (token: string, id: string) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/git-credentials`,
+        revokeResponse,
+        { method: 'DELETE', token },
       ),
     revokeSession: (token: string, id: string) =>
       request(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, null, {

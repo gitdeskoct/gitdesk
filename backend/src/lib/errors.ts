@@ -14,6 +14,8 @@ const STATUS = {
   LIMIT_REACHED: 403,
   PAYLOAD_TOO_LARGE: 413,
   INTERNAL: 500,
+  GIT_HOST_ERROR: 502,
+  GIT_HOSTING_UNAVAILABLE: 503,
 } satisfies Record<string, ContentfulStatusCode>;
 
 export type ErrorCode = keyof typeof STATUS;

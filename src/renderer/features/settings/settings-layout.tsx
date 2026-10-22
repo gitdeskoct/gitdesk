@@ -1,5 +1,8 @@
 import {
+  AppWindow,
   ArrowLeft,
+  Braces,
+  Cloud,
   Info,
   Laptop,
   Palette,
@@ -22,9 +25,12 @@ import { NavItem } from '../shell/sidebar';
 import { AboutSection } from './about-section';
 import { AccountSection } from './account-section';
 import { AppearanceSection } from './appearance-section';
+import { CodeSection } from './code-section';
+import { EditorSection } from './editor-section';
 import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
+import { HostingSection } from './hosting-section';
 import { ShortcutsSection } from './shortcuts-section';
 import { WorkspaceSection } from './workspace-section';
 import { SECTION_LABELS, searchSettings } from './search-index';
@@ -38,7 +44,9 @@ const GROUPS: {
     items: [
       { id: 'general', icon: SlidersHorizontal },
       { id: 'appearance', icon: Palette },
+      { id: 'code', icon: Braces },
       { id: 'workspace', icon: LayoutDashboard },
+      { id: 'editor', icon: AppWindow },
       { id: 'git', icon: GitCommitHorizontal },
       { id: 'shortcuts', icon: Keyboard },
     ],
@@ -47,6 +55,7 @@ const GROUPS: {
     label: 'Account',
     items: [
       { id: 'account', icon: User },
+      { id: 'hosting', icon: Cloud },
       { id: 'devices', icon: Laptop },
     ],
   },
@@ -114,10 +123,13 @@ export function SettingsLayout({
   const sections: Record<SettingsSection, ReactNode> = {
     general: <GeneralSection />,
     appearance: <AppearanceSection />,
+    code: <CodeSection />,
     workspace: <WorkspaceSection />,
+    editor: <EditorSection />,
     git: <GitSection />,
     shortcuts: <ShortcutsSection />,
     account: <AccountSection status={status} />,
+    hosting: <HostingSection status={status} />,
     devices: <DevicesSection status={status} />,
     about: <AboutSection />,
   };

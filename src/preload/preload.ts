@@ -10,6 +10,7 @@ import {
   type ProgressEvent,
   type RepositorySummary,
 } from '../shared/repos';
+import { WORKSPACE_IPC as W } from '../shared/workspace';
 
 // Each method maps to one fixed channel. No generic invoke, no raw ipcRenderer, no token access.
 const api: DesktopApi = {
@@ -88,6 +89,9 @@ const api: DesktopApi = {
     remoteGet: (id) => ipcRenderer.invoke(R.remoteGet, id),
     remoteProvision: (id) => ipcRenderer.invoke(R.remoteProvision, id),
     remoteActivity: (id) => ipcRenderer.invoke(R.remoteActivity, id),
+    addHostedRemote: (id) => ipcRenderer.invoke(R.addHostedRemote, id),
+    copyGitCommand: (id) => ipcRenderer.invoke(R.copyGitCommand, id),
+    revokeGitTokens: (id) => ipcRenderer.invoke(R.revokeGitTokens, id),
     history: (id) => ipcRenderer.invoke(R.history, id),
     update: (input) => ipcRenderer.invoke(R.update, input),
     unlink: (id) => ipcRenderer.invoke(R.unlink, id),
@@ -108,6 +112,40 @@ const api: DesktopApi = {
       ipcRenderer.on(R.changed, listener);
       return () => ipcRenderer.removeListener(R.changed, listener);
     },
+  },
+  workspace: {
+    diff: (input) => ipcRenderer.invoke(W.diff, input),
+    stage: (input) => ipcRenderer.invoke(W.stage, input),
+    stageAll: (id) => ipcRenderer.invoke(W.stageAll, id),
+    unstage: (input) => ipcRenderer.invoke(W.unstage, input),
+    discard: (input) => ipcRenderer.invoke(W.discard, input),
+    commit: (input) => ipcRenderer.invoke(W.commit, input),
+    branches: (id) => ipcRenderer.invoke(W.branches, id),
+    switchBranch: (input) => ipcRenderer.invoke(W.switchBranch, input),
+    createBranch: (input) => ipcRenderer.invoke(W.createBranch, input),
+    fetch: (input) => ipcRenderer.invoke(W.fetch, input),
+    cancelFetch: (jobId) => ipcRenderer.invoke(W.cancelFetch, jobId),
+    push: (input) => ipcRenderer.invoke(W.push, input),
+    cancelPush: (jobId) => ipcRenderer.invoke(W.cancelPush, jobId),
+    remotes: (id) => ipcRenderer.invoke(W.remotes, id),
+    log: (input) => ipcRenderer.invoke(W.log, input),
+    commitDetail: (input) => ipcRenderer.invoke(W.commitDetail, input),
+    analytics: (input) => ipcRenderer.invoke(W.analytics, input),
+    revealFile: (input) => ipcRenderer.invoke(W.revealFile, input),
+    copyFilePath: (input) => ipcRenderer.invoke(W.copyFilePath, input),
+    watch: (id) => ipcRenderer.invoke(W.watch, id),
+    unwatch: (id) => ipcRenderer.invoke(W.unwatch, id),
+    editors: (refresh) => ipcRenderer.invoke(W.editors, refresh),
+    openInEditor: (input) => ipcRenderer.invoke(W.openInEditor, input),
+    gitConfig: (id) => ipcRenderer.invoke(W.gitConfig, id),
+    setGitConfig: (input) => ipcRenderer.invoke(W.setGitConfig, input),
+    preferences: (id) => ipcRenderer.invoke(W.preferences, id),
+    setPreferences: (input) => ipcRenderer.invoke(W.setPreferences, input),
+    gitInstall: () => ipcRenderer.invoke(W.gitInstall),
+    chooseGit: () => ipcRenderer.invoke(W.chooseGit),
+    usePathGit: () => ipcRenderer.invoke(W.usePathGit),
+    setGlobalPrune: (enabled) => ipcRenderer.invoke(W.setGlobalPrune, enabled),
+    size: (input) => ipcRenderer.invoke(W.size, input),
   },
 };
 

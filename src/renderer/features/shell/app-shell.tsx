@@ -31,7 +31,7 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
         />
       );
     case 'repository':
-      return <RepositoryPage id={route.id} />;
+      return <RepositoryPage id={route.id} tab={route.tab} />;
     case 'remote-repository':
       return <RemoteRepositoryPage id={route.id} />;
     case 'settings':

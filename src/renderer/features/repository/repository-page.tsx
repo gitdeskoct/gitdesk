@@ -1,7 +1,12 @@
-import { FolderOpen, RefreshCw } from 'lucide-react';
-import { Fragment, useState } from 'react';
+import * as Tabs from '@radix-ui/react-tabs';
+import {
+  CloudDownload,
+  CloudUpload,
+  FolderOpen,
+  RefreshCw,
+} from 'lucide-react';
+import { Fragment, useState, type ReactNode } from 'react';
 import type {
-  ChangedFile,
   RemoteRepository,
   RepositorySummary,
 } from '../../../shared/repos';
@@ -10,7 +15,6 @@ import {
   GitMissingArt,
   NoResultsArt,
   OfflineArt,
-  RepositoriesArt,
 } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
@@ -24,20 +28,29 @@ import {
   useLocateRepository,
   useRefreshRepositories,
   useRemoteRepository,
+  useRemotes,
+  useRepoPreferences,
   useRepositories,
-  useRepositoryChanges,
   useRepositoryHistory,
   useRevealRepository,
+  useSettings,
+  useWatchRepository,
 } from '../../lib/queries';
-import { useNavigation } from '../../app/navigation';
+import { useWidth } from '../../lib/use-width';
+import { useNavigation, type RepoTab } from '../../app/navigation';
 import {
   fileManagerLabel,
   RepoMenuButton,
   useRepoActions,
 } from '../repos/repo-actions';
 import { ManageBand, trashName, type ManageMode } from '../repos/manage';
-import { BranchLabel, SyncChip, TreeChip } from '../repos/status';
-import { Page, PageTitle } from '../shell/page';
+import { SyncChip, TreeChip } from '../repos/status';
+import { Page } from '../shell/page';
+import { Analytics } from './analytics';
+import { BranchPicker, type SwitchOutcome } from './branch-picker';
+import { BranchesTab } from './branches-tab';
+import { ChangesTab } from './changes-tab';
+import { OpenInEditorButton } from './editor-button';
 import {
   CommitActivity,
   localSummary,
@@ -47,13 +60,11 @@ import {
   Section,
   SummaryStrip,
 } from './history';
-
-const KIND_LABEL: Record<ChangedFile['kind'], string> = {
-  staged: 'Staged',
-  modified: 'Not staged',
-  untracked: 'Untracked',
-  conflict: 'Conflict',
-};
+import { HistoryTab } from './history-tab';
+import { RemotesTab } from './remotes-tab';
+import { RepoSettingsTab } from './repo-settings-tab';
+import { useFetchAction } from './use-fetch';
+import { usePushAction } from './use-push';
 
 function upstreamText(repo: RepositorySummary): string {
   const status = repo.status!;
@@ -62,94 +73,6 @@ function upstreamText(repo: RepositorySummary): string {
   if (status.ahead === null || status.behind === null)
     return `${status.upstream} · not found locally, fetch to compare`;
   return `${status.upstream} · ahead ${status.ahead}, behind ${status.behind} at the last fetch`;
-}
-
-function Changes({ repo }: { repo: RepositorySummary }) {
-  const refresh = useRefreshRepositories();
-  const changes = useRepositoryChanges(
-    repo.id,
-    repo.statusAt,
-    repo.status !== null,
-  );
-  if (!repo.status) return <Loading label="Checking this repository…" />;
-  if (changes.isPending) return <Loading label="Reading changes…" />;
-  if (changes.isError)
-    return (
-      <EmptyState
-        compact
-        art={<OfflineArt />}
-        title="Couldn't read the changes"
-        action={
-          <Button
-            size="sm"
-            pending={changes.isFetching}
-            onClick={() => void changes.refetch()}
-          >
-            Try again
-          </Button>
-        }
-      >
-        {ipcErrorMessage(changes.error, 'Git did not answer.')}
-      </EmptyState>
-    );
-  const { files, truncated } = changes.data;
-  if (!files.length)
-    return (
-      <EmptyState
-        compact
-        art={<RepositoriesArt />}
-        title="Working tree is clean"
-        className="border-t border-line"
-        action={
-          <Button
-            size="sm"
-            pending={refresh.isPending || repo.inspecting}
-            onClick={() => refresh.mutate(repo.id)}
-          >
-            {!(refresh.isPending || repo.inspecting) && <RefreshCw />}
-            Refresh status
-          </Button>
-        }
-      >
-        Edits you save in this folder show up here after the next status check.
-      </EmptyState>
-    );
-  return (
-    <>
-      <ul className="border-t border-line">
-        {files.map((file, index) => (
-          <li
-            // A path can appear twice: once staged, once not.
-            key={`${file.kind}:${file.path}:${index}`}
-            className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-3 border-b border-line px-2 py-2"
-          >
-            <span
-              aria-label={KIND_LABEL[file.kind]}
-              className={cn(
-                'grid h-5 w-5.5 place-items-center rounded-[4px] bg-control font-mono text-[0.71875rem] font-semibold text-ink',
-                file.kind === 'conflict' && 'bg-danger-soft',
-              )}
-            >
-              {file.code}
-            </span>
-            <span
-              className="truncate font-mono text-[0.78125rem] text-ink"
-              title={file.path}
-            >
-              {file.path}
-            </span>
-            <span className="text-xs text-muted">{KIND_LABEL[file.kind]}</span>
-          </li>
-        ))}
-      </ul>
-      {truncated && (
-        <p className="mt-2 text-xs text-muted">
-          Showing the first {files.length} changes. Your editor or terminal
-          shows the rest.
-        </p>
-      )}
-    </>
-  );
 }
 
 // Charts and counts read Git history on this computer; nothing here asks the server.
@@ -260,6 +183,14 @@ function Details({
       </dd>
       <dt className="text-muted">Upstream</dt>
       <dd className="min-w-0 truncate text-ink">{upstreamText(repo)}</dd>
+      <dt className="text-muted">Last fetch</dt>
+      <dd className="text-ink">
+        {status.fetchedAt
+          ? relativeTime(status.fetchedAt)
+          : status.hasRemotes
+            ? 'Not fetched yet'
+            : 'No remote to fetch from'}
+      </dd>
       <dt className="text-muted">Remote</dt>
       <dd className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-ink">
         {!repo.remoteId
@@ -401,7 +332,7 @@ function RemoveOrDelete({
 }
 
 // The workspace for one registered repository: what Git reports here, and what the account holds.
-export function RepositoryPage({ id }: { id: string }) {
+export function RepositoryPage({ id, tab }: { id: string; tab?: RepoTab }) {
   const { navigate } = useNavigation();
   const repos = useRepositories();
   const repo = repos.data?.find((r) => r.id === id);
@@ -455,19 +386,158 @@ export function RepositoryPage({ id }: { id: string }) {
         </EmptyState>
       </Page>
     );
-  return <RepositoryView repo={repo} crumbs={crumbs} />;
+  return <RepositoryView repo={repo} crumbs={crumbs} tab={tab} />;
 }
+
+const TABS: { value: RepoTab; label: string }[] = [
+  { value: 'changes', label: 'Changes' },
+  { value: 'history', label: 'History' },
+  { value: 'branches', label: 'Branches' },
+  { value: 'remotes', label: 'Remotes' },
+  { value: 'overview', label: 'Overview' },
+  { value: 'settings', label: 'Settings' },
+];
+
+// What a switch attempt came to, in words, next to the branch it was about.
+function SwitchNotice({
+  outcome,
+  onClose,
+  onChanges,
+}: {
+  outcome: SwitchOutcome;
+  onClose: () => void;
+  onChanges: () => void;
+}) {
+  const close = (
+    <Button size="sm" variant="ghost" onClick={onClose}>
+      Dismiss
+    </Button>
+  );
+  if ('error' in outcome)
+    return (
+      <InlineStatus tone="danger" action={close}>
+        {outcome.error}
+      </InlineStatus>
+    );
+  const { result, target } = outcome;
+  if (result.status === 'switched') return null;
+  if (result.reason === 'local-changes')
+    return (
+      <div
+        role="status"
+        className="grid gap-2 bg-warning-soft px-3 py-3 text-[0.8125rem] text-ink"
+      >
+        <InlineStatus tone="warning">
+          Git didn't switch to{' '}
+          <b className="font-mono font-semibold">{target}</b>: switching would
+          overwrite your edits{result.files.length ? ' to these files' : ''}.
+          Commit or stash them first. gitdesk never discards them to switch.
+        </InlineStatus>
+        {result.files.length > 0 && (
+          <ul className="ml-6 font-mono text-[0.78125rem]">
+            {result.files.map((file) => (
+              <li key={file}>{file}</li>
+            ))}
+          </ul>
+        )}
+        <div className="ml-6 flex gap-2">
+          <Button size="sm" className="bg-surface" onClick={onChanges}>
+            Go to Changes
+          </Button>
+          {close}
+        </div>
+      </div>
+    );
+  const words = {
+    'other-worktree': `${target} is checked out in another worktree, so Git won't check it out here too.`,
+    operation:
+      'A merge or rebase is in progress. Finish or abort it in your editor or terminal first.',
+    exists: `A local branch named ${target} already exists. Switch to it instead.`,
+    'not-found': `${target} isn't there any more. The branch list was refreshed.`,
+  }[result.reason];
+  return (
+    <InlineStatus tone="warning" action={close}>
+      {words}
+    </InlineStatus>
+  );
+}
+
+function FetchButton({ repo }: { repo: RepositorySummary }) {
+  const remotes = useRemotes(repo.id, repo.statusAt);
+  const prefs = useRepoPreferences(repo.id);
+  const action = useFetchAction(repo.id, { toast: true });
+  const names = remotes.data?.map((r) => r.name) ?? [];
+  const remote =
+    (prefs.data?.defaultRemote && names.includes(prefs.data.defaultRemote)
+      ? prefs.data.defaultRemote
+      : names.includes('origin')
+        ? 'origin'
+        : names[0]) ?? null;
+  if (!repo.status?.hasRemotes || !remote) return null;
+  return action.running ? (
+    <Button
+      size="sm"
+      onClick={action.cancel}
+      aria-label={`Cancel fetching ${remote}`}
+    >
+      <CloudDownload />
+      {action.progress ? `${action.progress.percent}%` : 'Fetching'} · Cancel
+    </Button>
+  ) : (
+    <Button size="sm" onClick={() => action.start(remote)}>
+      <CloudDownload />
+      Fetch {remote}
+    </Button>
+  );
+}
+
+// Pushes the current branch; the count is what its upstream doesn't have yet.
+function PushButton({ repo }: { repo: RepositorySummary }) {
+  const action = usePushAction(repo.id);
+  const status = repo.status;
+  if (!status?.hasRemotes || !status.branch) return null;
+  const ahead = status.upstream ? (status.ahead ?? 0) : null;
+  if (action.running)
+    return (
+      <Button size="sm" onClick={action.cancel} aria-label="Cancel push">
+        <CloudUpload />
+        {action.progress ? `${action.progress.percent}%` : 'Pushing'} · Cancel
+      </Button>
+    );
+  return (
+    <Button
+      size="sm"
+      onClick={action.start}
+      title={
+        ahead === null
+          ? `Pushes ${status.branch} and sets its upstream`
+          : `${ahead} ${ahead === 1 ? 'commit' : 'commits'} to push`
+      }
+    >
+      <CloudUpload />
+      Push{ahead ? ` ${ahead}` : ''}
+    </Button>
+  );
+}
+
+// A successful switch needs no notice: the branch label already says where you are.
+const keepNotice = (next: SwitchOutcome) =>
+  'result' in next && next.result.status === 'switched' ? null : next;
 
 function RepositoryView({
   repo,
   crumbs,
+  tab: routeTab,
 }: {
   repo: RepositorySummary;
   crumbs: { label: string; onSelect?: () => void }[];
+  tab?: RepoTab;
 }) {
   useNow();
   const { navigate } = useNavigation();
   const { data: auth } = useAuthStatus();
+  const { data: settings } = useSettings();
+  const prefs = useRepoPreferences(repo.id);
   const refresh = useRefreshRepositories();
   const reveal = useRevealRepository();
   const locate = useLocateRepository();
@@ -477,11 +547,28 @@ function RepositoryView({
   );
   const remote = remoteQuery.data ?? null;
   const [mode, setMode] = useState<ManageMode | null>(null);
+  const [outcome, setOutcome] = useState<SwitchOutcome | null>(null);
   const { actions, busy } = useRepoActions(repo, setMode, remote);
+  const [measure, width] = useWidth();
   const gone = () => navigate({ name: 'repositories' });
 
   const present = repo.availability === 'available';
+  useWatchRepository(repo.id, present);
   const checking = refresh.isPending || repo.inspecting;
+  const tab = routeTab ?? prefs.data?.openOn ?? 'changes';
+  const chosen =
+    prefs.data && prefs.data.layout !== 'global'
+      ? prefs.data.layout
+      : (settings?.workspaceLayout ?? 'auto');
+  // Auto splits from 960px of workspace; Split asks for 700px, then becomes one column.
+  const split =
+    chosen !== 'centered' && width >= (chosen === 'split' ? 700 : 960);
+  const layout = split
+    ? 'split'
+    : chosen !== 'centered' && width > 0 && width < 700
+      ? 'narrow'
+      : 'centered';
+
   const header = (
     <>
       {present && (
@@ -495,6 +582,7 @@ function RepositoryView({
             {!checking && <RefreshCw />}
             Refresh
           </Button>
+          <OpenInEditorButton repoId={repo.id} path={null} />
           <Button
             size="sm"
             pending={reveal.isPending}
@@ -509,24 +597,21 @@ function RepositoryView({
     </>
   );
   const problem = reveal.error ?? locate.error;
-  // Renaming opens at the top. Confirmations open in Remove or delete, beside their explanation;
-  // each one takes focus, which scrolls it into view when it was chosen from the menu.
-  const menuBand = mode === 'rename' && (
-    <div className="mb-6">
-      <ManageBand
-        mode={mode}
-        repo={repo}
-        remote={remote}
-        onClose={() => setMode(null)}
-        onGone={gone}
-      />
-    </div>
-  );
   const notices = (
     <>
-      {menuBand}
+      {mode === 'rename' && (
+        <div className="mt-3">
+          <ManageBand
+            mode={mode}
+            repo={repo}
+            remote={remote}
+            onClose={() => setMode(null)}
+            onGone={gone}
+          />
+        </div>
+      )}
       {problem && (
-        <InlineStatus tone="danger" className="mb-6">
+        <InlineStatus tone="danger" className="mt-3">
           {ipcErrorMessage(problem, "That didn't work. Try again.")}
         </InlineStatus>
       )}
@@ -577,81 +662,178 @@ function RepositoryView({
     );
 
   const status = repo.status;
+  const changeCount = status
+    ? status.staged + status.unstaged + status.untracked + status.conflicts
+    : null;
+  const padded = 'px-6 min-[1100px]:px-10';
+  const column = cn(
+    padded,
+    !split && 'mx-auto w-full max-w-[calc(var(--content-max)+5rem)]',
+  );
+  // Tabs that read as a document scroll in a centered column; Changes and History own their panes.
+  const scrolling = (children: ReactNode) => (
+    <div className={cn('min-h-0 flex-1 overflow-auto pb-10', padded)}>
+      <div className="mx-auto max-w-(--content-max)">{children}</div>
+    </div>
+  );
+  const tabContent = 'flex min-h-0 flex-1 flex-col focus-visible:outline-none';
+
   return (
-    <Page crumbs={crumbs} actions={header}>
-      {notices}
-      <PageTitle title={repo.name}>
-        {repo.description ? `${repo.description} · ` : ''}
-        <span className="font-mono text-[0.8125rem]">{repo.displayPath}</span>
-      </PageTitle>
-      <div className="-mt-3 mb-7 flex flex-wrap items-center gap-x-4.5 gap-y-2">
-        <RepoTags local remote={!!repo.remoteId} />
-        <BranchLabel repo={repo} />
-        <TreeChip repo={repo} />
-        <SyncChip repo={repo} />
-        {busy ? (
-          <span className="text-xs text-muted">{busy}</span>
-        ) : (
-          repo.statusAt && (
-            <span className="text-xs text-muted">
-              Status from {relativeTime(repo.statusAt)}
-            </span>
-          )
-        )}
-      </div>
-      {repo.error && (
-        <InlineStatus tone="danger" className="mb-6">
-          {repo.error}
-        </InlineStatus>
-      )}
-      {status && (status.conflicts > 0 || status.operation) && (
-        <InlineStatus
-          tone={status.conflicts > 0 ? 'danger' : 'warning'}
-          className="mb-6"
+    <Page crumbs={crumbs} actions={header} fill>
+      <div ref={measure} className="flex min-h-0 flex-1 flex-col">
+        <div className={cn('flex-none pt-3', column)}>
+          {/* One row: identity on the left, branch and sync on the right; it wraps on narrow windows. */}
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+            <div className="flex min-w-0 flex-[1_1_22rem] items-baseline gap-2.5">
+              <h1 className="shrink-0 truncate text-[1.0625rem] font-semibold tracking-[-0.015em] text-ink">
+                {repo.name}
+              </h1>
+              <RepoTags local remote={!!repo.remoteId} />
+              <span
+                className="min-w-0 truncate text-xs text-muted"
+                title={repo.displayPath}
+              >
+                {repo.description ? `${repo.description} · ` : ''}
+                <span className="font-mono">{repo.displayPath}</span>
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+              <BranchPicker
+                repo={repo}
+                onOutcome={(next) => setOutcome(keepNotice(next))}
+              />
+              <TreeChip repo={repo} />
+              <SyncChip repo={repo} />
+              <span className="text-xs whitespace-nowrap text-muted">
+                {busy ??
+                  (status?.fetchedAt
+                    ? `Fetched ${relativeTime(status.fetchedAt)}`
+                    : status?.hasRemotes
+                      ? 'Not fetched yet'
+                      : repo.statusAt
+                        ? `Status from ${relativeTime(repo.statusAt)}`
+                        : '')}
+              </span>
+              <FetchButton repo={repo} />
+              <PushButton repo={repo} />
+            </div>
+          </div>
+          {notices}
+          {repo.error && (
+            <InlineStatus tone="danger" className="mt-3">
+              {repo.error}
+            </InlineStatus>
+          )}
+          {status && (status.conflicts > 0 || status.operation) && (
+            <InlineStatus
+              tone={status.conflicts > 0 ? 'danger' : 'warning'}
+              className="mt-3"
+            >
+              {status.operation
+                ? `A ${status.operation} is in progress${status.conflicts ? ` with ${status.conflicts} unresolved ${status.conflicts === 1 ? 'conflict' : 'conflicts'}` : ''}. Finish or abort it in your editor or terminal, then refresh.`
+                : `${status.conflicts} ${status.conflicts === 1 ? 'file has' : 'files have'} unresolved conflicts. Resolve them in your editor, then mark them resolved on Changes.`}
+            </InlineStatus>
+          )}
+          {remote && remote.status !== 'ready' && (
+            <InlineStatus tone="warning" className="mt-3">
+              {REMOTE_STATUS[remote.status].label}:{' '}
+              {REMOTE_STATUS[remote.status].detail}
+            </InlineStatus>
+          )}
+          {outcome && (
+            <div className="mt-3">
+              <SwitchNotice
+                outcome={outcome}
+                onClose={() => setOutcome(null)}
+                onChanges={() => {
+                  setOutcome(null);
+                  navigate({ name: 'repository', id: repo.id, tab: 'changes' });
+                }}
+              />
+            </div>
+          )}
+        </div>
+
+        <Tabs.Root
+          value={tab}
+          onValueChange={(next) =>
+            navigate({ name: 'repository', id: repo.id, tab: next as RepoTab })
+          }
+          className="flex min-h-0 flex-1 flex-col"
         >
-          {status.operation
-            ? `A ${status.operation} is in progress${status.conflicts ? ` with ${status.conflicts} unresolved ${status.conflicts === 1 ? 'conflict' : 'conflicts'}` : ''}. Finish or abort it in your editor or terminal, then refresh.`
-            : `${status.conflicts} ${status.conflicts === 1 ? 'file has' : 'files have'} unresolved conflicts. Resolve them, then refresh.`}
-        </InlineStatus>
-      )}
-      {remote && remote.status !== 'ready' && (
-        <InlineStatus tone="warning" className="mb-6">
-          {REMOTE_STATUS[remote.status].label}:{' '}
-          {REMOTE_STATUS[remote.status].detail}
-        </InlineStatus>
-      )}
-      <div className="@container">
-        <History repo={repo} />
+          <div className={cn('flex-none', column)}>
+            <Tabs.List
+              aria-label="Repository views"
+              className="mt-2 flex gap-1 overflow-x-auto border-b border-line"
+            >
+              {TABS.map((item) => (
+                <Tabs.Trigger
+                  key={item.value}
+                  value={item.value}
+                  className="h-9 shrink-0 border-b-2 border-transparent px-2.5 text-[0.8125rem] text-muted hover:text-ink focus-visible:outline-offset-[-2px] data-[state=active]:border-accent data-[state=active]:font-semibold data-[state=active]:text-ink"
+                >
+                  {item.label}
+                  {item.value === 'changes' &&
+                    changeCount !== null &&
+                    changeCount > 0 && (
+                      <span className="ml-1.5 font-medium text-muted tabular-nums">
+                        {changeCount}
+                      </span>
+                    )}
+                </Tabs.Trigger>
+              ))}
+            </Tabs.List>
+          </div>
+          <Tabs.Content value="changes" className={tabContent}>
+            <ChangesTab repo={repo} layout={layout} />
+          </Tabs.Content>
+          <Tabs.Content value="history" className={tabContent}>
+            <HistoryTab
+              repo={repo}
+              layout={layout === 'narrow' ? 'centered' : layout}
+            />
+          </Tabs.Content>
+          <Tabs.Content value="branches" className={tabContent}>
+            {scrolling(
+              <BranchesTab
+                repo={repo}
+                onOutcome={(next) => setOutcome(keepNotice(next))}
+              />,
+            )}
+          </Tabs.Content>
+          <Tabs.Content value="remotes" className={tabContent}>
+            {scrolling(<RemotesTab repo={repo} />)}
+          </Tabs.Content>
+          <Tabs.Content value="overview" className={tabContent}>
+            {scrolling(
+              <>
+                <Analytics repo={repo} />
+                {status && (
+                  <Section id="details-heading" title="This repository">
+                    <Details repo={repo} remote={remote} />
+                  </Section>
+                )}
+                <Section
+                  id="manage-heading"
+                  title="Remove or delete"
+                  meta="Each action touches one thing only"
+                >
+                  <RemoveOrDelete
+                    repo={repo}
+                    remote={remote}
+                    mode={mode === 'rename' ? null : mode}
+                    setMode={setMode}
+                    onGone={gone}
+                  />
+                </Section>
+              </>,
+            )}
+          </Tabs.Content>
+          <Tabs.Content value="settings" className={tabContent}>
+            {scrolling(<RepoSettingsTab repo={repo} />)}
+          </Tabs.Content>
+        </Tabs.Root>
       </div>
-      <Section
-        id="changes-heading"
-        title="Changes"
-        meta="Working tree, not committed"
-      >
-        <Changes repo={repo} />
-      </Section>
-      {status && (
-        <Section id="details-heading" title="This repository">
-          <Details repo={repo} remote={remote} />
-        </Section>
-      )}
-      <Section
-        id="manage-heading"
-        title="Remove or delete"
-        meta="Each action touches one thing only"
-      >
-        <RemoveOrDelete
-          repo={repo}
-          remote={remote}
-          mode={mode === 'rename' ? null : mode}
-          setMode={setMode}
-          onGone={gone}
-        />
-      </Section>
-      <InlineStatus className="mt-9">
-        Diff views and committing come with a later feature. Until then, commit
-        in your editor and gitdesk picks it up.
-      </InlineStatus>
     </Page>
   );
 }

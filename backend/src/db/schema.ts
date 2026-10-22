@@ -111,6 +111,8 @@ export const repositories = sqliteTable(
     statusAt: integer('status_at').notNull().default(0),
     // Server-made R2 prefix (repositories/<id>/). Never derived from the name, never sent to clients.
     storageKey: text('storage_key').notNull().default(''),
+    // https Git remote from the git host, null until provisioned with hosting on. Holds no credentials.
+    gitRemote: text('git_remote'),
   },
   (t) => [
     uniqueIndex('repositories_owner_name').on(t.ownerAccountId, t.nameKey),
