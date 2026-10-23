@@ -5,13 +5,17 @@
   "scripts": {
     "dev": "wrangler dev --local",
     "dev:remote": "wrangler dev",
-    "deploy": "wrangler deploy --minify",
+    "deploy": "wrangler deploy --minify --env=",
+    "deploy:dev": "wrangler deploy --minify --env dev",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --strict-vars=false",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate:local": "wrangler d1 migrations apply DB --local",
-    "db:migrate:remote": "wrangler d1 migrations apply DB --remote"
+    "db:migrate:remote": "wrangler d1 migrations apply DB --remote --env=",
+    "db:migrate:dev": "wrangler d1 migrations apply DB --remote --env dev",
+    "tail": "wrangler tail --env= --format pretty",
+    "tail:dev": "wrangler tail --env dev --format pretty"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.1",
@@ -31,6 +35,6 @@
     "typescript": "^7.0.2",
     "typescript-eslint": "^8.72.0",
     "vitest": "~4.1.12",
-    "wrangler": "^4.110.0"
+    "wrangler": "^4.152.0"
   }
 }

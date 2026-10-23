@@ -12,13 +12,16 @@ type LogFields = {
   lifetime?: number;
 };
 
+// `cause` is for unhandled errors only: the caught value itself, so Workers Issues can group it by
+// its stack. Never pass anything built from a request.
 export function logEvent(
   event: string,
   fields: LogFields = {},
   level: 'info' | 'warn' | 'error' = 'info',
+  cause?: unknown,
 ): void {
   const line = JSON.stringify({ event, ...fields });
-  if (level === 'error') console.error(line);
+  if (level === 'error') console.error(...(cause === undefined ? [line] : [line, cause]));
   else if (level === 'warn') console.warn(line);
   else console.log(line);
 }
