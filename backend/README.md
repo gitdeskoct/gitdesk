@@ -109,14 +109,14 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 
 | Name | Kind | Where it is set | Used for |
 | --- | --- | --- | --- |
-| `PUBLIC_ORIGIN` | var | `wrangler.jsonc` (production, `https://gitdesk-api.telvinteum.workers.dev`), `http://localhost:8787` in `.dev.vars` and `vitest.config.ts` | Google redirect URI and JWT issuer |
+| `PUBLIC_ORIGIN` | var | `wrangler.jsonc`: `https://gitdesk-api.telvinteum.workers.dev` (production), `https://gitdesk-api-dev.telvinteum.workers.dev` (`env.dev`); `http://localhost:8787` in `.dev.vars` and `vitest.config.ts` | Google redirect URI and JWT issuer |
 | `GIT_HOSTING` | var | `wrangler.jsonc` (`off`, because the account is on the free plan), `off` in `.dev.vars` | Whether repositories get a Git URL |
 | `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, commented out until the account is on Workers Paid (a free-plan deploy with it is refused, code 10403) | Git repositories and their tokens |
 | `GOOGLE_CLIENT_ID` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
-| `JWT_SIGNING_KEY` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Signing access tokens. At least 32 bytes, base64url. |
-| `DB` | D1 binding | `wrangler.jsonc`, database `gitdesk-db` (`81f9ddcc-9066-4157-a757-36691bea4620`, Western Europe) | Accounts, identities, transactions, codes, sessions, repositories, pull requests |
-| `REPO_STORAGE` | R2 binding | `wrangler.jsonc`, bucket `gitdesk-repositories` | Each repository's stored data under `repositories/<id>/`. Create the bucket with `npx wrangler r2 bucket create gitdesk-repositories` before deploying. |
+| `JWT_SIGNING_KEY` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Signing access tokens. At least 32 bytes, base64url; production, dev and local each use their own 64-byte key. |
+| `DB` | D1 binding | `wrangler.jsonc`, database `gitdesk-db` (production) or `gitdesk-db-dev` (`env.dev`), both Western Europe | Accounts, identities, transactions, codes, sessions, repositories, pull requests |
+| `REPO_STORAGE` | R2 binding | `wrangler.jsonc`, bucket `gitdesk-repositories` (production) or `gitdesk-repositories-dev` (`env.dev`) | Each repository's stored data under `repositories/<id>/`. Create the bucket with `npx wrangler r2 bucket create gitdesk-repositories` before deploying. |
 | `AUTH_LIMITER` | rate limit binding | `wrangler.jsonc` | Sign-in routes, 10 requests per 60 seconds per IP and route |
 | `REFRESH_LIMITER` | rate limit binding | `wrangler.jsonc` | Token refresh and logout, 20 requests per 60 seconds per IP |
 | `API_LIMITER` | rate limit binding | `wrangler.jsonc` | Every signed-in request, 120 per 60 seconds per account |
@@ -183,11 +183,33 @@ Tests run inside the Workers runtime through `@cloudflare/vitest-plugin`. They a
 
 ## Deploy
 
-Production runs at **`https://gitdesk-api.telvinteum.workers.dev`** on account `5b14dbcfcd4e8acdb4bad6aff07ce149`. The D1 database `gitdesk-db`, the R2 bucket `gitdesk-repositories`, the six rate limiters and the daily cleanup cron (`0 3 * * *`) are all in `wrangler.jsonc`. `workers.dev` is on; preview URLs are off, so an uploaded but undeployed version is never reachable. Plain `http://` is refused with 403 `HTTPS_REQUIRED` everywhere but `localhost`.
+Two Workers on account `5b14dbcfcd4e8acdb4bad6aff07ce149`, from one `wrangler.jsonc`:
+
+| | Production (top level) | Dev (`env.dev`) |
+| --- | --- | --- |
+| URL | `https://gitdesk-api.telvinteum.workers.dev` | `https://gitdesk-api-dev.telvinteum.workers.dev` |
+| Worker | `gitdesk-api` | `gitdesk-api-dev` |
+| D1 | `gitdesk-db` | `gitdesk-db-dev` |
+| R2 | `gitdesk-repositories` | `gitdesk-repositories-dev` |
+| Rate-limit namespaces | 4101–4106 | 5101–5106 |
+| Traces sampled | 5% | 100% |
+| Deploy | `npm run deploy` | `npm run deploy:dev` |
+| Migrate | `npm run db:migrate:remote` | `npm run db:migrate:dev` |
+| Live logs | `npm run tail` | `npm run tail:dev` |
+
+Environments inherit no bindings or vars, so `env.dev` restates every one; nothing it does reaches production data. Both run the daily cleanup cron (`0 3 * * *`), have `workers.dev` on and preview URLs off, and refuse plain `http://` with 403 `HTTPS_REQUIRED`. The scripts pass `--env=` for production so Wrangler never has to guess.
 
 ### Deploying a change
 
-Apply any new migration first, then deploy. Secrets carry over between deploys.
+Try it on dev, then production. Apply any new migration before the code that needs it. Secrets carry over between deploys.
+
+```bash
+npm run db:migrate:dev
+```
+
+```bash
+npm run deploy:dev
+```
 
 ```bash
 npm run db:migrate:remote
@@ -199,37 +221,47 @@ npm run deploy
 
 ### Secrets
 
-The first deploy set `JWT_SIGNING_KEY` to a fresh random 32-byte key and the Google pair to placeholders (`replace-me.apps.googleusercontent.com`, `replace-me`). Until the real Google values are in, sign-in reaches Google and stops there with an invalid client error; everything that needs no sign-in works. Each command prompts for the value:
+Both environments share the Google OAuth client, and each has its own random 64-byte `JWT_SIGNING_KEY`, so a token from one is worthless on the other. Secrets can be replaced but never read back. Each command prompts for the value; use `--env dev` for dev:
 
 ```bash
-npx wrangler secret put GOOGLE_CLIENT_ID
+npx wrangler secret put GOOGLE_CLIENT_ID --env=
 ```
 
 ```bash
-npx wrangler secret put GOOGLE_CLIENT_SECRET
+npx wrangler secret put GOOGLE_CLIENT_SECRET --env=
 ```
 
-Register `https://gitdesk-api.telvinteum.workers.dev/api/v1/auth/google/callback` as an authorized redirect URI on that Google client. Rotating `JWT_SIGNING_KEY` signs everyone out at their next request, which is the point of rotating it:
+Rotating `JWT_SIGNING_KEY` signs everyone in that environment out at their next request. Generate a key with `node -e "console.log(require('crypto').randomBytes(64).toString('base64url'))"` and set it:
 
 ```bash
-npx wrangler secret put JWT_SIGNING_KEY
+npx wrangler secret put JWT_SIGNING_KEY --env=
 ```
+
+The Google client must list every callback as an authorized redirect URI, or Google stops sign-in with `redirect_uri_mismatch`:
+
+- `https://gitdesk-api.telvinteum.workers.dev/api/v1/auth/google/callback`
+- `https://gitdesk-api-dev.telvinteum.workers.dev/api/v1/auth/google/callback`
+- `http://localhost:8787/api/v1/auth/google/callback`
+
+### Observability
+
+Both log every request (query strings redacted, because the Google callback carries a one-time code), persist logs and traces, and have [Workers Issues](https://developers.cloudflare.com/workers/observability/issues/) on. Issues groups uncaught exceptions and the `console.error` the error handler writes for unhandled errors, which carries the error itself so it is grouped by its stack. Find them in the dashboard under each Worker's Observability and Issues tabs.
 
 ### Turning on Git hosting
 
-Artifacts needs Workers Paid. After upgrading: uncomment the `artifacts` binding in `wrangler.jsonc`, set `GIT_HOSTING` to `artifacts`, run `npm run cf-typegen` and deploy. Repositories created while hosting was off get their Git URL from the backfill on their next read.
+Artifacts needs Workers Paid. After upgrading: uncomment the `artifacts` binding in `wrangler.jsonc` (and add it to `env.dev`), set `GIT_HOSTING` to `artifacts` in both, run `npm run cf-typegen` and deploy both. Repositories created while hosting was off get their Git URL from the backfill on their next read.
 
-### Pointing the desktop app at it
+### Pointing the desktop app at a Worker
 
-Set `VITE_API_ORIGIN=https://gitdesk-api.telvinteum.workers.dev` in the root `.env`. Packaged builds accept only an https origin.
+Set `VITE_API_ORIGIN` in the root `.env`: production by default, the dev URL to try backend changes from the app. Packaged builds accept only an https origin.
 
 ### Setting up a new account from scratch
 
-1. `npx wrangler d1 create gitdesk-db`, and put the `database_id` it prints in `wrangler.jsonc`.
-2. `npx wrangler r2 bucket create gitdesk-repositories`.
-3. Set `PUBLIC_ORIGIN` in `wrangler.jsonc` to `https://gitdesk-api.<your-subdomain>.workers.dev`.
-4. `npm run db:migrate:remote`.
-5. Deploy once with all three secrets, so the required-secrets check passes: `npx wrangler deploy --minify --secrets-file <file>` with a JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `JWT_SIGNING_KEY`. Delete the file afterwards.
+1. `npx wrangler d1 create gitdesk-db` and `npx wrangler d1 create gitdesk-db-dev`, and put each `database_id` in `wrangler.jsonc`.
+2. `npx wrangler r2 bucket create gitdesk-repositories` and `npx wrangler r2 bucket create gitdesk-repositories-dev`.
+3. Set both `PUBLIC_ORIGIN` values to your `workers.dev` subdomain.
+4. `npm run db:migrate:remote` and `npm run db:migrate:dev`.
+5. Deploy each once with its three secrets, so the required-secrets check passes: `npx wrangler deploy --minify --env= --secrets-file <file>` and the same with `--env dev`, each with a JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `JWT_SIGNING_KEY`. Delete the files afterwards.
 
 ## Changing the schema
 

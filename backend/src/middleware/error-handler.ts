@@ -28,6 +28,7 @@ export const onError: ErrorHandler<AppEnv> = (err, c) => {
     'unhandled_error',
     { requestId, path: c.req.path, error: err.name },
     'error',
+    err,
   );
   return c.json(
     {

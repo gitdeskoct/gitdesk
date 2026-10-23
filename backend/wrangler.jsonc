@@ -1,17 +1,23 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  // Two deployed environments, one config:
+  //   production  top level, `npm run deploy`      https://gitdesk-api.telvinteum.workers.dev
+  //   dev         env.dev,   `npm run deploy:dev`  https://gitdesk-api-dev.telvinteum.workers.dev
+  // `npm run dev` runs the top level locally, with .dev.vars overriding vars and secrets.
+  // Bindings and vars are not inherited by environments, so env.dev restates each one with its own
+  // database, bucket and rate-limit namespaces: dev traffic never touches production data.
   "name": "gitdesk-api",
   "main": "src/index.ts",
   // Newest date the bundled test runtime (@cloudflare/vitest-plugin 1.4.0) supports; bump with it.
   "compatibility_date": "2026-10-06",
   "upload_source_maps": true,
-  // Served at https://gitdesk-api.telvinteum.workers.dev. Preview URLs stay off: an uploaded but
-  // undeployed version must not be reachable with production data and secrets.
+  // Preview URLs stay off: an uploaded but undeployed version must not be reachable with real data.
   "workers_dev": true,
   "preview_urls": false,
   // Public origin of this Worker; used to build the Google redirect URI and JWT issuer.
   // Production here; .dev.vars sets http://localhost:8787 for `wrangler dev`.
-  // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY come from `wrangler secret put` (or .dev.vars locally).
+  // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY are secrets (`wrangler secret put`,
+  // with --env dev for dev), never vars. Each environment has its own JWT_SIGNING_KEY.
   // GIT_HOSTING "artifacts" gives linked repositories a Git URL through the ARTIFACTS binding,
   // which needs Workers Paid. "off" keeps them metadata only. This account is on the free plan, so
   // it is "off" and the binding below is commented out; to turn hosting on, upgrade, uncomment the
@@ -52,9 +58,79 @@
   "triggers": {
     "crons": ["0 3 * * *"]
   },
+  // Every request is logged and kept; 5% are traced. Issues groups uncaught exceptions and the
+  // console.error the error handler writes for unhandled errors. Query strings are redacted: the
+  // Google callback carries a one-time authorization code and state, which have no place in logs.
   "observability": {
     "enabled": true,
-    "logs": { "enabled": true, "head_sampling_rate": 1 },
-    "traces": { "enabled": true, "head_sampling_rate": 0.05 }
+    "head_sampling_rate": 1,
+    "redact_query_string": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1,
+      "invocation_logs": true,
+      "persist": true
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.05,
+      "persist": true
+    },
+    "issues": {
+      "enabled": true
+    }
+  },
+  "env": {
+    "dev": {
+      "name": "gitdesk-api-dev",
+      "vars": {
+        "PUBLIC_ORIGIN": "https://gitdesk-api-dev.telvinteum.workers.dev",
+        "GIT_HOSTING": "off"
+      },
+      "secrets": {
+        "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "gitdesk-db-dev",
+          "database_id": "1a2a38da-ee10-4d26-9b6d-54facb53b345",
+          "migrations_dir": "drizzle/migrations"
+        }
+      ],
+      "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories-dev" }],
+      // Same limits as production in their own namespaces, so dev traffic never spends production's.
+      "ratelimits": [
+        { "name": "AUTH_LIMITER", "namespace_id": "5101", "simple": { "limit": 10, "period": 60 } },
+        { "name": "REFRESH_LIMITER", "namespace_id": "5102", "simple": { "limit": 20, "period": 60 } },
+        { "name": "API_LIMITER", "namespace_id": "5103", "simple": { "limit": 120, "period": 60 } },
+        { "name": "WRITE_LIMITER", "namespace_id": "5104", "simple": { "limit": 10, "period": 60 } },
+        { "name": "GIT_LIMITER", "namespace_id": "5105", "simple": { "limit": 30, "period": 60 } },
+        { "name": "PULL_LIMITER", "namespace_id": "5106", "simple": { "limit": 60, "period": 60 } }
+      ],
+      "triggers": {
+        "crons": ["0 3 * * *"]
+      },
+      // Dev traces everything: traffic is low and every request is worth seeing.
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "redact_query_string": true,
+        "logs": {
+          "enabled": true,
+          "head_sampling_rate": 1,
+          "invocation_logs": true,
+          "persist": true
+        },
+        "traces": {
+          "enabled": true,
+          "head_sampling_rate": 1,
+          "persist": true
+        },
+        "issues": {
+          "enabled": true
+        }
+      }
+    }
   }
 }

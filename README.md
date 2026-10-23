@@ -131,7 +131,7 @@ Each feature is one domain, with one folder per zone:
 Requirements: Node.js, npm and Git. The Worker needs a Cloudflare account only for remote deploys.
 
 1. Set up and start the Worker, following [backend/README.md](backend/README.md). By default it listens on `http://localhost:8787`.
-2. Copy `.env.example` to `.env` in the repository root. `VITE_API_ORIGIN` points the app at the Worker and must be https in packaged builds. Plain `http://localhost` or `http://127.0.0.1` is accepted only in unpackaged dev builds.
+2. Copy `.env.example` to `.env` in the repository root. `VITE_API_ORIGIN` points the app at the Worker: production (`https://gitdesk-api.telvinteum.workers.dev`) by default, the dev Worker (`https://gitdesk-api-dev.telvinteum.workers.dev`) to try backend changes, or `http://localhost:8787` with a local Worker. It must be https in packaged builds, which bake it in at build time; plain `http://localhost` or `http://127.0.0.1` is accepted only in unpackaged dev builds. Each Worker has its own accounts and data, so signing in to one doesn't sign you in to another.
 3. Install and start the app:
 
 ```bash
