@@ -384,8 +384,9 @@ export type MergeOperationState =
   | 'failed';
 export type MergeOperation = {
   id: string;
-  pullId: string;
-  kind: 'merge' | 'revert';
+  // null for a pull of the upstream, which shares the conflict screen.
+  pullId: string | null;
+  kind: 'merge' | 'revert' | 'pull';
   state: MergeOperationState;
   strategy: MergeStrategy | null;
   sourceOid: string;
@@ -437,6 +438,8 @@ export type ConflictState = {
   operation: 'merge' | 'revert' | null;
   // The pull request gitdesk started this operation for, when it did.
   pullId: string | null;
+  // A pull of the upstream: the two sides' names for the screen ("main", "origin/main").
+  upstream: { ours: string; theirs: string } | null;
   files: ConflictFile[];
   // Paths that were conflicted in this operation and are now staged.
   resolved: string[];

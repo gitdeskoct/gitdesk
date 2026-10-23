@@ -49,6 +49,9 @@ const accountIdOf = (status: AuthStatus): string | null =>
     ? status.account.id
     : null;
 
+// Lets the automatic remote try the next name instead of giving up.
+export class NameTakenError extends UserError {}
+
 // Server codes become sentences; anything unexpected gets the caller's fallback.
 export function userError(err: unknown, fallback: string): UserError {
   if (err instanceof UserError) return err;
@@ -56,7 +59,7 @@ export function userError(err: unknown, fallback: string): UserError {
     return new UserError("Can't reach the gitdesk server.");
   if (err instanceof ApiRequestError) {
     if (err.code === 'NAME_TAKEN')
-      return new UserError(
+      return new NameTakenError(
         'A remote repository with that name already exists.',
       );
     if (err.code === 'LIMIT_REACHED')

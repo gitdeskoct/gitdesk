@@ -46,7 +46,10 @@ function MiniApp({ palette }: { palette: keyof typeof PALETTES }) {
     />
   );
   return (
-    <span className="flex min-w-0 flex-1 flex-col" style={{ background: c.canvas }}>
+    <span
+      className="flex min-w-0 flex-1 flex-col"
+      style={{ background: c.canvas }}
+    >
       <span className="flex h-[12%] items-center gap-1 px-2">
         {bar('5px', c.chrome)}
         {bar('5px', c.chrome)}

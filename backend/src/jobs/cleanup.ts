@@ -1,6 +1,6 @@
 import { lt, or } from 'drizzle-orm';
 import type { Db } from '../db/client';
-import { desktopAuthCodes, oauthTransactions, sessions } from '../db/schema';
+import { desktopAuthCodes, oauthTransactions, sessions, syncEvents } from '../db/schema';
 import { logEvent } from '../lib/log';
 
 const DAY_MS = 24 * 60 * 60_000;
@@ -18,6 +18,8 @@ export async function purgeExpired(db: Db, now: number): Promise<void> {
           lt(sessions.revokedAt, now - 30 * DAY_MS),
         ),
       ),
+    // Push records are history, not state: half a year is kept.
+    db.delete(syncEvents).where(lt(syncEvents.createdAt, now - 180 * DAY_MS)),
   ]);
   logEvent('purge_expired_done');
 }

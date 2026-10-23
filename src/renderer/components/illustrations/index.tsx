@@ -209,3 +209,14 @@ export const KeychainArt = ({ className }: { className?: string }) => (
     <path d="m68 56 5 5 10-11" {...accent} />
   </Art>
 );
+
+// Two arrows turning around one commit: fetch and push for the same branch.
+export const SyncArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <path d="M14 26a18 18 0 0 1 31-12.5l3 3" />
+    <path d="M48 8v8.5h-8.5" />
+    <path d="M50 26a18 18 0 0 1-31 12.5l-3-3" />
+    <path d="M16 44v-8.5h8.5" />
+    <circle cx="32" cy="26" r="3.5" {...accent} />
+  </Art>
+);

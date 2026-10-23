@@ -11,6 +11,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   shortcuts: 'Shortcuts',
   account: 'Account',
   hosting: 'Git hosting',
+  sync: 'Sync',
   devices: 'Devices',
   about: 'About',
 };
@@ -402,6 +403,24 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Git hosting',
     section: 'hosting',
     keywords: 'git url clone push remote artifacts server',
+  },
+  {
+    id: 'hosting-auto-remote',
+    label: 'Create a private remote for new projects',
+    section: 'hosting',
+    keywords: 'automatic link remote url new project add clone',
+  },
+  {
+    id: 'pull-strategy',
+    label: 'How Pull brings in changes',
+    section: 'sync',
+    keywords: 'pull fast-forward merge rebase upstream integrate',
+  },
+  {
+    id: 'push-never-forces',
+    label: 'Never force-push',
+    section: 'sync',
+    keywords: 'push force overwrite rejected',
   },
   {
     id: 'hosting-remote-name',

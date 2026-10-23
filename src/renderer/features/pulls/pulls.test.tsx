@@ -76,6 +76,7 @@ const repo: RepositorySummary = {
   inspecting: false,
   error: null,
   remoteId: null,
+  autoLink: null,
 };
 
 const comparison: Comparison = {

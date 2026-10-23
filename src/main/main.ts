@@ -14,7 +14,7 @@ import {
 } from 'electron';
 import log from 'electron-log/main';
 import started from 'electron-squirrel-startup';
-import { accountSummarySchema, IPC } from '../shared/ipc';
+import { accountSummarySchema, IPC, type AuthStatus } from '../shared/ipc';
 import { REPOS_IPC } from '../shared/repos';
 import { createAppService } from './app/app-service';
 import { createApiClient } from './auth/api-client';
@@ -46,6 +46,9 @@ import { createGitAuth, type GitAuth } from './remote/git-auth';
 import { createAccountRecords } from './pulls/account-records';
 import { createLocalRecords, createViewedStore } from './pulls/local-records';
 import { createPullService } from './pulls/pull-service';
+import { createMoveService } from './sync/move-service';
+import { createJournal } from './sync/journal';
+import { createSyncService, type SyncService } from './sync/sync-service';
 import { UserError } from './errors';
 import { createRepositoryService } from './repos/repository-service';
 import { createRepositoryStore } from './repos/repository-store';
@@ -154,6 +157,8 @@ async function start() {
   let remote: RemoteService | null = null;
   // Held Git tokens; dropped on sign-out so the next account never reuses them.
   let gitAuth: GitAuth | null = null;
+  // Set once the repository service exists: sign-in makes the remotes that waited for it.
+  let reposAuth: ((status: AuthStatus) => void) | null = null;
   const auth = new AuthService({
     api,
     store: new CredentialStore(path.join(userData, 'session.bin'), safeStorage),
@@ -186,6 +191,7 @@ async function start() {
     emit: (status) => {
       remote?.handleAuth(status);
       if (status.status === 'signed-out') gitAuth?.forget();
+      reposAuth?.(status);
       mainWindow?.webContents.send(IPC.authStatusChanged, status);
     },
   });
@@ -221,6 +227,7 @@ async function start() {
   });
 
   const store = createRepositoryStore(db);
+  const journal = createJournal(db);
   remote = createRemoteService({
     db,
     api,
@@ -246,10 +253,13 @@ async function start() {
       },
     },
     settings: () => settings.get(),
+    signedIn: () => auth.getStatus().status === 'authenticated',
     emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
     emitProgress: (event) =>
       mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    // A conflict gitdesk's own pull just stopped on is already on screen, so it isn't news.
     onProblem: (repo, kind) =>
+      !(kind === 'conflict' && journal.pending(repo.id)?.kind === 'pull') &&
       notifier.notify('problem', {
         title:
           kind === 'conflict'
@@ -306,7 +316,13 @@ async function start() {
       ],
     },
   });
+  reposAuth = (status) => repos.handleAuth(status);
+  // Set right after the sync service exists; a push only finishes after both are made.
+  let sync: SyncService | null = null;
   const ws = createWorkspaceService({
+    journal,
+    forgetAuth: (remoteId) => tokens.forget(remoteId),
+    onPushed: (op) => sync?.pushed(op),
     store,
     gitAuth: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
     refresh: (id) => repos.refresh(id),
@@ -349,9 +365,47 @@ async function start() {
   });
   await gitInstall.restore();
   app.on('before-quit', () => {
+    move.dispose();
     ws.dispose();
     repos.dispose();
   });
+
+  const move = createMoveService({
+    db,
+    store,
+    workspace: ws,
+    hostedUrl: (remoteId) => account.hostedUrl(remoteId),
+    gitAuth: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
+    emitProgress: (event) =>
+      mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    addActivity: (id, type, detail) =>
+      store.addActivity(id, type, detail, Date.now()),
+    refresh: (id) => repos.refresh(id),
+  });
+  move.recover();
+  const syncService = createSyncService({
+    store,
+    journal,
+    workspace: ws,
+    hostedUrl: (remoteId) => account.hostedUrl(remoteId),
+    async report(remoteId, body) {
+      if (
+        settings.get().localOnly ||
+        auth.getStatus().status !== 'authenticated'
+      )
+        throw new UserError('Not signed in.');
+      const { event } = await auth.authorized((token) =>
+        api.reportSync(token, remoteId, body),
+      );
+      return event.result;
+    },
+    addActivity: (id, type, detail) =>
+      store.addActivity(id, type, detail, Date.now()),
+    refresh: (id) => repos.refresh(id),
+    log,
+  });
+  sync = syncService;
+  void syncService.recover();
 
   const gitIdentity = createGitIdentity();
   // A linked repository keeps its pull requests in the account; any other one, in local SQLite.
@@ -410,6 +464,8 @@ async function start() {
       workspace: ws,
       gitInstall,
       pulls,
+      move,
+      sync: syncService,
     },
   );
 

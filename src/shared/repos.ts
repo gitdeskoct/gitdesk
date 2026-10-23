@@ -45,7 +45,18 @@ export type RepositorySummary = {
   inspecting: boolean;
   error: string | null;
   remoteId: string | null;
+  // The automatic private remote (Settings › Git hosting) while it isn't made yet. null once it
+  // exists, or when nothing is pending.
+  autoLink: AutoLinkState | null;
 };
+
+// waiting: added while signed out, made right after sign-in. name-taken: the folder name and its
+// numbered variants are all used in the account, so the person picks one.
+export type AutoLinkState =
+  | { state: 'waiting' }
+  | { state: 'creating' }
+  | { state: 'name-taken'; name: string }
+  | { state: 'failed'; message: string };
 
 export type ChangedFile = {
   path: string;
@@ -75,6 +86,9 @@ export type LocalActivity = {
     | 'fetched'
     | 'pushed'
     | 'hosted-remote-added'
+    | 'moved'
+    | 'move-undone'
+    | 'pulled'
     | 'pr-merged'
     | 'pr-reverted'
     | 'branch-created';
@@ -351,6 +365,70 @@ export type RemoteOverview = {
 // added: a new Git remote was written to .git/config. existing: a remote already had the URL.
 export type HostedRemoteResult = { name: string; added: boolean };
 
+// different: the folder holds a repository whose first commit isn't this one's. The token names
+// the picked folder, so confirming never sends a path from the renderer.
+export type LocateResult =
+  | { status: 'canceled' }
+  | { status: 'located'; repository: RepositorySummary }
+  | {
+      status: 'different';
+      token: string;
+      displayPath: string;
+      expected: string;
+      found: string | null;
+    };
+export const locateConfirmInputSchema = z
+  .object({ id: repoIdSchema, token: tokenSchema })
+  .strict();
+
+export const linkNamedInputSchema = z
+  .object({ id: repoIdSchema, name: repositoryNameSchema })
+  .strict();
+
+// Moving a repository to its gitdesk remote: every branch and tag is copied and checked there
+// before any remote in .git/config changes. URLs are redacted for display.
+export type MovePreview =
+  | {
+      status: 'ready';
+      remotes: { name: string; url: string }[];
+      branches: number;
+      tags: number;
+    }
+  | {
+      status: 'refused';
+      reason: 'lfs' | 'too-large' | 'operation' | 'not-linked' | 'nothing';
+      message: string;
+    };
+// The latest move that can still be undone.
+export type MoveUndo = {
+  operationId: string;
+  at: number;
+  remotes: string[];
+} | null;
+
+export const moveInputSchema = z
+  .object({ id: repoIdSchema, jobId: z.uuid() })
+  .strict();
+export type MoveResult =
+  | { status: 'moved'; branches: number; tags: number; removed: string[] }
+  | {
+      status: 'refused';
+      reason:
+        | 'lfs'
+        | 'too-large'
+        | 'operation'
+        | 'not-linked'
+        | 'nothing'
+        | 'diverged'
+        | 'unverified';
+      message: string;
+    }
+  | {
+      status: 'failed';
+      reason: 'cancelled' | 'network' | 'auth' | 'failed';
+      message: string;
+    };
+
 export const remoteOverviewInputSchema = z.object({ force: z.boolean() });
 
 export const REPOS_IPC = {
@@ -358,6 +436,7 @@ export const REPOS_IPC = {
   add: 'repos:add',
   initialize: 'repos:initialize',
   locate: 'repos:locate',
+  locateConfirm: 'repos:locate-confirm',
   refresh: 'repos:refresh',
   open: 'repos:open',
   pin: 'repos:pin',
@@ -390,13 +469,23 @@ export const REPOS_IPC = {
   addHostedRemote: 'repos:add-hosted-remote',
   copyGitCommand: 'repos:copy-git-command',
   revokeGitTokens: 'repos:revoke-git-tokens',
+  linkNamed: 'repos:link-named',
+  movePreview: 'repos:move-preview',
+  move: 'repos:move',
+  moveCancel: 'repos:move-cancel',
+  moveUndoState: 'repos:move-undo-state',
+  undoMove: 'repos:undo-move',
 } as const;
 
 export interface ReposApi {
   list(): Promise<RepositorySummary[]>;
   add(): Promise<AddRepositoryResult>;
   initialize(token: string): Promise<RepositorySummary>;
-  locate(id: string): Promise<RepositorySummary | null>;
+  locate(id: string): Promise<LocateResult>;
+  // Uses the folder Locate found anyway, after the person confirmed it is a different repository.
+  locateConfirm(
+    input: z.infer<typeof locateConfirmInputSchema>,
+  ): Promise<RepositorySummary>;
   refresh(id: string | null): Promise<void>;
   open(id: string): Promise<RepositorySummary>;
   pin(id: string, pinned: boolean): Promise<RepositorySummary>;
@@ -408,6 +497,15 @@ export interface ReposApi {
   chooseLocation(): Promise<{ token: string; displayPath: string } | null>;
   create(input: CreateRepositoryInput): Promise<CreateRepositoryResult>;
   linkRemote(id: string): Promise<RemoteRepository>;
+  // The automatic remote under a name the person chose after theirs was taken.
+  linkNamed(
+    input: z.infer<typeof linkNamedInputSchema>,
+  ): Promise<RemoteRepository>;
+  movePreview(id: string): Promise<MovePreview>;
+  move(input: z.infer<typeof moveInputSchema>): Promise<MoveResult>;
+  moveCancel(jobId: string): Promise<void>;
+  moveUndoState(id: string): Promise<MoveUndo>;
+  undoMove(id: string): Promise<void>;
   activity(): Promise<LocalActivity[]>;
   // Empties this computer's activity list; repositories and their history are not touched.
   clearActivity(): Promise<void>;

@@ -9,6 +9,7 @@ import { requireAuth } from '../../middleware/require-auth';
 import { validate } from '../../middleware/validate';
 import { listPage as activityPage } from '../activity/activity';
 import { repositoryPullRoutes } from '../pull-requests/routes';
+import { repositorySyncRoutes } from '../sync/routes';
 import { activityQuery } from '../activity/routes';
 import {
   createRepository,
@@ -47,7 +48,12 @@ async function viaGitHost<T>(c: Context<AppEnv>, work: () => Promise<T>): Promis
     return await work();
   } catch (err) {
     if (err instanceof ApiError) throw err;
-    const fields = { requestId: c.get('requestId'), error: String(err) };
+    // Artifacts errors carry a code (MEMORY_LIMIT, UPSTREAM_UNAVAILABLE…) worth grouping by.
+    const code =
+      typeof err === 'object' && err !== null && 'code' in err && typeof err.code === 'string'
+        ? err.code
+        : undefined;
+    const fields = { requestId: c.get('requestId'), code, error: String(err) };
     logEvent('git_host_error', fields, 'error');
     throw new ApiError('GIT_HOST_ERROR', 'The Git host did not answer. Try again in a moment.');
   }
@@ -148,6 +154,7 @@ export function repositoryRoutes(gitHost: GitHostFor) {
   });
 
   repositoryPullRoutes(app);
+  repositorySyncRoutes(app, gitHost);
 
   app.post(
     '/',

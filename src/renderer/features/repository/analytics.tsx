@@ -377,11 +377,15 @@ function TopList({
   items,
   label,
   mono,
+  empty,
 }: {
   items: { name: string; count: number; email?: string }[];
   label: (count: number) => string;
   mono?: boolean;
+  // Shown instead of an empty list when the range holds no commits.
+  empty: ReactNode;
 }) {
+  if (!items.length) return <>{empty}</>;
   const max = Math.max(1, ...items.map((i) => i.count));
   return (
     <ol className="border-t border-line">
@@ -476,6 +480,26 @@ export function Analytics({ repo }: { repo: RepositorySummary }) {
   else {
     const data = analytics.data;
     const branch = data.branch ?? 'this branch';
+    const noCommits = (
+      <EmptyState
+        compact
+        className="border-t border-line"
+        art={<CommitsArt />}
+        title="No commits in this range"
+        action={
+          <Button
+            size="sm"
+            onClick={() =>
+              navigate({ name: 'repository', id: repo.id, tab: 'history' })
+            }
+          >
+            Open History
+          </Button>
+        }
+      >
+        Pick a longer range above, or see every commit on History.
+      </EmptyState>
+    );
     body = (
       <>
         <SummaryStrip
@@ -567,6 +591,7 @@ export function Analytics({ repo }: { repo: RepositorySummary }) {
                 .slice(0, moreFiles ? 20 : 5)
                 .map((f) => ({ name: f.path, count: f.commits }))}
               label={(n) => `${n === 1 ? 'commit' : 'commits'}`}
+              empty={noCommits}
             />
             {data.topFiles.length > 5 && (
               <Button
@@ -593,6 +618,7 @@ export function Analytics({ repo }: { repo: RepositorySummary }) {
                 count: a.commits,
               }))}
               label={(n) => `${n === 1 ? 'commit' : 'commits'}`}
+              empty={noCommits}
             />
             <p className="mt-2 text-[0.8125rem] text-muted">
               The same person can appear twice when their name differs between

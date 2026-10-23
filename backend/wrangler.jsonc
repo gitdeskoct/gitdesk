@@ -53,7 +53,9 @@
     // Git tokens: one per fetch or push, which the desktop reuses until a minute before expiry.
     { "name": "GIT_LIMITER", "namespace_id": "4105", "simple": { "limit": 30, "period": 60 } },
     // Pull request writes: comments, reviews and snapshots come in bursts during a review.
-    { "name": "PULL_LIMITER", "namespace_id": "4106", "simple": { "limit": 60, "period": 60 } }
+    { "name": "PULL_LIMITER", "namespace_id": "4106", "simple": { "limit": 60, "period": 60 } },
+    // Push reports: one per push to the account's Git URL, plus retries of earlier ones.
+    { "name": "SYNC_LIMITER", "namespace_id": "4107", "simple": { "limit": 60, "period": 60 } }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]
@@ -106,7 +108,8 @@
         { "name": "API_LIMITER", "namespace_id": "5103", "simple": { "limit": 120, "period": 60 } },
         { "name": "WRITE_LIMITER", "namespace_id": "5104", "simple": { "limit": 10, "period": 60 } },
         { "name": "GIT_LIMITER", "namespace_id": "5105", "simple": { "limit": 30, "period": 60 } },
-        { "name": "PULL_LIMITER", "namespace_id": "5106", "simple": { "limit": 60, "period": 60 } }
+        { "name": "PULL_LIMITER", "namespace_id": "5106", "simple": { "limit": 60, "period": 60 } },
+        { "name": "SYNC_LIMITER", "namespace_id": "5107", "simple": { "limit": 60, "period": 60 } }
       ],
       "triggers": {
         "crons": ["0 3 * * *"]

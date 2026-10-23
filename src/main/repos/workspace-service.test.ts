@@ -534,6 +534,7 @@ describe('push', () => {
       {
         status: 'failed',
         reason: 'auth',
+        code: 'AUTH_EXPIRED',
         message: "The Git host didn't answer. Try again in a moment.",
       },
     );

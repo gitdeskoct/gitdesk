@@ -3,11 +3,13 @@ import {
   ArrowUp,
   CircleAlert,
   CircleCheck,
+  Clock,
   CloudOff,
   FolderX,
   GitBranch,
   GitMerge,
   Pencil,
+  TriangleAlert,
   type LucideIcon,
 } from 'lucide-react';
 import type { RepositorySummary } from '../../../shared/repos';
@@ -52,13 +54,30 @@ const plural = (count: number, word: string) =>
 
 export function TreeChip({ repo }: { repo: RepositorySummary }) {
   if (repo.availability === 'missing')
-    return <Chip icon={FolderX} tone="bad">Folder missing</Chip>;
+    return (
+      <Chip icon={FolderX} tone="bad">
+        Folder missing
+      </Chip>
+    );
   if (repo.availability === 'not-a-repo')
-    return <Chip icon={CircleAlert} tone="bad">Not a repository</Chip>;
+    return (
+      <Chip icon={CircleAlert} tone="bad">
+        Not a repository
+      </Chip>
+    );
   if (repo.error && !repo.status)
-    return <Chip icon={CircleAlert} tone="bad">Can't read</Chip>;
+    return (
+      <Chip icon={CircleAlert} tone="bad">
+        Can't read
+      </Chip>
+    );
   const state = treeState(repo);
-  if (state === 'unknown') return <Chip tone="muted" quiet>Not checked yet</Chip>;
+  if (state === 'unknown')
+    return (
+      <Chip tone="muted" quiet>
+        Not checked yet
+      </Chip>
+    );
   if (state === 'conflict')
     return (
       <Chip icon={GitMerge} tone="bad">
@@ -67,9 +86,16 @@ export function TreeChip({ repo }: { repo: RepositorySummary }) {
     );
   if (state === 'changed')
     return (
-      <Chip icon={Pencil} tone="warn">{`${changeCount(repo.status)} changed`}</Chip>
+      <Chip
+        icon={Pencil}
+        tone="warn"
+      >{`${changeCount(repo.status)} changed`}</Chip>
     );
-  return <Chip icon={CircleCheck} tone="ok">Clean</Chip>;
+  return (
+    <Chip icon={CircleCheck} tone="ok">
+      Clean
+    </Chip>
+  );
 }
 
 export function SyncChip({ repo }: { repo: RepositorySummary }) {
@@ -79,15 +105,37 @@ export function SyncChip({ repo }: { repo: RepositorySummary }) {
     case 'unknown':
       return null;
     case 'no-remote':
-      return <Chip icon={CloudOff} tone="muted" quiet>No remote</Chip>;
+      return (
+        <Chip icon={CloudOff} tone="muted" quiet>
+          No remote
+        </Chip>
+      );
     case 'no-upstream':
-      return <Chip tone="muted" quiet>No upstream</Chip>;
+      return (
+        <Chip tone="muted" quiet>
+          No upstream
+        </Chip>
+      );
+    case 'gone':
+      return (
+        <Chip icon={TriangleAlert} tone="warn">
+          Upstream gone
+        </Chip>
+      );
     case 'up-to-date':
-      return <Chip tone="muted" quiet>Up to date</Chip>;
+      return (
+        <Chip tone="muted" quiet>
+          Up to date
+        </Chip>
+      );
     case 'ahead':
-      return <Chip icon={ArrowUp} tone="accent">{`${status!.ahead} to push`}</Chip>;
+      return (
+        <Chip icon={ArrowUp} tone="accent">{`${status!.ahead} to push`}</Chip>
+      );
     case 'behind':
-      return <Chip icon={ArrowDown} tone="warn">{`${status!.behind} behind`}</Chip>;
+      return (
+        <Chip icon={ArrowDown} tone="warn">{`${status!.behind} behind`}</Chip>
+      );
     case 'diverged':
       return (
         <Chip icon={GitBranch} tone="warn">
@@ -95,6 +143,30 @@ export function SyncChip({ repo }: { repo: RepositorySummary }) {
         </Chip>
       );
   }
+}
+
+// The counts above come from a fetch over an hour old, or none: said in words, next to them.
+export const STALE_AFTER_MS = 60 * 60_000;
+export function StaleChip({
+  repo,
+  now,
+  label,
+}: {
+  repo: RepositorySummary;
+  now: number;
+  label: string;
+}) {
+  const fetchedAt = repo.status?.fetchedAt ?? null;
+  if (
+    !repo.status?.upstream ||
+    (fetchedAt && now - fetchedAt <= STALE_AFTER_MS)
+  )
+    return null;
+  return (
+    <Chip icon={Clock} tone="warn">
+      {label}
+    </Chip>
+  );
 }
 
 export function BranchLabel({

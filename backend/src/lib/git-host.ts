@@ -9,6 +9,10 @@ export type GitHost = {
   remove(name: string): Promise<void>;
   token(name: string, scope: GitScope, ttlSeconds: number): Promise<{ token: string; expiresAt: number }>;
   revokeAll(name: string): Promise<number>;
+  // Read-only checks of what a push left on the server.
+  hasCommit(name: string, oid: string): Promise<boolean>;
+  // The commit a branch points at now, or null when there is no such branch.
+  tip(name: string, ref: string): Promise<string | null>;
 };
 
 const isCode = (err: unknown, code: string): boolean =>
@@ -56,6 +60,13 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
         const created = await repo.createToken(scope, ttlSeconds);
         return { token: created.plaintext, expiresAt: Date.parse(created.expiresAt) };
       });
+    },
+    hasCommit(name, oid) {
+      return withRepo(artifacts, name, async (repo) => (await repo.readCommit(oid)) !== null);
+    },
+    tip(name, ref) {
+      // log() follows first parents from the ref and returns nothing for a ref it can't resolve.
+      return withRepo(artifacts, name, async (repo) => (await repo.log({ ref, limit: 1 }))[0]?.hash ?? null);
     },
     revokeAll(name) {
       return withRepo(artifacts, name, async (repo) => {

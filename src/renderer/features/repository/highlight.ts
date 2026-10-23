@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import type { HighlighterCore, ThemedToken } from 'shiki/core';
 import type { CodeTheme } from '../../../shared/settings';
 
@@ -219,4 +220,33 @@ export async function tokenizeLines(
       style: styleOf(token),
     })),
   );
+}
+
+// Tokens for each line of one block of text, such as one side of a conflict; null until ready,
+// when Settings › Code turns syntax colors off, or for a language Shiki doesn't know.
+export function useLineTokens(
+  text: string | null,
+  path: string,
+  theme: CodeTheme,
+  enabled: boolean,
+): (CodeToken[] | null)[] | null {
+  const [result, setResult] = useState<{
+    text: string;
+    tokens: CodeToken[][] | null;
+  } | null>(null);
+  useEffect(() => {
+    if (!enabled || text === null) return;
+    const lang = languageOf(path);
+    if (!lang) return;
+    let cancelled = false;
+    void tokenizeLines(text.split('\n'), lang, theme)
+      .then((tokens) => {
+        if (!cancelled) setResult({ text, tokens });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [text, path, theme, enabled]);
+  return enabled && result && result.text === text ? result.tokens : null;
 }

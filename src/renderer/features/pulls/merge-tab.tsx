@@ -38,6 +38,7 @@ import {
   useSetPullStatus,
 } from '../../lib/pull-queries';
 import { useJobProgress, useSettings } from '../../lib/queries';
+import { useLineTokens } from '../repository/highlight';
 import { OpenInEditorButton } from '../repository/editor-button';
 import { usePushAction } from '../repository/use-push';
 import { ChoiceList } from './choice-list';
@@ -354,27 +355,56 @@ const KIND_WORDS: Record<ConflictFile['kind'], string> = {
   'added-by-source': 'Added in the source only',
 };
 
-function CodeBox({ text, label }: { text: string | null; label: string }) {
+// One version of a conflicted file, with Shiki colors when Settings › Code allows them. Conflict
+// markers stay plain and carry a label, so they never read as code.
+function CodeBox({
+  text,
+  label,
+  path,
+  upstream,
+}: {
+  text: string | null;
+  label: string;
+  path: string;
+  upstream: boolean;
+}) {
+  const { data: settings } = useSettings();
+  const tokens = useLineTokens(
+    text,
+    path,
+    settings?.codeTheme ?? 'github',
+    settings?.diffSyntax ?? true,
+  );
   if (text === null)
     return (
       <p className="rounded-sm border border-line bg-sunken px-3 py-2 text-[0.8125rem] text-muted">
         {label}
       </p>
     );
+  const words = upstream
+    ? ['Your side starts', 'Incoming side starts', 'Incoming side ends']
+    : ['Target side starts', 'Source side starts', 'Source side ends'];
   return (
     <pre className="code-text max-h-72 overflow-auto rounded-sm border border-line bg-surface px-3 py-2 whitespace-pre">
       {text.split('\n').map((line, i) => {
         const marker = /^(<{7}|={7}|>{7})(\s|$)/.test(line);
+        const lineTokens = marker ? null : tokens?.[i];
         return (
           <div key={i} className={cn(marker && 'bg-warning-soft')}>
-            {line || ' '}
+            {lineTokens
+              ? lineTokens.map((token, k) => (
+                  <span key={k} className="code-token" style={token.style}>
+                    {token.content}
+                  </span>
+                ))
+              : line || ' '}
             {marker && (
               <span className="ml-3 font-sans text-[0.71875rem] font-semibold text-ink">
                 {line.startsWith('<')
-                  ? 'Target side starts'
+                  ? words[0]
                   : line.startsWith('=')
-                    ? 'Source side starts'
-                    : 'Source side ends'}
+                    ? words[1]
+                    : words[2]}
               </span>
             )}
           </div>
@@ -384,14 +414,18 @@ function CodeBox({ text, label }: { text: string | null; label: string }) {
   );
 }
 
+// A pull request merge or revert, or a pull of the upstream (`upstream` set), which reads in its
+// own words: yours and incoming rather than target and source.
 export function ConflictsView({
   repo,
   pullSource,
   pullTarget,
+  upstream = false,
 }: {
   repo: RepositorySummary;
   pullSource: string;
   pullTarget: string;
+  upstream?: boolean;
 }) {
   const conflicts = useConflicts(repo.id, repo.statusAt);
   const [picked, setPicked] = useState<string | null>(null);
@@ -404,8 +438,36 @@ export function ConflictsView({
   const file = files.find((f) => f.path === picked) ?? files[0] ?? null;
   const sides = useConflictSides(repo.id, file?.path ?? null, repo.statusAt);
   const reverting = conflicts.data?.operation === 'revert';
+  const what = upstream ? 'pull' : reverting ? 'revert' : 'merge';
+  const sideNames = upstream
+    ? { target: `Yours, ${pullTarget}`, source: `Incoming, ${pullSource}` }
+    : { target: `Target, ${pullTarget}`, source: `Source, ${pullSource}` };
 
   if (conflicts.isPending) return <Loading label="Reading the conflicts…" />;
+  // Without Git's answer nothing can be called resolved, so Continue isn't offered.
+  if (conflicts.isError)
+    return (
+      <EmptyState
+        compact
+        className="mt-5 border-t border-line"
+        art={<DiffArt />}
+        title="Couldn't read the conflicts"
+        action={
+          <Button
+            size="sm"
+            pending={conflicts.isFetching}
+            onClick={() => void conflicts.refetch()}
+          >
+            Try again
+          </Button>
+        }
+      >
+        {ipcErrorMessage(
+          conflicts.error,
+          "Git didn't answer, so gitdesk can't tell which files still conflict.",
+        )}
+      </EmptyState>
+    );
   const done = !files.length;
   return (
     <section aria-labelledby="conflicts-title" className="pt-5">
@@ -415,7 +477,11 @@ export function ConflictsView({
             id="conflicts-title"
             className="text-[1.0625rem] font-semibold text-ink"
           >
-            {reverting ? 'Resolve revert conflicts' : 'Resolve merge conflicts'}
+            {upstream
+              ? 'Resolve conflicts to finish the pull'
+              : reverting
+                ? 'Resolve revert conflicts'
+                : 'Resolve merge conflicts'}
           </h2>
           <p className="text-xs text-muted">
             <span className="font-mono">{pullSource}</span> into{' '}
@@ -428,9 +494,7 @@ export function ConflictsView({
               : ''}
           </p>
         </div>
-        <Button onClick={() => setAborting(true)}>
-          {reverting ? 'Abort revert' : 'Abort merge'}
-        </Button>
+        <Button onClick={() => setAborting(true)}>Abort {what}</Button>
         <Button
           variant="primary"
           pending={proceed.isPending}
@@ -442,14 +506,17 @@ export function ConflictsView({
             proceed.mutate(undefined, {
               onSuccess: (result) => {
                 if (result.status === 'merged')
-                  toast({ tone: 'success', title: 'Merged' });
+                  toast({
+                    tone: 'success',
+                    title: upstream ? `Pulled ${pullSource}` : 'Merged',
+                  });
                 if (result.status === 'reverted')
                   toast({ tone: 'success', title: 'Reverted' });
               },
             })
           }
         >
-          {reverting ? 'Continue revert' : 'Continue merge'}
+          Continue {what}
         </Button>
       </div>
       <p id="continue-why" className="mt-1 text-xs text-muted">
@@ -461,10 +528,7 @@ export function ConflictsView({
           className="mt-3 flex flex-wrap items-center gap-3 bg-danger-soft px-3 py-2.5 text-[0.8125rem] text-ink"
         >
           <span className="min-w-0 flex-1">
-            <b className="font-semibold">
-              Abort this {reverting ? 'revert' : 'merge'}?
-            </b>{' '}
-            Git puts{' '}
+            <b className="font-semibold">Abort this {what}?</b> Git puts{' '}
             <span className="font-mono text-[0.78125rem]">{pullTarget}</span>{' '}
             back where it was and drops the resolutions made here. gitdesk
             started on a clean tree, so nothing of yours is lost.
@@ -477,14 +541,14 @@ export function ConflictsView({
               abort.mutate(undefined, { onSuccess: () => setAborting(false) })
             }
           >
-            {reverting ? 'Abort revert' : 'Abort merge'}
+            Abort {what}
           </Button>
           <Button size="sm" onClick={() => setAborting(false)}>
             Keep resolving
           </Button>
         </div>
       )}
-      {[proceed.error, abort.error, resolve.error, conflicts.error].map(
+      {[proceed.error, abort.error, resolve.error].map(
         (error, i) =>
           error && (
             <InlineStatus key={i} tone="danger" className="mt-3">
@@ -505,7 +569,7 @@ export function ConflictsView({
               pending={proceed.isPending}
               onClick={() => proceed.mutate()}
             >
-              {reverting ? 'Continue revert' : 'Continue merge'}
+              Continue {what}
             </Button>
           }
         >
@@ -563,15 +627,15 @@ export function ConflictsView({
                       [
                         [
                           'target',
-                          `Target, ${pullTarget}`,
+                          sideNames.target,
                           sides.data.target,
-                          'Use target version',
+                          upstream ? 'Use yours' : 'Use target version',
                         ],
                         [
                           'source',
-                          `Source, ${pullSource}`,
+                          sideNames.source,
                           sides.data.source,
-                          'Use source version',
+                          upstream ? 'Use incoming' : 'Use source version',
                         ],
                       ] as const
                     ).map(([take, title, text, action]) => (
@@ -599,6 +663,8 @@ export function ConflictsView({
                           </Button>
                         </div>
                         <CodeBox
+                          path={file.path}
+                          upstream={upstream}
                           text={sides.data.binary ? null : text}
                           label={
                             sides.data.binary
@@ -630,6 +696,8 @@ export function ConflictsView({
                         </span>
                       </div>
                       <CodeBox
+                        path={file.path}
+                        upstream={upstream}
                         text={sides.data.merged}
                         label="The file is not in the working tree."
                       />

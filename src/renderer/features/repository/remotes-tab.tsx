@@ -19,6 +19,7 @@ import { fileManagerLabel } from '../repos/repo-actions';
 import { Section } from './history';
 import { HostedRemoteSection, sameGitUrl } from './hosted-remote';
 import { useFetchAction } from './use-fetch';
+import { AutoLinkBand, MoveSection } from '../sync/move-section';
 
 const PROTOCOL: Record<string, string> = {
   https: 'HTTPS',
@@ -135,9 +136,14 @@ export function RemotesTab({ repo }: { repo: RepositorySummary }) {
                   )}
                 </div>
                 {running ? (
-                  <Button size="sm" onClick={action.cancel}>
-                    Cancel fetch
-                  </Button>
+                  <span className="flex gap-1.5">
+                    <Button size="sm" pending>
+                      Fetching
+                    </Button>
+                    <Button size="sm" variant="ghost" onClick={action.cancel}>
+                      Cancel
+                    </Button>
+                  </span>
                 ) : (
                   <Button
                     size="sm"
@@ -189,6 +195,7 @@ export function RemotesTab({ repo }: { repo: RepositorySummary }) {
 
   return (
     <>
+      <AutoLinkBand repo={repo} />
       <Section
         id="git-remotes-heading"
         title="Git remotes"
@@ -196,6 +203,7 @@ export function RemotesTab({ repo }: { repo: RepositorySummary }) {
         className="mt-6"
       >
         {body}
+        <MoveSection repo={repo} />
       </Section>
       <HostedRemoteSection
         repo={repo}

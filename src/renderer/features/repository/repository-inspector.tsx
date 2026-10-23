@@ -6,6 +6,7 @@ import type {
 import { Button } from '../../components/ui/button';
 import { LongValue } from '../../components/ui/long-value';
 import { InlineStatus } from '../../components/ui/status';
+import { useToast } from '../../components/ui/toast';
 import { relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import type { RepoItem } from '../../lib/repo-status';
@@ -67,6 +68,7 @@ function LocalInspector({
 }) {
   const openRepo = useOpenRepo();
   const locate = useLocateRepository();
+  const toast = useToast();
   const copyPath = useCopyRepositoryPath();
   const [mode, setMode] = useState<ManageMode | null>(null);
   const { actions } = useRepoActions(repo, setMode, remote);
@@ -105,7 +107,17 @@ function LocalInspector({
             <Button
               size="sm"
               pending={locate.isPending}
-              onClick={() => locate.mutate(repo.id)}
+              onClick={() =>
+                locate.mutate(repo.id, {
+                  onSuccess: (found) =>
+                    found.status === 'different' &&
+                    toast({
+                      tone: 'danger',
+                      title: 'That folder holds a different repository',
+                      description: `Its history starts at ${found.found ?? 'no commit'}, not ${found.expected}. Open ${repo.name} and locate it there to use that folder anyway.`,
+                    }),
+                })
+              }
             >
               Locate folder
             </Button>

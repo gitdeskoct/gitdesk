@@ -7,6 +7,7 @@ import {
   Info,
   Laptop,
   Palette,
+  RefreshCw,
   GitCommitHorizontal,
   Keyboard,
   LayoutDashboard,
@@ -33,6 +34,7 @@ import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
 import { HostingSection } from './hosting-section';
 import { PullsSection } from './pulls-section';
+import { SyncSection } from './sync-section';
 import { ShortcutsSection } from './shortcuts-section';
 import { WorkspaceSection } from './workspace-section';
 import { SECTION_LABELS, searchSettings } from './search-index';
@@ -49,6 +51,7 @@ const GROUPS: {
       { id: 'code', icon: Braces },
       { id: 'workspace', icon: LayoutDashboard },
       { id: 'pulls', icon: GitPullRequest },
+      { id: 'sync', icon: RefreshCw },
       { id: 'editor', icon: AppWindow },
       { id: 'git', icon: GitCommitHorizontal },
       { id: 'shortcuts', icon: Keyboard },
@@ -129,6 +132,7 @@ export function SettingsLayout({
     code: <CodeSection />,
     workspace: <WorkspaceSection />,
     pulls: <PullsSection />,
+    sync: <SyncSection />,
     editor: <EditorSection />,
     git: <GitSection />,
     shortcuts: <ShortcutsSection />,

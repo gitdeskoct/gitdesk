@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { gitDefaultsSchema, gitIdentityInputSchema } from './ipc';
 import { repoIdSchema } from './repos';
 import { EDITOR_IDS, type EditorId } from './settings';
+import type { SyncCode } from './sync';
 
 // The local Git workspace contract. Repository-relative paths are the one place the renderer sends
 // a path: main only acts on a path that a fresh `git status` (or the commit it names) reports, so
@@ -180,6 +181,8 @@ export type FetchResult =
         | 'cancelled'
         | 'refused'
         | 'failed';
+      // The stable code behind the reason (an auth failure is an expired sign-in or no access).
+      code?: SyncCode;
       message: string;
     };
 
@@ -187,14 +190,24 @@ export const pushInputSchema = z
   .object({ id: repoIdSchema, jobId: z.uuid() })
   .strict();
 export type PushResult =
-  | { status: 'pushed'; remote: string; branch: string; at: number }
+  | {
+      status: 'pushed';
+      remote: string;
+      branch: string;
+      at: number;
+      operationId?: string;
+    }
   | {
       status: 'failed';
       reason:
         | Extract<FetchResult, { status: 'failed' }>['reason']
         | 'rejected'
         | 'no-remote'
-        | 'detached';
+        | 'detached'
+        | 'unknown';
+      code?: SyncCode;
+      // Journaled pushes; an unknown one is settled with Check status.
+      operationId?: string;
       message: string;
     };
 

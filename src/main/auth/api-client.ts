@@ -39,6 +39,15 @@ const overviewResponse = z.object({
   serverTime: z.number(),
 });
 // The token is opaque to gitdesk: bounded in size and free of anything that could end a header.
+const syncEventResponse = z.object({
+  event: z.object({
+    result: z.enum(['confirmed', 'unverified', 'rejected', 'failed']),
+    tip: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/)
+      .nullable(),
+  }),
+});
 const credentialsResponse = z.object({
   remote: gitUrlSchema,
   token: z
@@ -323,6 +332,23 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
       request(
         `/api/v1/repositories/${encodeURIComponent(id)}/git-credentials`,
         credentialsResponse,
+        { method: 'POST', body, token },
+      ),
+    // Tells the account about a push to its Git URL; the server checks Artifacts for the commit.
+    reportSync: (
+      token: string,
+      id: string,
+      body: {
+        operationId: string;
+        kind: 'push';
+        ref: string;
+        oldOid: string | null;
+        newOid: string;
+      },
+    ) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/sync-events`,
+        syncEventResponse,
         { method: 'POST', body, token },
       ),
     revokeGitCredentials: (token: string, id: string) =>

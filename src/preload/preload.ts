@@ -11,6 +11,7 @@ import {
   type RepositorySummary,
 } from '../shared/repos';
 import { PULLS_IPC as P } from '../shared/pulls';
+import { SYNC_IPC as S } from '../shared/sync';
 import { WORKSPACE_IPC as W } from '../shared/workspace';
 
 // Each method maps to one fixed channel. No generic invoke, no raw ipcRenderer, no token access.
@@ -69,6 +70,7 @@ const api: DesktopApi = {
     add: () => ipcRenderer.invoke(R.add),
     initialize: (token) => ipcRenderer.invoke(R.initialize, { token }),
     locate: (id) => ipcRenderer.invoke(R.locate, id),
+    locateConfirm: (input) => ipcRenderer.invoke(R.locateConfirm, input),
     refresh: (id) => ipcRenderer.invoke(R.refresh, id),
     open: (id) => ipcRenderer.invoke(R.open, id),
     pin: (id, pinned) => ipcRenderer.invoke(R.pin, { id, pinned }),
@@ -93,6 +95,12 @@ const api: DesktopApi = {
     addHostedRemote: (id) => ipcRenderer.invoke(R.addHostedRemote, id),
     copyGitCommand: (id) => ipcRenderer.invoke(R.copyGitCommand, id),
     revokeGitTokens: (id) => ipcRenderer.invoke(R.revokeGitTokens, id),
+    linkNamed: (input) => ipcRenderer.invoke(R.linkNamed, input),
+    movePreview: (id) => ipcRenderer.invoke(R.movePreview, id),
+    move: (input) => ipcRenderer.invoke(R.move, input),
+    moveCancel: (jobId) => ipcRenderer.invoke(R.moveCancel, jobId),
+    moveUndoState: (id) => ipcRenderer.invoke(R.moveUndoState, id),
+    undoMove: (id) => ipcRenderer.invoke(R.undoMove, id),
     history: (id) => ipcRenderer.invoke(R.history, id),
     update: (input) => ipcRenderer.invoke(R.update, input),
     unlink: (id) => ipcRenderer.invoke(R.unlink, id),
@@ -178,6 +186,18 @@ const api: DesktopApi = {
     revert: (input) => ipcRenderer.invoke(P.revert, input),
     deleteBranch: (input) => ipcRenderer.invoke(P.deleteBranch, input),
     stats: (input) => ipcRenderer.invoke(P.stats, input),
+  },
+  sync: {
+    overview: (id) => ipcRenderer.invoke(S.overview, id),
+    compare: (id) => ipcRenderer.invoke(S.compare, id),
+    check: (id) => ipcRenderer.invoke(S.check, id),
+    pull: (input) => ipcRenderer.invoke(S.pull, input),
+    cancel: (jobId) => ipcRenderer.invoke(S.cancel, jobId),
+    publish: (input) => ipcRenderer.invoke(S.publish, input),
+    setUpstream: (input) => ipcRenderer.invoke(S.setUpstream, input),
+    checkPush: (input) => ipcRenderer.invoke(S.checkPush, input),
+    activity: (input) => ipcRenderer.invoke(S.activity, input),
+    fileDiff: (input) => ipcRenderer.invoke(S.fileDiff, input),
   },
 };
 

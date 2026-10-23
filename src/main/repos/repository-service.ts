@@ -14,6 +14,8 @@ import {
   type ProgressEvent,
   type CloneResult,
   type AddRepositoryResult,
+  type AutoLinkState,
+  type LocateResult,
   type CreateRepositoryInput,
   type CreateRepositoryResult,
   type HostedRemoteResult,
@@ -26,7 +28,7 @@ import { gitDefaultsSchema } from '../../shared/ipc';
 import type { Settings } from '../../shared/settings';
 import { UserError } from '../errors';
 import { sameUrl } from '../remote/git-auth';
-import type { RemoteService } from '../remote/remote-service';
+import { NameTakenError, type RemoteService } from '../remote/remote-service';
 import {
   canonicalPath,
   describeGitError,
@@ -127,6 +129,8 @@ export function createRepositoryService(deps: {
   ) => void;
   // Absent when gitdesk runs without an account; clone and the hosted remote are then unavailable.
   hosting?: Hosting;
+  // Signed in and connected, so the automatic remote can be made now rather than after sign-in.
+  signedIn?: () => boolean;
   cloneProtocols?: string[];
   now?: () => number;
   log?: Pick<Console, 'warn'>;
@@ -165,6 +169,11 @@ export function createRepositoryService(deps: {
     inspecting: inspecting.has(row.id) || queued.has(row.id),
     error: row.error,
     remoteId: row.remoteId,
+    autoLink:
+      row.remoteId || !autoLinkWanted()
+        ? null
+        : (autoLinks.get(row.id) ??
+          (row.autoLinkPending ? { state: 'waiting' } : null)),
   });
 
   const list = () => store.list().map(toSummary);
@@ -210,6 +219,11 @@ export function createRepositoryService(deps: {
         err instanceof Error ? err.message : err,
       );
     }
+    // Read once per registration: the first commit identifies the repository wherever it moves.
+    if (!row.rootCommit && result.status?.headOid)
+      await rootCommits(row.rootPath)
+        .then((roots) => roots[0] && store.setRootCommit(id, roots[0]))
+        .catch(() => undefined);
     // Only a change of state is news; an unresolved conflict is reported once, not every check.
     const after = store.get(id);
     if (after && row.availability === 'available') {
@@ -345,7 +359,11 @@ export function createRepositoryService(deps: {
   async function register(
     root: string,
     activity: LocalActivity['type'],
-    extra: { description?: string | null; remoteId?: string | null } = {},
+    extra: {
+      description?: string | null;
+      remoteId?: string | null;
+      autoLink?: boolean;
+    } = {},
   ): Promise<{ status: 'added' | 'exists'; repository: RepositorySummary }> {
     const key = pathKey(root);
     const existing = store.idForKey(key);
@@ -367,7 +385,34 @@ export function createRepositoryService(deps: {
       activity,
     });
     await enqueue([id]);
+    // Not awaited: the project is usable at once, and the link reports on its own row.
+    if (!extra.remoteId && extra.autoLink !== false) void autoLink(id);
     return { status: 'added', repository: toSummary(rowOrThrow(id)) };
+  }
+
+  async function rootCommits(root: string): Promise<string[]> {
+    return (
+      await gitAt(root, { timeoutMs: 60_000 }).raw([
+        'rev-list',
+        '--max-parents=0',
+        'HEAD',
+      ])
+    )
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => /^[0-9a-f]{40,64}$/.test(line))
+      .sort();
+  }
+
+  function relocate(id: string, root: string): RepositorySummary {
+    const key = pathKey(root);
+    const owner = store.idForKey(key);
+    if (owner && owner !== id)
+      throw new RepoError('That folder is already in gitdesk.');
+    unwatch(id);
+    generation.set(id, (generation.get(id) ?? 0) + 1);
+    store.relocate(id, root, key);
+    return toSummary(rowOrThrow(id));
   }
 
   function assertRoom(): void {
@@ -391,13 +436,21 @@ export function createRepositoryService(deps: {
 
   // The local id is the idempotency key: one local repository gets at most one remote, however
   // often the request is retried. Folder names with spaces or accents become a valid remote name.
-  async function createRemoteFor(row: RepoRow): Promise<RemoteRepository> {
-    const name = repositoryNameSchema.safeParse(
+  const remoteNameFor = (row: RepoRow) =>
+    repositoryNameSchema.safeParse(
       row.name
         .normalize('NFKD')
         .replace(/[^A-Za-z0-9._-]+/g, '-')
         .replace(/^[.-]+|-+$/g, ''),
     );
+
+  async function createRemoteFor(
+    row: RepoRow,
+    chosen?: string,
+  ): Promise<RemoteRepository> {
+    const name = chosen
+      ? repositoryNameSchema.safeParse(chosen)
+      : remoteNameFor(row);
     if (!name.success)
       throw new RepoError(
         "This folder's name can't be used for a remote. Rename the folder first.",
@@ -414,6 +467,64 @@ export function createRepositoryService(deps: {
         log.warn('hosted remote not added', err),
       );
     return remote;
+  }
+
+  // The automatic private remote. Signed out, the project waits for sign-in; a taken name tries
+  // name-2 to name-9 (the local id stays the idempotency key, so a retry never makes two).
+  const autoLinks = new Map<string, AutoLinkState>();
+  const autoLinkWanted = () =>
+    deps.settings().autoHostedRemote && !deps.settings().localOnly;
+
+  async function autoLink(id: string): Promise<void> {
+    const row = store.get(id);
+    if (!row || row.remoteId || !autoLinkWanted()) return;
+    if (!deps.signedIn?.()) {
+      store.setAutoLinkPending(id, true);
+      changed();
+      return;
+    }
+    const base = remoteNameFor(row);
+    if (!base.success) {
+      autoLinks.set(id, { state: 'name-taken', name: '' });
+      changed();
+      return;
+    }
+    autoLinks.set(id, { state: 'creating' });
+    changed();
+    try {
+      for (let n = 1; n <= 9; n++) {
+        try {
+          await createRemoteFor(row, n === 1 ? base.data : `${base.data}-${n}`);
+          autoLinks.delete(id);
+          return;
+        } catch (err) {
+          if (!(err instanceof NameTakenError)) throw err;
+        }
+      }
+      autoLinks.set(id, { state: 'name-taken', name: base.data });
+    } catch (err) {
+      autoLinks.set(id, {
+        state: 'failed',
+        message:
+          err instanceof UserError
+            ? err.message
+            : "The private remote wasn't created.",
+      });
+    } finally {
+      changed();
+    }
+  }
+
+  // One at a time after sign-in: the account allows 10 repository writes a minute.
+  let draining: Promise<void> | null = null;
+  function drainAutoLinks(): Promise<void> {
+    draining ??= (async () => {
+      for (const row of store.list())
+        if (row.autoLinkPending && !row.remoteId) await autoLink(row.id);
+    })().finally(() => {
+      draining = null;
+    });
+    return draining;
   }
 
   async function hostedUrlFor(row: RepoRow): Promise<string> {
@@ -520,26 +631,51 @@ export function createRepositoryService(deps: {
       return (await register(await canonicalPath(dir), 'created')).repository;
     },
 
-    // Points a moved repository's registration at its new folder.
-    async locate(id: string): Promise<RepositorySummary | null> {
-      rowOrThrow(id);
+    // Points a moved repository's registration at its new folder. A folder whose history starts
+    // at another commit is a different repository, so it waits for the person to confirm.
+    async locate(id: string): Promise<LocateResult> {
+      const row = rowOrThrow(id);
       const dir = await deps.desktop.pickDirectory({
         title: 'Locate repository',
         create: false,
       });
-      if (!dir) return null;
+      if (!dir) return { status: 'canceled' };
       const root = await resolveRoot(dir);
       if (root.kind !== 'repository')
         throw new RepoError("That folder isn't a Git repository.");
-      const key = pathKey(root.root);
-      const owner = store.idForKey(key);
+      const owner = store.idForKey(pathKey(root.root));
       if (owner && owner !== id)
         throw new RepoError('That folder is already in gitdesk.');
-      unwatch(id);
-      generation.set(id, (generation.get(id) ?? 0) + 1);
-      store.relocate(id, root.root, key);
+      if (row.rootCommit) {
+        const roots = await rootCommits(root.root).catch((): string[] => []);
+        if (!roots.includes(row.rootCommit))
+          return {
+            status: 'different',
+            token: issueToken(root.root),
+            displayPath: displayPath(root.root),
+            expected: row.rootCommit.slice(0, 7),
+            found: roots[0]?.slice(0, 7) ?? null,
+          };
+      }
+      relocate(id, root.root);
       await enqueue([id]);
-      return toSummary(rowOrThrow(id));
+      return { status: 'located', repository: toSummary(rowOrThrow(id)) };
+    },
+
+    async locateConfirm(input: {
+      id: string;
+      token: string;
+    }): Promise<RepositorySummary> {
+      rowOrThrow(input.id);
+      const dir = redeem(input.token);
+      const root = await resolveRoot(dir);
+      if (root.kind !== 'repository')
+        throw new RepoError("That folder isn't a Git repository any more.");
+      relocate(input.id, root.root);
+      const roots = await rootCommits(root.root).catch((): string[] => []);
+      if (roots[0]) store.setRootCommit(input.id, roots[0]);
+      await enqueue([input.id]);
+      return toSummary(rowOrThrow(input.id));
     },
 
     // One repository resolves when its check is done. All of them resolves once queued: with
@@ -790,6 +926,8 @@ export function createRepositoryService(deps: {
           'created',
           {
             description: input.description || null,
+            // The create panel asks about the remote itself.
+            autoLink: false,
           },
         ));
       } catch (err) {
@@ -839,7 +977,29 @@ export function createRepositoryService(deps: {
       const row = rowOrThrow(id);
       if (row.remoteId)
         throw new RepoError('This repository already has a remote.');
+      autoLinks.delete(id);
       return createRemoteFor(row);
+    },
+
+    async linkNamed(input: {
+      id: string;
+      name: string;
+    }): Promise<RemoteRepository> {
+      const row = rowOrThrow(input.id);
+      if (row.remoteId)
+        throw new RepoError('This repository already has a remote.');
+      autoLinks.delete(row.id);
+      try {
+        return await createRemoteFor(row, input.name);
+      } finally {
+        changed();
+      }
+    },
+
+    // Signed in: projects added while signed out get their private remote now.
+    handleAuth(status: { status: string }): void {
+      if (status.status === 'authenticated') void drainAutoLinks();
+      else changed();
     },
 
     async addHostedRemote(id: string): Promise<HostedRemoteResult> {
