@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import {
   SYNC_PAGE,
+  type AccountPush,
   type SyncActivityPage as Page_,
 } from '../../../shared/sync';
+import { Check, CircleAlert } from 'lucide-react';
 import {
   NoResultsArt,
   OfflineArt,
@@ -14,9 +16,14 @@ import { Pager } from '../../components/ui/pager';
 import { Segmented } from '../../components/ui/segmented';
 import { Loading } from '../../components/ui/status';
 import { cn } from '../../lib/cn';
-import { useNow } from '../../lib/format';
+import { relativeTime, useNow } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
-import { useSyncActivity } from '../../lib/sync-queries';
+import {
+  useAccountPushes,
+  useAccountPushStats,
+  useSyncActivity,
+} from '../../lib/sync-queries';
+import { useAuthStatus, useSettings } from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
 import { Axis, Bar, ChartTable, scaleTop } from '../repository/analytics';
 import { Page, PageTitle } from '../shell/page';
@@ -32,8 +39,15 @@ const weekName = (start: number, long = false) =>
       : { day: 'numeric', month: 'short' },
   ).format(new Date(start));
 
-// Did the pushes from this computer reach the server? One bar pair per local week.
-function PushChart({ weeks }: { weeks: Page_['weeks'] }) {
+// Did the pushes reach the server? One bar pair per week: local weeks for this computer, UTC
+// weeks for the account, whose records span every device.
+function PushChart({
+  weeks,
+  account = false,
+}: {
+  weeks: Page_['weeks'];
+  account?: boolean;
+}) {
   const [table, setTable] = useState(false);
   const confirmed = weeks.reduce((sum, w) => sum + w.confirmed, 0);
   const other = weeks.reduce((sum, w) => sum + w.other, 0);
@@ -113,16 +127,179 @@ function PushChart({ weeks }: { weeks: Page_['weeks'] }) {
       )}
       <figcaption className="mt-2.5 text-[0.8125rem] text-muted">
         {confirmed + other
-          ? `${confirmed} of ${confirmed + other} pushes in the last 8 weeks were confirmed${other ? `; ${other} ${other === 1 ? 'was' : 'were'} not.` : '.'} A push to your gitdesk remote counts once the server finds the commit; one to another provider, once that remote accepts it.`
-          : 'No pushes from this computer in the last 8 weeks.'}
+          ? `${confirmed} of ${confirmed + other} pushes in the last 8 weeks were confirmed${other ? `; ${other} ${other === 1 ? 'was' : 'were'} not.` : '.'}${account ? ' A push counts once the server finds its commit.' : ' A push to your gitdesk remote counts once the server finds the commit; one to another provider, once that remote accepts it.'}`
+          : account
+            ? 'No pushes to your gitdesk remotes in the last 8 weeks.'
+            : 'No pushes from this computer in the last 8 weeks.'}{' '}
+        {account &&
+          'Weeks are UTC, counted by your account across every device.'}
       </figcaption>
     </figure>
+  );
+}
+
+// The account's record of pushes to its Git URLs, from every device, a cursor page at a time.
+function AccountActivity() {
+  const [result, setResult] = useState<'all' | 'unverified'>('all');
+  const pushes = useAccountPushes(result, true);
+  const stats = useAccountPushStats(true);
+  const events = pushes.data?.pages.flatMap((p) => p.events) ?? [];
+
+  if (pushes.isPending || stats.isPending)
+    return <Loading label="Loading your account's pushes…" />;
+  if (pushes.isError || stats.isError)
+    return (
+      <EmptyState
+        art={<OfflineArt />}
+        title="Couldn't load your account's pushes"
+        action={
+          <Button
+            pending={pushes.isFetching || stats.isFetching}
+            onClick={() => {
+              void pushes.refetch();
+              void stats.refetch();
+            }}
+          >
+            Try again
+          </Button>
+        }
+      >
+        {ipcErrorMessage(
+          pushes.error ?? stats.error,
+          "The gitdesk server didn't answer.",
+        )}
+      </EmptyState>
+    );
+  if (!events.length && result === 'all')
+    return (
+      <EmptyState
+        art={<SyncArt />}
+        title="No pushes recorded yet"
+        action={
+          <Button
+            pending={pushes.isFetching || stats.isFetching}
+            onClick={() => {
+              void pushes.refetch();
+              void stats.refetch();
+            }}
+          >
+            Check again
+          </Button>
+        }
+      >
+        Pushes to your gitdesk remotes, from any computer, appear here once the
+        server has checked them.
+      </EmptyState>
+    );
+  return (
+    <>
+      <PushChart
+        account
+        weeks={stats.data.weeks.map((w) => ({
+          start: w.start,
+          confirmed: w.confirmed,
+          other: w.unverified,
+        }))}
+      />
+      <div className="mt-10 mb-2 flex flex-wrap items-center gap-3">
+        <h2 className="flex-1 text-[0.9375rem] font-semibold text-ink">
+          Pushes your account recorded
+        </h2>
+        <Segmented
+          label="Show"
+          value={result}
+          onChange={setResult}
+          options={[
+            { value: 'all', label: 'All' },
+            { value: 'unverified', label: 'Not confirmed' },
+          ]}
+        />
+      </div>
+      {events.length ? (
+        <>
+          <ul className="border-t border-line">
+            {events.map((event) => (
+              <AccountRow key={event.operationId} event={event} />
+            ))}
+          </ul>
+          {pushes.hasNextPage && (
+            <div className="pt-3">
+              <Button
+                size="sm"
+                pending={pushes.isFetchingNextPage}
+                onClick={() => void pushes.fetchNextPage()}
+              >
+                Load 20 more
+              </Button>
+            </div>
+          )}
+        </>
+      ) : (
+        <EmptyState
+          compact
+          className="border-t border-line"
+          art={<NoResultsArt />}
+          title="Every push is confirmed"
+          action={
+            <Button size="sm" onClick={() => setResult('all')}>
+              Show all
+            </Button>
+          }
+        >
+          The server found the commit of every push it recorded.
+        </EmptyState>
+      )}
+    </>
+  );
+}
+
+function AccountRow({ event }: { event: AccountPush }) {
+  const branch = event.ref.replace(/^refs\/heads\//, '');
+  const moved = event.tip && event.tip !== event.newOid;
+  return (
+    <li className="grid grid-cols-[1rem_minmax(0,1fr)_auto] items-start gap-x-3 gap-y-0.5 border-b border-line py-2.5 text-[0.8125rem]">
+      {event.result === 'confirmed' ? (
+        <Check aria-hidden className="mt-0.5 size-4 text-success" />
+      ) : (
+        <CircleAlert aria-hidden className="mt-0.5 size-4 text-warning" />
+      )}
+      <span className="min-w-0">
+        <span className="font-medium text-ink">Pushed {branch}</span>
+        <span className="text-muted"> · {event.repositoryName}</span>
+        <span className="block truncate font-mono text-xs text-muted">
+          {event.oldOid ? `${event.oldOid.slice(0, 7)}..` : ''}
+          {event.newOid.slice(0, 7)}
+          {moved && (
+            <span className="font-sans">
+              {' '}
+              · the branch has since moved to {event.tip!.slice(0, 7)}
+            </span>
+          )}
+        </span>
+      </span>
+      <span className="flex flex-col items-end gap-1 text-xs text-muted">
+        <span className="whitespace-nowrap">
+          {relativeTime(event.createdAt)}
+        </span>
+        <span className="inline-flex h-5 items-center rounded-[4px] border border-line bg-sunken px-1.5 text-[0.71875rem] font-medium whitespace-nowrap text-ink">
+          {event.result === 'confirmed'
+            ? 'Confirmed by server'
+            : 'Not confirmed'}
+        </span>
+      </span>
+    </li>
   );
 }
 
 export function SyncActivityPage() {
   useNow();
   const { navigate } = useNavigation();
+  const { data: auth } = useAuthStatus();
+  const { data: settings } = useSettings();
+  const canUseAccount =
+    auth?.status === 'authenticated' && !settings?.localOnly;
+  const [scope, setScope] = useState<'computer' | 'account'>('computer');
+  const showAccount = canUseAccount && scope === 'account';
   const [filter, setFilter] = useState<Filter>('all');
   const [page, setPage] = useState(1);
   const activity = useSyncActivity(filter, (page - 1) * SYNC_PAGE);
@@ -231,11 +408,29 @@ export function SyncActivityPage() {
 
   return (
     <Page crumbs={[{ label: 'Sync activity' }]}>
-      <PageTitle title="Sync activity">
-        Every fetch, pull and push gitdesk ran on this computer, newest first.
-        Kept for half a year.
+      <PageTitle
+        title="Sync activity"
+        actions={
+          canUseAccount && (
+            <Segmented
+              label="Whose syncs"
+              value={scope}
+              onChange={setScope}
+              options={[
+                { value: 'computer', label: 'This computer' },
+                { value: 'account', label: 'Your account' },
+              ]}
+            />
+          )
+        }
+      >
+        {showAccount
+          ? 'Every push to your gitdesk remotes from any computer, as the server recorded and checked it.'
+          : 'Every fetch, pull and push gitdesk ran on this computer, newest first. Kept for half a year.'}
       </PageTitle>
-      <div className="@container">{body}</div>
+      <div className="@container">
+        {showAccount ? <AccountActivity /> : body}
+      </div>
     </Page>
   );
 }

@@ -1,4 +1,4 @@
-import type { Hono } from 'hono';
+import { Hono } from 'hono';
 import { z } from 'zod';
 import { getDb } from '../../db/client';
 import type { AppEnv } from '../../env';
@@ -8,7 +8,9 @@ import { rateLimit } from '../../middleware/rate-limit';
 import { validate } from '../../middleware/validate';
 import { branchName } from '../pull-requests/schemas';
 import { repositoryParams } from '../repositories/schemas';
-import { recordPush } from './sync';
+import { listPushes, pushStats, recordPush } from './sync';
+import { cursor } from '../../lib/cursor';
+import { requireAuth } from '../../middleware/require-auth';
 
 const oid = z.string().regex(/^[0-9a-f]{40,64}$/);
 const syncLimit = rateLimit('SYNC_LIMITER', (c) => c.get('auth').accountId);
@@ -54,4 +56,26 @@ export function repositorySyncRoutes(
       return c.json({ event: { result: result.result, tip: result.tip } });
     },
   );
+}
+
+export const syncListQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: cursor(z.tuple([z.number().int().nonnegative(), z.uuid()])).optional(),
+  repositoryId: z.uuid().optional(),
+  result: z.enum(['confirmed', 'unverified']).optional(),
+});
+
+// The account's pushes across every device, for the desktop's Sync activity. Reads only.
+export function syncRoutes() {
+  const app = new Hono<AppEnv>();
+  app.use(requireAuth);
+  app.get('/', validate('query', syncListQuery), async (c) => {
+    const { accountId } = c.get('auth');
+    return c.json(await listPushes(getDb(c.env.DB), accountId, c.req.valid('query')));
+  });
+  app.get('/stats', async (c) => {
+    const { accountId } = c.get('auth');
+    return c.json(await pushStats(getDb(c.env.DB), accountId, Date.now()));
+  });
+  return app;
 }

@@ -11,6 +11,7 @@ import { authRoutes } from './modules/auth/routes';
 import { activityRoutes } from './modules/activity/routes';
 import { pullRequestRoutes } from './modules/pull-requests/routes';
 import { dashboardRoutes, repositoryRoutes } from './modules/repositories/routes';
+import { syncRoutes } from './modules/sync/routes';
 
 export type AppDeps = {
   google: GoogleProvider;
@@ -57,6 +58,7 @@ export function createApp(deps: AppDeps) {
   app.route('/api/v1/repositories', repositoryRoutes(gitHost));
   app.route('/api/v1/activity', activityRoutes());
   app.route('/api/v1/pull-requests', pullRequestRoutes());
+  app.route('/api/v1/sync-events', syncRoutes());
 
   app.onError(onError);
   app.notFound(notFound);

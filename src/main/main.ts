@@ -40,6 +40,7 @@ import { createNotifier } from './notifier';
 import { registerAppScheme, serveRendererFrom } from './protocol';
 import {
   createRemoteService,
+  userError,
   type RemoteService,
 } from './remote/remote-service';
 import { createGitAuth, type GitAuth } from './remote/git-auth';
@@ -383,6 +384,16 @@ async function start() {
     refresh: (id) => repos.refresh(id),
   });
   move.recover();
+  // Account reads for Sync activity: signed in and not local-only, with server errors in words.
+  async function accountCall<T>(fn: (token: string) => Promise<T>): Promise<T> {
+    if (settings.get().localOnly || auth.getStatus().status !== 'authenticated')
+      throw new UserError('Sign in to see the pushes your account recorded.');
+    try {
+      return await auth.authorized(fn);
+    } catch (err) {
+      throw userError(err, "Couldn't load your account's pushes.");
+    }
+  }
   const syncService = createSyncService({
     store,
     journal,
@@ -398,6 +409,10 @@ async function start() {
         api.reportSync(token, remoteId, body),
       );
       return event.result;
+    },
+    account: {
+      list: (input) => accountCall((token) => api.listSyncEvents(token, input)),
+      stats: () => accountCall((token) => api.syncStats(token)),
     },
     addActivity: (id, type, detail) =>
       store.addActivity(id, type, detail, Date.now()),

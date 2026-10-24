@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query';
 import type { PullStrategy, SyncActivityPage } from '../../shared/sync';
 import { invalidateSync, repoKeys } from './queries';
 
@@ -139,3 +144,23 @@ export const useLinkNamed = (id: string) =>
   useSyncMutation(id, (name: string) => repos().linkNamed({ id, name }));
 export const useLocateConfirm = (id: string) =>
   useSyncMutation(id, (token: string) => repos().locateConfirm({ id, token }));
+
+// The account's pushes from every device, a cursor page at a time, and its weekly counts.
+export const useAccountPushes = (
+  result: 'all' | 'unverified',
+  enabled: boolean,
+) =>
+  useInfiniteQuery({
+    queryKey: ['sync-account', result],
+    queryFn: ({ pageParam }) =>
+      sync().accountActivity({ cursor: pageParam, result }),
+    initialPageParam: null as string | null,
+    getNextPageParam: (last) => last.nextCursor ?? undefined,
+    enabled,
+  });
+export const useAccountPushStats = (enabled: boolean) =>
+  useQuery({
+    queryKey: ['sync-account-stats'],
+    queryFn: () => sync().accountStats(),
+    enabled,
+  });

@@ -196,6 +196,37 @@ export type SyncActivityPage = {
   weeks: { start: number; confirmed: number; other: number }[];
 };
 
+// The account's record of pushes to its Git URLs, from every device, as the Worker keeps it.
+export type AccountPush = {
+  operationId: string;
+  repositoryId: string;
+  repositoryName: string;
+  ref: string;
+  oldOid: string | null;
+  newOid: string;
+  result: 'confirmed' | 'unverified';
+  // The branch tip the server saw when the push was reported.
+  tip: string | null;
+  createdAt: number;
+};
+export type AccountPushPage = {
+  events: AccountPush[];
+  nextCursor: string | null;
+};
+export type AccountPushStats = {
+  // UTC weeks, oldest first.
+  weeks: { start: number; confirmed: number; unverified: number }[];
+};
+export const accountActivityInputSchema = z
+  .object({
+    cursor: z
+      .string()
+      .regex(/^[A-Za-z0-9_-]{1,300}$/)
+      .nullable(),
+    result: z.enum(['all', 'unverified']),
+  })
+  .strict();
+
 export const SYNC_IPC = {
   overview: 'sync:overview',
   compare: 'sync:compare',
@@ -207,6 +238,8 @@ export const SYNC_IPC = {
   checkPush: 'sync:check-push',
   activity: 'sync:activity',
   fileDiff: 'sync:file-diff',
+  accountActivity: 'sync:account-activity',
+  accountStats: 'sync:account-stats',
 } as const;
 
 export interface SyncApi {
@@ -222,4 +255,8 @@ export interface SyncApi {
     input: z.infer<typeof syncActivityInputSchema>,
   ): Promise<SyncActivityPage>;
   fileDiff(input: z.infer<typeof syncFileDiffInputSchema>): Promise<DiffResult>;
+  accountActivity(
+    input: z.infer<typeof accountActivityInputSchema>,
+  ): Promise<AccountPushPage>;
+  accountStats(): Promise<AccountPushStats>;
 }

@@ -438,8 +438,9 @@ export type ConflictState = {
   operation: 'merge' | 'revert' | null;
   // The pull request gitdesk started this operation for, when it did.
   pullId: string | null;
-  // A pull of the upstream: the two sides' names for the screen ("main", "origin/main").
-  upstream: { ours: string; theirs: string } | null;
+  // A pull of the upstream: the two sides' names for the screen ("main", "origin/main"). In a
+  // rebase the file's conflict markers hold the upstream first and your commit second.
+  upstream: { ours: string; theirs: string; rebase: boolean } | null;
   files: ConflictFile[];
   // Paths that were conflicted in this operation and are now staged.
   resolved: string[];

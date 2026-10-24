@@ -331,7 +331,8 @@ export const syncEvents = sqliteTable(
     createdAt: integer('created_at').notNull(),
   },
   (t) => [
-    index('sync_events_repository').on(t.repositoryId, t.createdAt),
+    index('sync_events_repository').on(t.repositoryId, t.createdAt, t.operationId),
+    index('sync_events_account').on(t.accountId, t.createdAt, t.operationId),
     index('sync_events_time').on(t.createdAt),
     check('sync_events_kind', sql`${t.kind} IN ('push')`),
     check('sync_events_result', sql`${t.result} IN ('confirmed', 'unverified')`),

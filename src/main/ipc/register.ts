@@ -50,6 +50,7 @@ import type { PullService } from '../pulls/pull-service';
 import type { MoveService } from '../sync/move-service';
 import type { SyncService } from '../sync/sync-service';
 import {
+  accountActivityInputSchema,
   checkPushInputSchema,
   publishInputSchema,
   pullInputSchema,
@@ -180,6 +181,16 @@ export function registerIpc(
     S.activity,
     syncActivityInputSchema,
     userFacing((input) => sync.activity(input)),
+  );
+  handle(
+    S.accountActivity,
+    accountActivityInputSchema,
+    userFacing((input) => sync.accountActivity(input)),
+  );
+  handle(
+    S.accountStats,
+    none,
+    userFacing(() => sync.accountStats()),
   );
   handle(
     S.fileDiff,

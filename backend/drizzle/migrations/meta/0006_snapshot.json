@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "6ae41f13-9ae7-4c51-aea5-8d1bfdf0bdfc",
+  "id": "54ec6669-4a85-4c3d-bb06-939d55fb3716",
   "prevId": "9d30f3c9-d955-4ee0-b63d-3f6e12d6ebba",
   "tables": {
     "accounts": {
@@ -1571,7 +1571,17 @@
           "name": "sync_events_repository",
           "columns": [
             "repository_id",
-            "created_at"
+            "created_at",
+            "operation_id"
+          ],
+          "isUnique": false
+        },
+        "sync_events_account": {
+          "name": "sync_events_account",
+          "columns": [
+            "account_id",
+            "created_at",
+            "operation_id"
           ],
           "isUnique": false
         },

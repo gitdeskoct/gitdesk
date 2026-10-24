@@ -37,7 +37,7 @@ beforeAll(() => {
   Element.prototype.scrollIntoView ??= () => {};
 });
 
-const status: AuthStatus = { status: 'signed-out' };
+let status: AuthStatus = { status: 'signed-out' };
 let settings: Settings = DEFAULT_SETTINGS;
 const never = () => new Promise<never>(() => {});
 const ID = '11111111-1111-4111-8111-111111111111';
@@ -214,6 +214,7 @@ const openSync = async () => {
 };
 
 beforeEach(() => {
+  status = { status: 'signed-out' };
   settings = { ...DEFAULT_SETTINGS, workspaceLayout: 'centered' };
 });
 afterEach(() => vi.restoreAllMocks());
@@ -301,7 +302,7 @@ describe('sync tab', () => {
     pulls.conflicts = vi.fn(async () => ({
       operation: 'merge',
       pullId: null,
-      upstream: { ours: 'main', theirs: 'origin/main' },
+      upstream: { ours: 'main', theirs: 'origin/main', rebase: false },
       files: [{ path: 'src/sync.ts', kind: 'both-modified', binary: false }],
       resolved: [],
     }));
@@ -392,6 +393,110 @@ describe('sync activity page', () => {
     expect(screen.getByText('Fetch failed origin')).toBeInTheDocument();
     expect(
       screen.getByText(/1 of 1 pushes in the last 8 weeks were confirmed/),
+    ).toBeInTheDocument();
+  });
+
+  it("switches to the account's pushes from every device when signed in", async () => {
+    status = {
+      status: 'authenticated',
+      account: {
+        id: 'acct-1',
+        displayName: 'Test',
+        email: 't@example.com',
+        avatarUrl: null,
+      },
+      persistence: 'secure',
+    } as AuthStatus;
+    install([repo()], overview());
+    sync.accountStats = vi.fn(async () => ({
+      weeks: Array.from({ length: 8 }, (_, i) => ({
+        start: Date.UTC(2026, 8, 7) + i * 7 * 86_400_000,
+        confirmed: i === 7 ? 1 : 0,
+        unverified: 0,
+      })),
+    }));
+    sync.accountActivity = vi.fn(async () => ({
+      events: [
+        {
+          operationId: OP,
+          repositoryId: 'r1',
+          repositoryName: 'desktop-git',
+          ref: 'refs/heads/main',
+          oldOid: 'b'.repeat(40),
+          newOid: 'c'.repeat(40),
+          result: 'confirmed',
+          tip: 'd'.repeat(40),
+          createdAt: Date.now() - 60_000,
+        },
+      ],
+      nextCursor: 'next',
+    }));
+    await page();
+    await userEvent.click(
+      await screen.findByRole('radio', { name: 'Your account' }),
+    );
+    expect(await screen.findByText('Pushed main')).toBeInTheDocument();
+    expect(
+      screen.getByText(/the branch has since moved to ddddddd/),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Load 20 more' }));
+    expect(sync.accountActivity).toHaveBeenLastCalledWith({
+      cursor: 'next',
+      result: 'all',
+    });
+  });
+
+  it('checks the list and the chart again together from the empty account', async () => {
+    status = {
+      status: 'authenticated',
+      account: {
+        id: 'acct-1',
+        displayName: 'Test',
+        email: 't@example.com',
+        avatarUrl: null,
+      },
+      persistence: 'secure',
+    } as AuthStatus;
+    install([repo()], overview());
+    let recorded = false;
+    sync.accountStats = vi.fn(async () => ({
+      weeks: Array.from({ length: 8 }, (_, i) => ({
+        start: Date.UTC(2026, 8, 7) + i * 7 * 86_400_000,
+        confirmed: 0,
+        unverified: recorded && i === 7 ? 1 : 0,
+      })),
+    }));
+    sync.accountActivity = vi.fn(async () => ({
+      events: recorded
+        ? [
+            {
+              operationId: OP,
+              repositoryId: 'r1',
+              repositoryName: 'desktop-git',
+              ref: 'refs/heads/main',
+              oldOid: null,
+              newOid: 'c'.repeat(40),
+              result: 'unverified' as const,
+              tip: null,
+              createdAt: Date.now() - 60_000,
+            },
+          ]
+        : [],
+      nextCursor: null,
+    }));
+    await page();
+    await userEvent.click(
+      await screen.findByRole('radio', { name: 'Your account' }),
+    );
+    recorded = true;
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Check again' }),
+    );
+    expect(await screen.findByText('Pushed main')).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        /0 of 1 pushes in the last 8 weeks were confirmed/,
+      ),
     ).toBeInTheDocument();
   });
 });

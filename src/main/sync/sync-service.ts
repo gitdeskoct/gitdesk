@@ -1,6 +1,8 @@
 import { stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  AccountPushPage,
+  AccountPushStats,
   CheckResult,
   PullResult,
   PullStrategy,
@@ -57,7 +59,7 @@ const PULL_STOPS: Partial<Record<SyncCode, string>> = {
   STALE_REFERENCE:
     'The branch this one tracks was deleted on the remote. Publish it again or track another branch.',
   LOCAL_CONFLICT:
-    'The rebase stopped on a conflict, so gitdesk undid it. Nothing changed. Pull with Merge to resolve the conflicts on the conflict screen.',
+    'The pull stopped on conflicts. Resolve them on the Sync tab.',
 };
 
 export function createSyncService(deps: {
@@ -89,6 +91,14 @@ export function createSyncService(deps: {
       newOid: string;
     },
   ) => Promise<'confirmed' | 'unverified' | 'rejected' | 'failed'>;
+  // The account's push records from every device; absent or throwing when there's no account.
+  account?: {
+    list(input: {
+      cursor: string | null;
+      result: 'all' | 'unverified';
+    }): Promise<AccountPushPage>;
+    stats(): Promise<AccountPushStats>;
+  };
   addActivity: (id: string, type: 'pulled', detail: string | null) => void;
   refresh: (id: string) => Promise<void>;
   now?: () => number;
@@ -315,9 +325,24 @@ export function createSyncService(deps: {
         (await exists(root, 'rebase-merge')) ||
         (await exists(root, 'rebase-apply'));
       if (stuck) {
-        // A rebase conflict is undone rather than left half-applied; Merge has a conflict screen.
+        // Conflicts wait on the conflict screen, one replayed commit at a time; a stop for any
+        // other reason is undone, so the branch is never left half-rebased.
+        const conflicted = await unmergedFiles(root).catch(() => []);
+        if (conflicted.length) {
+          const files = conflicted.map((file) => file.path);
+          journal.update(opId, {
+            state: 'conflict_resolution',
+            code: 'LOCAL_CONFLICT',
+            conflicts: files,
+          });
+          return { status: 'conflicts', files, upstream: t.upstream };
+        }
         await git(root, ['rebase', '--abort']).catch(() => undefined);
-        return fail('LOCAL_CONFLICT');
+        return fail(
+          'FAILED',
+          [],
+          'Git stopped the rebase without a conflict, so gitdesk undid it. Nothing changed.',
+        );
       }
       if (thrown && !(await verify()))
         return fail(
@@ -589,6 +614,21 @@ export function createSyncService(deps: {
         : { status: 'moved', remoteOid: tip ?? '' };
     },
 
+    accountActivity(input: {
+      cursor: string | null;
+      result: 'all' | 'unverified';
+    }): Promise<AccountPushPage> {
+      if (!deps.account)
+        throw new SyncError('Sign in to see the pushes your account recorded.');
+      return deps.account.list(input);
+    },
+
+    accountStats(): Promise<AccountPushStats> {
+      if (!deps.account)
+        throw new SyncError('Sign in to see the pushes your account recorded.');
+      return deps.account.stats();
+    },
+
     activity(input: {
       filter: 'all' | 'failed' | 'unconfirmed';
       offset: number;
@@ -619,7 +659,9 @@ export function createSyncService(deps: {
           const row = deps.store.get(op.repositoryId);
           waiting =
             !!row &&
-            (await exists(row.rootPath, 'MERGE_HEAD').catch(() => false));
+            ((await exists(row.rootPath, 'MERGE_HEAD').catch(() => false)) ||
+              (await exists(row.rootPath, 'rebase-merge').catch(() => false)) ||
+              (await exists(row.rootPath, 'rebase-apply').catch(() => false)));
         }
         journal.update(
           op.id,

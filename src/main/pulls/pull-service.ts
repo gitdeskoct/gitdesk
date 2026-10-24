@@ -203,6 +203,25 @@ export function createPullService(deps: {
     );
   }
 
+  async function rebasing(root: string): Promise<boolean> {
+    return (
+      (await exists(root, 'rebase-merge')) ||
+      (await exists(root, 'rebase-apply'))
+    );
+  }
+
+  // A rebase replays your commits onto the upstream, so Git's sides are the other way round:
+  // "ours" (stage 2) is the upstream and "theirs" (stage 3) is your commit. The screen keeps
+  // Yours and Incoming by swapping them here.
+  async function swappedSides(repoId: string, root: string): Promise<boolean> {
+    const op = ops.activeFor(repoId);
+    return (
+      op?.kind === 'pull' &&
+      String(op.strategy) === 'rebase' &&
+      (await rebasing(root))
+    );
+  }
+
   // Tracked files with uncommitted changes. Untracked files don't block a merge; Git refuses on
   // its own if one would be overwritten.
   async function trackedChanges(root: string): Promise<string[]> {
@@ -421,12 +440,42 @@ export function createPullService(deps: {
     op: OpRow,
   ): Promise<MergeResult> {
     try {
-      if (await exists(root, 'MERGE_HEAD'))
+      if (await rebasing(root)) {
+        // Commit the resolved step with its own message, so continuing never needs an editor; a
+        // step whose resolution left nothing to commit is skipped, as Git would ask.
+        const staged = (
+          await git(root, ['diff', '--cached', '--name-only'])
+        ).trim();
+        const run = gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS });
+        if (staged) {
+          await run.raw(['commit', '--no-edit']);
+          await run.raw(['rebase', '--continue']).catch(() => undefined);
+        } else await run.raw(['rebase', '--skip']).catch(() => undefined);
+        // The next commit may stop on its own conflicts: the screen shows those next.
+        const next = await unmergedFiles(root).catch((): ConflictFile[] => []);
+        if (next.length) {
+          const row = ops.update(op.id, {
+            state: 'conflict_resolution',
+            conflicts_json: JSON.stringify(next.map((file) => file.path)),
+          });
+          await deps.refresh(repoId).catch(() => undefined);
+          return {
+            status: 'conflicts',
+            operation: toOperation(row),
+            files: next,
+          };
+        }
+        if (await rebasing(root))
+          throw new PullError(
+            'Git stopped the rebase for another reason. Finish it in your terminal, or abort it here.',
+          );
+      } else if (await exists(root, 'MERGE_HEAD'))
         await gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS }).raw([
           'commit',
           '--no-edit',
         ]);
     } catch (err) {
+      if (err instanceof PullError) throw err;
       throw new PullError(
         sanitizeOutput(errorText(err), root) ?? describeGitError(err),
       );
@@ -474,10 +523,11 @@ export function createPullService(deps: {
 
   async function conflictState(repoId: string): Promise<ConflictState> {
     const root = deps.workspace.rootOf(repoId);
-    const [files, merging, reverting] = await Promise.all([
+    const [files, merging, reverting, rebase] = await Promise.all([
       unmergedFiles(root),
       exists(root, 'MERGE_HEAD'),
       exists(root, 'REVERT_HEAD'),
+      swappedSides(repoId, root),
     ]);
     const op = ops.activeFor(repoId);
     const operation = merging
@@ -497,7 +547,7 @@ export function createPullService(deps: {
       pullId: op?.pull_id ?? null,
       upstream:
         op?.kind === 'pull' && op.branch && op.remote
-          ? { ours: op.branch, theirs: op.remote }
+          ? { ours: op.branch, theirs: op.remote, rebase }
           : null,
       files,
       resolved: conflicted.filter((p) => !open.has(p)),
@@ -1144,10 +1194,11 @@ export function createPullService(deps: {
           (entry) => entry.path === input.path,
         );
         if (!file) throw new PullError('That file is no longer in conflict.');
+        const swap = await swappedSides(input.repoId, root);
         const [base, target, source] = await Promise.all([
           stageText(root, 1, input.path),
-          stageText(root, 2, input.path),
-          stageText(root, 3, input.path),
+          stageText(root, swap ? 3 : 2, input.path),
+          stageText(root, swap ? 2 : 3, input.path),
         ]);
         const merged = file.binary ? null : await workingFile(root, input.path);
         return {
@@ -1178,8 +1229,11 @@ export function createPullService(deps: {
             (entry) => entry.path === input.path,
           );
           if (!file) throw new PullError('That file is no longer in conflict.');
+          const swap = await swappedSides(input.repoId, root);
           const stages = await Promise.all(
-            [2, 3].map((s) => stageText(root, s as 2 | 3, input.path)),
+            (swap ? [3, 2] : [2, 3]).map((s) =>
+              stageText(root, s as 2 | 3, input.path),
+            ),
           );
           if (input.take === 'working') {
             const text = await workingFile(root, input.path).catch(() => null);
@@ -1200,7 +1254,7 @@ export function createPullService(deps: {
             if (present) {
               await git(root, [
                 'checkout',
-                input.take === 'target' ? '--ours' : '--theirs',
+                (input.take === 'target') !== swap ? '--ours' : '--theirs',
                 '--',
                 input.path,
               ]);
@@ -1293,6 +1347,8 @@ export function createPullService(deps: {
           const op = ops.activeFor(repoId);
           if (await exists(root, 'MERGE_HEAD'))
             await git(root, ['merge', '--abort']);
+          else if (op?.kind === 'pull' && (await rebasing(root)))
+            await git(root, ['rebase', '--abort']);
           else if (await exists(root, 'REVERT_HEAD'))
             await git(root, ['revert', '--abort']);
           else if (op) await git(root, ['reset', '--merge']);

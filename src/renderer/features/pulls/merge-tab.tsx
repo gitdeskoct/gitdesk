@@ -361,12 +361,13 @@ function CodeBox({
   text,
   label,
   path,
-  upstream,
+  words,
 }: {
   text: string | null;
   label: string;
   path: string;
-  upstream: boolean;
+  // What the <<<<<<<, ======= and >>>>>>> markers open and close.
+  words: readonly [string, string, string];
 }) {
   const { data: settings } = useSettings();
   const tokens = useLineTokens(
@@ -381,9 +382,6 @@ function CodeBox({
         {label}
       </p>
     );
-  const words = upstream
-    ? ['Your side starts', 'Incoming side starts', 'Incoming side ends']
-    : ['Target side starts', 'Source side starts', 'Source side ends'];
   return (
     <pre className="code-text max-h-72 overflow-auto rounded-sm border border-line bg-surface px-3 py-2 whitespace-pre">
       {text.split('\n').map((line, i) => {
@@ -442,6 +440,24 @@ export function ConflictsView({
   const sideNames = upstream
     ? { target: `Yours, ${pullTarget}`, source: `Incoming, ${pullSource}` }
     : { target: `Target, ${pullTarget}`, source: `Source, ${pullSource}` };
+  // A rebase replays your commit onto the upstream, so the upstream's lines come first.
+  const markerWords = !upstream
+    ? ([
+        'Target side starts',
+        'Source side starts',
+        'Source side ends',
+      ] as const)
+    : conflicts.data?.upstream?.rebase
+      ? ([
+          'Incoming side starts',
+          'Your side starts',
+          'Your side ends',
+        ] as const)
+      : ([
+          'Your side starts',
+          'Incoming side starts',
+          'Incoming side ends',
+        ] as const);
 
   if (conflicts.isPending) return <Loading label="Reading the conflicts…" />;
   // Without Git's answer nothing can be called resolved, so Continue isn't offered.
@@ -664,7 +680,7 @@ export function ConflictsView({
                         </div>
                         <CodeBox
                           path={file.path}
-                          upstream={upstream}
+                          words={markerWords}
                           text={sides.data.binary ? null : text}
                           label={
                             sides.data.binary
@@ -697,7 +713,7 @@ export function ConflictsView({
                       </div>
                       <CodeBox
                         path={file.path}
-                        upstream={upstream}
+                        words={markerWords}
                         text={sides.data.merged}
                         label="The file is not in the working tree."
                       />

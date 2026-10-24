@@ -198,6 +198,8 @@ const api: DesktopApi = {
     checkPush: (input) => ipcRenderer.invoke(S.checkPush, input),
     activity: (input) => ipcRenderer.invoke(S.activity, input),
     fileDiff: (input) => ipcRenderer.invoke(S.fileDiff, input),
+    accountActivity: (input) => ipcRenderer.invoke(S.accountActivity, input),
+    accountStats: () => ipcRenderer.invoke(S.accountStats),
   },
 };
 

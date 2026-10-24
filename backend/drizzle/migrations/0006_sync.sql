@@ -15,5 +15,6 @@ CREATE TABLE `sync_events` (
 	CONSTRAINT "sync_events_result" CHECK("sync_events"."result" IN ('confirmed', 'unverified'))
 );
 --> statement-breakpoint
-CREATE INDEX `sync_events_repository` ON `sync_events` (`repository_id`,`created_at`);--> statement-breakpoint
+CREATE INDEX `sync_events_repository` ON `sync_events` (`repository_id`,`created_at`,`operation_id`);--> statement-breakpoint
+CREATE INDEX `sync_events_account` ON `sync_events` (`account_id`,`created_at`,`operation_id`);--> statement-breakpoint
 CREATE INDEX `sync_events_time` ON `sync_events` (`created_at`);

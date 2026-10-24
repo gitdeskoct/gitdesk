@@ -80,7 +80,7 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
 }
 
 // Off unless the deployment opts in: Artifacts has no local simulator, so `wrangler dev --local`
-// and tests run without it.
-// ARTIFACTS is bound only on Workers Paid (see wrangler.jsonc), so it may be absent.
+// (GIT_HOSTING=off in .dev.vars) and tests run without it.
+// ARTIFACTS is bound only once the account is on Workers Paid (see wrangler.jsonc), so it may be absent.
 export const gitHostFor = (env: CloudflareBindings & { ARTIFACTS?: Artifacts }): GitHost | null =>
   env.GIT_HOSTING === 'artifacts' && env.ARTIFACTS ? artifactsHost(env.ARTIFACTS) : null;

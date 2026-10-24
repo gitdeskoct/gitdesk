@@ -265,7 +265,7 @@ describe('pull', () => {
     expect(await pulls.conflicts(id)).toMatchObject({
       operation: 'merge',
       pullId: null,
-      upstream: { ours: 'main', theirs: 'origin/main' },
+      upstream: { ours: 'main', theirs: 'origin/main', rebase: false },
     });
 
     await pulls.resolveConflict({
@@ -279,19 +279,86 @@ describe('pull', () => {
     expect(journal.pending(id)).toBeNull();
   });
 
-  it('undoes a rebase that stops on a conflict', async () => {
+  it('stops a rebase on conflicts, one commit at a time, and finishes it', async () => {
     const { app, other } = world();
-    const { ids, sync } = await setup([app]);
+    const { ids, sync, pulls, journal } = await setup([app]);
+    const id = ids[0]!;
+    commit(app, 'shared.txt', 'mine\n', 'Mine');
+    commit(app, 'shared.txt', 'mine again\n', 'Mine again');
+    const theirs = commit(other, 'shared.txt', 'theirs\n', 'Theirs');
+    git(other, 'push', '-q', 'origin', 'main');
+
+    expect(await sync.pull({ id, jobId: job(), strategy: 'rebase' })).toEqual({
+      status: 'conflicts',
+      files: ['shared.txt'],
+      upstream: 'origin/main',
+    });
+    expect(journal.pending(id)).toMatchObject({ state: 'conflict_resolution' });
+    expect((await pulls.conflicts(id)).upstream).toEqual({
+      ours: 'main',
+      theirs: 'origin/main',
+      rebase: true,
+    });
+    // Yours is your replayed commit, even though Git calls it "theirs" in a rebase.
+    expect(
+      await pulls.conflictSides({ repoId: id, path: 'shared.txt' }),
+    ).toMatchObject({
+      target: 'mine\n',
+      source: 'theirs\n',
+    });
+    await pulls.resolveConflict({
+      repoId: id,
+      path: 'shared.txt',
+      take: 'target',
+    });
+    // Continuing commits the resolved step and replays the rest; the second commit applies cleanly.
+    expect(await pulls.continueMerge(id)).toMatchObject({ status: 'merged' });
+
+    expect(existsSync(path.join(app, '.git', 'rebase-merge'))).toBe(false);
+    expect(git(app, 'rev-parse', 'HEAD~2')).toBe(theirs);
+    expect(git(app, 'show', 'HEAD:shared.txt')).toBe('mine again');
+    expect(journal.pending(id)).toBeNull();
+  });
+
+  it('shows the next replayed commit when it conflicts too', async () => {
+    const { app, other } = world();
+    const { ids, sync, pulls } = await setup([app]);
+    const id = ids[0]!;
+    commit(app, 'shared.txt', 'mine\n', 'Mine');
+    commit(app, 'extra.txt', 'mine extra\n', 'Mine extra');
+    writeFileSync(path.join(other, 'extra.txt'), 'theirs extra\n');
+    commit(other, 'shared.txt', 'theirs\n', 'Theirs');
+    git(other, 'push', '-q', 'origin', 'main');
+
+    await sync.pull({ id, jobId: job(), strategy: 'rebase' });
+    await pulls.resolveConflict({
+      repoId: id,
+      path: 'shared.txt',
+      take: 'source',
+    });
+    expect(await pulls.continueMerge(id)).toMatchObject({
+      status: 'conflicts',
+      files: [expect.objectContaining({ path: 'extra.txt' })],
+    });
+    await pulls.resolveConflict({
+      repoId: id,
+      path: 'extra.txt',
+      take: 'target',
+    });
+    expect(await pulls.continueMerge(id)).toMatchObject({ status: 'merged' });
+    expect(git(app, 'show', 'HEAD:extra.txt')).toBe('mine extra');
+    expect(git(app, 'show', 'HEAD:shared.txt')).toBe('theirs');
+  });
+
+  it('aborts a stopped rebase back to where the branch was', async () => {
+    const { app, other } = world();
+    const { ids, sync, pulls } = await setup([app]);
     const id = ids[0]!;
     const mine = commit(app, 'shared.txt', 'mine\n', 'Mine');
     commit(other, 'shared.txt', 'theirs\n', 'Theirs');
     git(other, 'push', '-q', 'origin', 'main');
-    expect(
-      await sync.pull({ id, jobId: job(), strategy: 'rebase' }),
-    ).toMatchObject({
-      status: 'stopped',
-      code: 'LOCAL_CONFLICT',
-    });
+    await sync.pull({ id, jobId: job(), strategy: 'rebase' });
+    await pulls.abortMerge(id);
     expect(git(app, 'rev-parse', 'HEAD')).toBe(mine);
     expect(existsSync(path.join(app, '.git', 'rebase-merge'))).toBe(false);
   });

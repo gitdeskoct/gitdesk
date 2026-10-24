@@ -63,7 +63,7 @@ async function setup(options: { hosting?: boolean; fail?: boolean } = {}) {
       body: JSON.stringify(body),
       headers: { 'content-type': 'application/json', ...bearer(token) },
     });
-  return { fake, owner, other, create, report };
+  return { fake, owner, other, create, report, app };
 }
 
 const push = (overrides: Record<string, unknown> = {}) => ({
@@ -142,5 +142,58 @@ describe('sync events', () => {
     const db = getDb(env.DB);
     await purgeExpired(db, Date.now() + 181 * 24 * 60 * 60_000);
     expect(await db.select().from(syncEvents).where(eq(syncEvents.operationId, body.operationId))).toHaveLength(0);
+  });
+
+  it("lists the account's pushes newest first, a page at a time, and never another account's", async () => {
+    const { fake, owner, other, create, report, app } = await setup();
+    const repo = await create('app');
+    fake.stored.get(repo.id)!.commits.add(A);
+    await report(owner.access_token, repo.id, push());
+    await report(owner.access_token, repo.id, push({ newOid: B }));
+    const get = (token: string, query: string) =>
+      call(app, `/api/v1/sync-events${query}`, { headers: bearer(token) });
+
+    const first = await get(owner.access_token, '?limit=1');
+    const page1 = (await first.json()) as {
+      events: { newOid: string; result: string; repositoryName: string }[];
+      nextCursor: string | null;
+    };
+    expect(page1.events).toHaveLength(1);
+    expect(page1.events[0]).toMatchObject({ repositoryName: 'app' });
+    expect(page1.nextCursor).toBeTruthy();
+    const page2 = (await (
+      await get(owner.access_token, `?limit=1&cursor=${page1.nextCursor}`)
+    ).json()) as { events: { newOid: string }[]; nextCursor: string | null };
+    expect(page2.events).toHaveLength(1);
+    expect(page2.events[0]!.newOid).not.toBe(page1.events[0]!.newOid);
+    expect(page2.nextCursor).toBeNull();
+
+    const unverified = (await (
+      await get(owner.access_token, '?result=unverified')
+    ).json()) as { events: { newOid: string }[] };
+    expect(unverified.events.map((e) => e.newOid)).toEqual([B]);
+
+    expect(
+      ((await (await get(other.access_token, '')).json()) as { events: unknown[] }).events,
+    ).toEqual([]);
+    expect((await get(owner.access_token, '?cursor=bad!')).status).toBe(400);
+  });
+
+  it('counts pushes per week for the last 8 weeks', async () => {
+    const { fake, owner, create, report, app } = await setup();
+    const repo = await create('app');
+    fake.stored.get(repo.id)!.commits.add(A);
+    await report(owner.access_token, repo.id, push());
+    await report(owner.access_token, repo.id, push({ newOid: B }));
+    const res = await call(app, '/api/v1/sync-events/stats', {
+      headers: bearer(owner.access_token),
+    });
+    const { weeks } = (await res.json()) as {
+      weeks: { start: number; confirmed: number; unverified: number }[];
+    };
+    expect(weeks).toHaveLength(8);
+    expect(weeks[7]).toMatchObject({ confirmed: 1, unverified: 1 });
+    expect(weeks.slice(0, 7).every((w) => w.confirmed + w.unverified === 0)).toBe(true);
+    expect(new Date(weeks[7]!.start).getUTCDay()).toBe(1);
   });
 });

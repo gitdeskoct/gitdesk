@@ -1,6 +1,7 @@
-import { and, eq } from 'drizzle-orm';
+import { and, count, desc, eq, gte, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
 import { repositories, syncEvents } from '../../db/schema';
+import { encodeCursor } from '../../lib/cursor';
 import type { GitHost } from '../../lib/git-host';
 import { logEvent } from '../../lib/log';
 
@@ -80,4 +81,86 @@ export async function recordPush(
     .onConflictDoNothing();
   // A concurrent retry may have written first; its row is the answer.
   return (await known()) ?? { status: 'recorded', result, tip };
+}
+
+const WEEK_MS = 7 * 24 * 60 * 60_000;
+
+// Monday 00:00 UTC of the week holding `at`.
+export function utcWeekStart(at: number): number {
+  const day = new Date(at);
+  day.setUTCHours(0, 0, 0, 0);
+  day.setUTCDate(day.getUTCDate() - ((day.getUTCDay() + 6) % 7));
+  return day.getTime();
+}
+
+// Every recorded push of the account, newest first, keyset-paged on (created_at, operation_id).
+export async function listPushes(
+  db: Db,
+  accountId: string,
+  input: {
+    limit: number;
+    cursor?: [number, string];
+    repositoryId?: string;
+    result?: 'confirmed' | 'unverified';
+  },
+) {
+  const after = input.cursor
+    ? or(
+        lt(syncEvents.createdAt, input.cursor[0]),
+        and(eq(syncEvents.createdAt, input.cursor[0]), lt(syncEvents.operationId, input.cursor[1])),
+      )
+    : undefined;
+  const rows = await db
+    .select({
+      operationId: syncEvents.operationId,
+      repositoryId: syncEvents.repositoryId,
+      repositoryName: repositories.name,
+      kind: syncEvents.kind,
+      ref: syncEvents.ref,
+      oldOid: syncEvents.oldOid,
+      newOid: syncEvents.newOid,
+      result: syncEvents.result,
+      tip: syncEvents.tip,
+      createdAt: syncEvents.createdAt,
+    })
+    .from(syncEvents)
+    .innerJoin(repositories, eq(repositories.id, syncEvents.repositoryId))
+    .where(
+      and(
+        eq(syncEvents.accountId, accountId),
+        input.repositoryId ? eq(syncEvents.repositoryId, input.repositoryId) : undefined,
+        input.result ? eq(syncEvents.result, input.result) : undefined,
+        after,
+      ),
+    )
+    .orderBy(desc(syncEvents.createdAt), desc(syncEvents.operationId))
+    .limit(input.limit + 1);
+  const page = rows.slice(0, input.limit);
+  const last = page[page.length - 1];
+  return {
+    events: page,
+    nextCursor:
+      rows.length > input.limit && last ? encodeCursor([last.createdAt, last.operationId]) : null,
+  };
+}
+
+// Pushes per UTC week for the last 8 weeks, oldest first, counted in D1 rather than in the Worker.
+export async function pushStats(db: Db, accountId: string, now: number) {
+  const first = utcWeekStart(now) - 7 * WEEK_MS;
+  const week = sql<number>`(${syncEvents.createdAt} - ${first}) / ${WEEK_MS}`;
+  const rows = await db
+    .select({ week, result: syncEvents.result, count: count() })
+    .from(syncEvents)
+    .where(and(eq(syncEvents.accountId, accountId), gte(syncEvents.createdAt, first)))
+    .groupBy(week, syncEvents.result);
+  const weeks = Array.from({ length: 8 }, (_, i) => ({
+    start: first + i * WEEK_MS,
+    confirmed: 0,
+    unverified: 0,
+  }));
+  for (const row of rows) {
+    const bucket = weeks[Math.floor(Number(row.week))];
+    if (bucket) bucket[row.result] += row.count;
+  }
+  return { weeks };
 }

@@ -77,7 +77,7 @@ const STRATEGIES: {
     value: 'rebase',
     title: 'Rebase',
     description: (ahead) =>
-      `Replays your ${plural(ahead, 'commit')} on top of the upstream. On a conflict it undoes itself and changes nothing.`,
+      `Replays your ${plural(ahead, 'commit')} on top of the upstream. Conflicts open the conflict screen, one commit at a time; Abort puts the branch back.`,
   },
 ];
 
