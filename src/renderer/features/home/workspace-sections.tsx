@@ -149,6 +149,13 @@ function AttentionRow({ repo, kind }: Attention) {
               pending={locate.isPending}
               onClick={() =>
                 locate.mutate(repo.id, {
+                  onSuccess: (found) =>
+                    found.status === 'different' &&
+                    toast({
+                      tone: 'danger',
+                      title: 'That folder holds a different repository',
+                      description: `Its history starts at ${found.found ?? 'no commit'}, not ${found.expected}. Open ${repo.name} and locate it there to use that folder anyway.`,
+                    }),
                   onError: (err) =>
                     toast({
                       tone: 'danger',
@@ -247,6 +254,9 @@ const LOCAL: Record<
   fetched: { icon: CloudDownload, label: 'Fetched from' },
   pushed: { icon: CloudUpload, label: 'Pushed' },
   'hosted-remote-added': { icon: Link2, label: 'Added the Git URL' },
+  moved: { icon: CloudUpload, label: 'Moved to gitdesk' },
+  'move-undone': { icon: Undo2, label: 'Undid the move to gitdesk' },
+  pulled: { icon: CloudDownload, label: 'Pulled' },
   'pr-merged': { icon: GitMerge, label: 'Merged pull request' },
   'pr-reverted': { icon: Undo2, label: 'Reverted pull request' },
   'branch-created': { icon: GitBranch, label: 'New branch' },

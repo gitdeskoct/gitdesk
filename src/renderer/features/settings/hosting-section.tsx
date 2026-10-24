@@ -5,6 +5,7 @@ import { RemoteArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { Segmented } from '../../components/ui/segmented';
+import { Switch } from '../../components/ui/switch';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import {
   useRefreshRemote,
@@ -101,9 +102,22 @@ export function HostingSection({ status }: { status: AuthStatus }) {
       </SettingGroup>
       <SettingGroup title="Linking">
         <SettingRow
+          id="hosting-auto-remote"
+          label="Create a private remote for new projects"
+          description="Adding or cloning a project gives it a private remote in your account and adds its Git URL. Added while signed out, it gets one right after you sign in. Nothing is pushed until you publish."
+        >
+          <Switch
+            aria-label="Create a private remote for new projects"
+            checked={settings.autoHostedRemote}
+            onCheckedChange={(autoHostedRemote) =>
+              update.mutate({ autoHostedRemote })
+            }
+          />
+        </SettingRow>
+        <SettingRow
           id="hosting-remote-name"
           label="Add the Git URL as"
-          description='When you link a repository. "origin if free" uses origin when the repository has none and gitdesk otherwise. An existing remote is never replaced.'
+          description='When you link a repository. "origin if free" uses origin when the repository has none and gitdesk otherwise. An existing remote is never replaced; Move to gitdesk on a repository&apos;s Remotes tab switches one that points elsewhere.'
         >
           <Segmented
             label="Add the Git URL as"

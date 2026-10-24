@@ -60,6 +60,8 @@ export type SyncState =
   | 'ahead'
   | 'behind'
   | 'diverged'
+  // The branch tracks an upstream the remote no longer has.
+  | 'gone'
   | 'unknown';
 
 export const changeCount = (status: RepoStatus | null): number =>
@@ -76,8 +78,8 @@ export function syncState(repo: RepositorySummary): SyncState {
   if (repo.availability !== 'available' || !status) return 'unknown';
   if (!status.hasRemotes) return 'no-remote';
   // Ahead/behind is only claimed when Git reported it for a known upstream.
-  if (!status.upstream || status.ahead === null || status.behind === null)
-    return 'no-upstream';
+  if (!status.upstream) return 'no-upstream';
+  if (status.ahead === null || status.behind === null) return 'gone';
   if (status.ahead > 0 && status.behind > 0) return 'diverged';
   if (status.ahead > 0) return 'ahead';
   if (status.behind > 0) return 'behind';
@@ -127,7 +129,8 @@ export function attentionOf(repo: RepositorySummary): Attention['kind'] | null {
   if (sync === 'ahead') return 'ahead';
   // A remote exists but this branch tracks nothing, so pushes and pulls have no target.
   // A repository with no remote at all is a choice, not a problem, and stays out of this list.
-  if (sync === 'no-upstream' && repo.status?.branch) return 'no-upstream';
+  if ((sync === 'no-upstream' || sync === 'gone') && repo.status?.branch)
+    return 'no-upstream';
   return null;
 }
 

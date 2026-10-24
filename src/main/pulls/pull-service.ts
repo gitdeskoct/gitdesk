@@ -73,8 +73,8 @@ type Workspace = {
 type OpRow = {
   id: string;
   repository_id: string;
-  pull_id: string;
-  kind: 'merge' | 'revert';
+  pull_id: string | null;
+  kind: 'merge' | 'revert' | 'pull';
   state: MergeOperationState;
   strategy: MergeOperation['strategy'];
   source_oid: string;
@@ -86,6 +86,9 @@ type OpRow = {
   conflicts_json: string;
   message: string | null;
   commit_message: string | null;
+  // A pull of the upstream: the upstream (origin/main) and the local branch it went into.
+  remote: string | null;
+  branch: string | null;
   updated_at: number;
 };
 
@@ -119,8 +122,8 @@ export function createPullService(deps: {
   };
   addActivity(
     repoId: string,
-    type: 'pr-merged' | 'pr-reverted',
-    detail: string,
+    type: 'pr-merged' | 'pr-reverted' | 'pulled',
+    detail: string | null,
   ): void;
   refresh(repoId: string): Promise<void>;
   now?: () => number;
@@ -200,6 +203,25 @@ export function createPullService(deps: {
     );
   }
 
+  async function rebasing(root: string): Promise<boolean> {
+    return (
+      (await exists(root, 'rebase-merge')) ||
+      (await exists(root, 'rebase-apply'))
+    );
+  }
+
+  // A rebase replays your commits onto the upstream, so Git's sides are the other way round:
+  // "ours" (stage 2) is the upstream and "theirs" (stage 3) is your commit. The screen keeps
+  // Yours and Incoming by swapping them here.
+  async function swappedSides(repoId: string, root: string): Promise<boolean> {
+    const op = ops.activeFor(repoId);
+    return (
+      op?.kind === 'pull' &&
+      String(op.strategy) === 'rebase' &&
+      (await rebasing(root))
+    );
+  }
+
   // Tracked files with uncommitted changes. Untracked files don't block a merge; Git refuses on
   // its own if one would be overwritten.
   async function trackedChanges(root: string): Promise<string[]> {
@@ -241,7 +263,13 @@ export function createPullService(deps: {
     insert(
       input: Omit<
         OpRow,
-        'updated_at' | 'result_oid' | 'recorded' | 'conflicts_json' | 'message'
+        | 'updated_at'
+        | 'result_oid'
+        | 'recorded'
+        | 'conflicts_json'
+        | 'message'
+        | 'remote'
+        | 'branch'
       >,
     ) {
       deps.db
@@ -328,7 +356,7 @@ export function createPullService(deps: {
     if (!recorded && op.result_oid) {
       try {
         await records.recordMerge(
-          op.pull_id,
+          op.pull_id!,
           {
             operationId: op.id,
             mergeCommitOid: op.result_oid,
@@ -404,6 +432,78 @@ export function createPullService(deps: {
     };
   }
 
+  // A pull of the upstream whose conflicts are resolved: commit the merge and check that it holds
+  // the upstream commit pinned when the pull started. Nothing is pushed.
+  async function finishPull(
+    root: string,
+    repoId: string,
+    op: OpRow,
+  ): Promise<MergeResult> {
+    try {
+      if (await rebasing(root)) {
+        // Commit the resolved step with its own message, so continuing never needs an editor; a
+        // step whose resolution left nothing to commit is skipped, as Git would ask.
+        const staged = (
+          await git(root, ['diff', '--cached', '--name-only'])
+        ).trim();
+        const run = gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS });
+        if (staged) {
+          await run.raw(['commit', '--no-edit']);
+          await run.raw(['rebase', '--continue']).catch(() => undefined);
+        } else await run.raw(['rebase', '--skip']).catch(() => undefined);
+        // The next commit may stop on its own conflicts: the screen shows those next.
+        const next = await unmergedFiles(root).catch((): ConflictFile[] => []);
+        if (next.length) {
+          const row = ops.update(op.id, {
+            state: 'conflict_resolution',
+            conflicts_json: JSON.stringify(next.map((file) => file.path)),
+          });
+          await deps.refresh(repoId).catch(() => undefined);
+          return {
+            status: 'conflicts',
+            operation: toOperation(row),
+            files: next,
+          };
+        }
+        if (await rebasing(root))
+          throw new PullError(
+            'Git stopped the rebase for another reason. Finish it in your terminal, or abort it here.',
+          );
+      } else if (await exists(root, 'MERGE_HEAD'))
+        await gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS }).raw([
+          'commit',
+          '--no-edit',
+        ]);
+    } catch (err) {
+      if (err instanceof PullError) throw err;
+      throw new PullError(
+        sanitizeOutput(errorText(err), root) ?? describeGitError(err),
+      );
+    }
+    const head = (await git(root, ['rev-parse', 'HEAD'])).trim();
+    if (!(await isAncestor(root, op.source_oid, head))) {
+      ops.update(op.id, {
+        state: 'failed',
+        message: "The result doesn't contain the upstream commit.",
+      });
+      return {
+        status: 'failed',
+        message:
+          "Git finished, but the branch doesn't contain the upstream commit. Nothing was recorded as pulled.",
+      };
+    }
+    const row = ops.update(op.id, { state: 'completed', result_oid: head });
+    deps.addActivity(repoId, 'pulled', op.remote);
+    await deps.refresh(repoId).catch(() => undefined);
+    return {
+      status: 'merged',
+      operation: toOperation(row),
+      push: 'skipped',
+      pushMessage: null,
+      recorded: true,
+    };
+  }
+
   // The working-tree file for a conflicted path, read only when it stays inside the repository.
   async function workingFile(
     root: string,
@@ -423,10 +523,11 @@ export function createPullService(deps: {
 
   async function conflictState(repoId: string): Promise<ConflictState> {
     const root = deps.workspace.rootOf(repoId);
-    const [files, merging, reverting] = await Promise.all([
+    const [files, merging, reverting, rebase] = await Promise.all([
       unmergedFiles(root),
       exists(root, 'MERGE_HEAD'),
       exists(root, 'REVERT_HEAD'),
+      swappedSides(repoId, root),
     ]);
     const op = ops.activeFor(repoId);
     const operation = merging
@@ -434,7 +535,7 @@ export function createPullService(deps: {
       : reverting || op?.kind === 'revert'
         ? 'revert'
         : op
-          ? op.kind
+          ? 'merge'
           : null;
     const conflicted = op ? (JSON.parse(op.conflicts_json) as string[]) : [];
     const open = new Set(files.map((file) => file.path));
@@ -444,6 +545,10 @@ export function createPullService(deps: {
           ? operation
           : null,
       pullId: op?.pull_id ?? null,
+      upstream:
+        op?.kind === 'pull' && op.branch && op.remote
+          ? { ours: op.branch, theirs: op.remote, rebase }
+          : null,
       files,
       resolved: conflicted.filter((p) => !open.has(p)),
     };
@@ -1089,10 +1194,11 @@ export function createPullService(deps: {
           (entry) => entry.path === input.path,
         );
         if (!file) throw new PullError('That file is no longer in conflict.');
+        const swap = await swappedSides(input.repoId, root);
         const [base, target, source] = await Promise.all([
           stageText(root, 1, input.path),
-          stageText(root, 2, input.path),
-          stageText(root, 3, input.path),
+          stageText(root, swap ? 3 : 2, input.path),
+          stageText(root, swap ? 2 : 3, input.path),
         ]);
         const merged = file.binary ? null : await workingFile(root, input.path);
         return {
@@ -1123,8 +1229,11 @@ export function createPullService(deps: {
             (entry) => entry.path === input.path,
           );
           if (!file) throw new PullError('That file is no longer in conflict.');
+          const swap = await swappedSides(input.repoId, root);
           const stages = await Promise.all(
-            [2, 3].map((s) => stageText(root, s as 2 | 3, input.path)),
+            (swap ? [3, 2] : [2, 3]).map((s) =>
+              stageText(root, s as 2 | 3, input.path),
+            ),
           );
           if (input.take === 'working') {
             const text = await workingFile(root, input.path).catch(() => null);
@@ -1145,7 +1254,7 @@ export function createPullService(deps: {
             if (present) {
               await git(root, [
                 'checkout',
-                input.take === 'target' ? '--ours' : '--theirs',
+                (input.take === 'target') !== swap ? '--ours' : '--theirs',
                 '--',
                 input.path,
               ]);
@@ -1173,8 +1282,9 @@ export function createPullService(deps: {
               throw new PullError(
                 'Some files are still in conflict. Resolve each one first.',
               );
+            if (op.kind === 'pull') return finishPull(root, repoId, op);
             const records = deps.recordsFor(repoId);
-            const pull = await pullOf(records, op.pull_id);
+            const pull = await pullOf(records, op.pull_id!);
             try {
               if (await exists(root, 'MERGE_HEAD'))
                 await gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS }).raw([
@@ -1237,17 +1347,20 @@ export function createPullService(deps: {
           const op = ops.activeFor(repoId);
           if (await exists(root, 'MERGE_HEAD'))
             await git(root, ['merge', '--abort']);
+          else if (op?.kind === 'pull' && (await rebasing(root)))
+            await git(root, ['rebase', '--abort']);
           else if (await exists(root, 'REVERT_HEAD'))
             await git(root, ['revert', '--abort']);
           else if (op) await git(root, ['reset', '--merge']);
           if (op) {
             ops.update(op.id, { state: 'failed', message: 'Aborted.' });
-            await report(
-              deps.recordsFor(repoId),
-              op.pull_id,
-              'merge_aborted',
-              null,
-            );
+            if (op.pull_id)
+              await report(
+                deps.recordsFor(repoId),
+                op.pull_id,
+                'merge_aborted',
+                null,
+              );
             const current = await currentBranch(root);
             if (op.head_ref && current !== op.head_ref)
               await gitAt(root)

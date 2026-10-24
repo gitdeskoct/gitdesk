@@ -452,6 +452,17 @@ function invalidateRepository(
     for (const prefix of prefixes[scope])
       void qc.invalidateQueries({ queryKey: [prefix, id] });
   void qc.invalidateQueries({ queryKey: repoKeys.activity });
+  // Any Git change can move what Sync shows; it is never updated ahead of Git's answer.
+  invalidateSync(qc, id);
+}
+
+export function invalidateSync(
+  qc: ReturnType<typeof useQueryClient>,
+  id: string,
+) {
+  void qc.invalidateQueries({ queryKey: ['sync-overview', id] });
+  void qc.invalidateQueries({ queryKey: ['sync-compare', id] });
+  void qc.invalidateQueries({ queryKey: ['sync-activity'] });
 }
 
 export const useDiff = (

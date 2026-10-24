@@ -37,6 +37,12 @@ function fakeHost() {
       if (repo) repo.tokens = 0;
       return count;
     },
+    async hasCommit() {
+      return false;
+    },
+    async tip() {
+      return null;
+    },
   };
   return { host, repos, issued, state };
 }

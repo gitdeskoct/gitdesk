@@ -80,6 +80,7 @@ function repo(overrides: Partial<RepositorySummary> = {}): RepositorySummary {
     inspecting: false,
     error: null,
     remoteId: null,
+    autoLink: null,
     ...overrides,
   };
 }

@@ -1,7 +1,6 @@
 import {
   CircleX,
   CloudUpload,
-  Copy,
   GitBranch,
   GitCommitHorizontal,
   GitMerge,
@@ -22,10 +21,9 @@ import type {
 import type { RepositorySummary } from '../../../shared/repos';
 import { ActivityArt, CommitsArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
+import { CopyButton } from '../../components/ui/copy-button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { InlineStatus, Loading } from '../../components/ui/status';
-import { Tooltip } from '../../components/ui/tooltip';
-import { useToast } from '../../components/ui/toast';
 import { cn } from '../../lib/cn';
 import { relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
@@ -40,7 +38,6 @@ export function CommitsTab({
   detail: PullDetail;
   onShowFiles: () => void;
 }) {
-  const toast = useToast();
   const { comparison, pull } = detail;
   const reviewed = pull.review?.version;
   if (!comparison?.commits.length)
@@ -100,22 +97,7 @@ export function CommitsTab({
             <span className="font-mono text-[0.75rem] text-muted">
               {shortOid(commit.oid)}
             </span>
-            <Tooltip label="Copy commit hash" side="top">
-              <Button
-                size="icon"
-                variant="ghost"
-                aria-label={`Copy commit hash ${shortOid(commit.oid)}`}
-                onClick={() =>
-                  void navigator.clipboard
-                    .writeText(commit.oid)
-                    .then(() =>
-                      toast({ tone: 'success', title: 'Commit hash copied' }),
-                    )
-                }
-              >
-                <Copy />
-              </Button>
-            </Tooltip>
+            <CopyButton value={commit.oid} label="commit hash" />
           </li>
         ))}
       </ul>

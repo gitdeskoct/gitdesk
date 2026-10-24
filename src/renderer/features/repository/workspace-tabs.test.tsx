@@ -100,6 +100,7 @@ function repo(
     inspecting: false,
     error: null,
     remoteId: null,
+    autoLink: null,
   };
 }
 

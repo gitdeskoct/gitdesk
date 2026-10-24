@@ -156,9 +156,19 @@ export function useRepoActions(
       disabled: locate.isPending,
       onSelect: () =>
         locate.mutate(repo.id, {
-          onSuccess: (found) =>
-            found &&
-            toast({ tone: 'success', title: `${found.name} found again` }),
+          onSuccess: (found) => {
+            if (found.status === 'located')
+              toast({
+                tone: 'success',
+                title: `${found.repository.name} found again`,
+              });
+            else if (found.status === 'different')
+              toast({
+                tone: 'danger',
+                title: 'That folder holds a different repository',
+                description: `Its history starts at ${found.found ?? 'no commit'}, not ${found.expected}. Open ${repo.name} and locate it there to use that folder anyway.`,
+              });
+          },
           onError: failed("Couldn't use that folder"),
         }),
     });

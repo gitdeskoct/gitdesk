@@ -1,14 +1,17 @@
 import { useQueryClient } from '@tanstack/react-query';
-import { Copy, GitCommitHorizontal } from 'lucide-react';
+import { GitCommitHorizontal } from 'lucide-react';
 import { useState, type KeyboardEvent } from 'react';
 import type { RepositorySummary } from '../../../shared/repos';
 import type { CommitRow } from '../../../shared/workspace';
-import { CommitsArt, OfflineArt } from '../../components/illustrations';
+import {
+  CommitsArt,
+  DiffArt,
+  OfflineArt,
+} from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
+import { CopyButton } from '../../components/ui/copy-button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { InlineStatus, Loading } from '../../components/ui/status';
-import { useToast } from '../../components/ui/toast';
-import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
 import { formatDate, relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
@@ -26,7 +29,6 @@ function CommitDetailView({
   onPick: (oid: string) => void;
 }) {
   const detail = useCommitDetail(repoId, oid);
-  const toast = useToast();
   const mine = useMyEmails();
   if (detail.isPending) return <Loading label="Reading the commit…" />;
   if (detail.isError)
@@ -72,23 +74,7 @@ function CommitDetailView({
           <span className="truncate font-mono text-[0.78125rem] text-ink">
             {commit.oid}
           </span>
-          <Tooltip label="Copy hash" side="top">
-            <Button
-              size="icon"
-              variant="ghost"
-              aria-label="Copy commit hash"
-              onClick={() =>
-                void navigator.clipboard
-                  .writeText(commit.oid)
-                  .then(() => toast({ tone: 'success', title: 'Hash copied' }))
-                  .catch(() =>
-                    toast({ tone: 'danger', title: "Couldn't copy the hash" }),
-                  )
-              }
-            >
-              <Copy />
-            </Button>
-          </Tooltip>
+          <CopyButton value={commit.oid} label="commit hash" />
         </dd>
         <dt className="text-muted">Author</dt>
         <dd className="flex min-w-0 items-center gap-2 text-ink">
@@ -136,7 +122,25 @@ function CommitDetailView({
           <b className="font-semibold text-ink">−{removed}</b> lines
         </span>
       </div>
-      <ul className="border-t border-line">
+      {!commit.files.length && commit.parents[0] && (
+        <EmptyState
+          compact
+          className="border-t border-line"
+          art={<DiffArt />}
+          title="No file changes"
+          action={
+            <Button size="sm" onClick={() => onPick(commit.parents[0]!)}>
+              Open its parent
+            </Button>
+          }
+        >
+          This commit changes no files compared with its first parent, like an
+          empty commit or a merge that took one side whole.
+        </EmptyState>
+      )}
+      <ul
+        className={cn('border-t border-line', !commit.files.length && 'hidden')}
+      >
         {commit.files.map((file) => (
           <li
             key={`${file.oldPath ?? ''}:${file.path}`}

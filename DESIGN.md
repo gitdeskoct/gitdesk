@@ -280,6 +280,16 @@ A folder path, remote URL or Git URL that doesn't fit loses its middle, never it
 - **Push never forces.** The header shows Push with the count the upstream doesn't have yet. A refused push explains fetching and merging first; it never offers to force.
 - **Off is a state, not an error.** When the server has Git hosting off, the URL row says so in words, the clone button stays unavailable with the reason beside it, and Settings › Git hosting shows Off with a warning icon.
 
+## Remote sync
+
+- **Git's states, in words.** The Sync tab names one of Up to date, Ahead, Behind, Diverged, No upstream and Upstream gone in a sentence, with To push, To pull, Changed files and Remote last checked in the strip. Counts from a fetch over an hour old say so, in the strip and in a "Checked …" chip in the header.
+- **Pull never surprises.** Fast-forward only is the default (Settings › Sync). Diverged histories disable it and a warning band names Merge or Rebase; the choice on the tab is for one pull. A merge or rebase that conflicts opens the shared conflict screen in its own words (Yours and Incoming), a rebase one replayed commit at a time; Abort puts the branch back where it was. gitdesk never stashes and never force-pushes.
+- **Unknown is a state.** A push cut off after its data was sent is "Push result unknown", with Check status, which asks the remote. Nothing is pushed again until then.
+- **Confirmed means the server found it.** A push to the account's Git URL is reported by operation id and checked against Artifacts; Sync activity tags it Confirmed by server, Not confirmed or Refused, and its chart asks "Did your pushes reach the server?".
+- **Compare is split, then files.** Commits only here beside commits only on the upstream, stacked under 860px; below them each side's files with a Shiki diff.
+- **Moving is reversible.** Move to gitdesk copies every branch and tag, checks each on the server, and only then points origin at gitdesk; the replaced remotes are kept on this computer for Undo. It is offered in an accent band, never a danger band.
+- **A new project gets its private remote by itself** once signed in (Settings › Git hosting). Signed out, it waits and says so; a taken name asks for another. Nothing is pushed until Publish.
+
 ## Code and diffs
 
 - **Syntax colors are the one place color is not state.** Recorded against R-37: the owner asked for Shiki highlighting. Themes come in light and dark pairs (GitHub is the default), and every token color is moved toward ink or white until it reaches 4.5:1 on all of the backgrounds below, so no theme ships unreadable tokens.

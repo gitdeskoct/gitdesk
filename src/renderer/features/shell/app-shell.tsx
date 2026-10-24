@@ -4,6 +4,7 @@ import { useNavigation, type Route } from '../../app/navigation';
 import { HomePage } from '../home/home-page';
 import { NotBuiltPage } from '../not-built/not-built-page';
 import { PullRequestPage } from '../pulls/pull-request-page';
+import { SyncActivityPage } from '../sync/sync-activity-page';
 import { PullsPage } from '../pulls/pulls-page';
 import { RepositoriesPage } from '../repos/repositories-page';
 import { RemoteRepositoryPage } from '../repository/remote-repository-page';
@@ -44,6 +45,8 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
       );
     case 'pulls':
       return <PullsPage />;
+    case 'sync-activity':
+      return <SyncActivityPage />;
     case 'settings':
       return <SettingsLayout status={status} section={route.section} />;
     default:

@@ -19,9 +19,10 @@
   // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY are secrets (`wrangler secret put`,
   // with --env dev for dev), never vars. Each environment has its own JWT_SIGNING_KEY.
   // GIT_HOSTING "artifacts" gives linked repositories a Git URL through the ARTIFACTS binding,
-  // which needs Workers Paid. "off" keeps them metadata only. This account is on the free plan, so
-  // it is "off" and the binding below is commented out; to turn hosting on, upgrade, uncomment the
-  // binding, set "artifacts" here, run `npm run cf-typegen` and deploy.
+  // which needs Workers Paid. "off" keeps them metadata only (and is what .dev.vars sets locally).
+  // Off until the account is on Workers Paid: a deploy with the binding is refused (code 10403).
+  // To turn it on: uncomment both "artifacts" lines, set "artifacts" here and in env.dev, run
+  // `npm run cf-typegen`, then deploy dev before production.
   "vars": {
     "PUBLIC_ORIGIN": "https://gitdesk-api.telvinteum.workers.dev",
     "GIT_HOSTING": "off"
@@ -37,9 +38,9 @@
       "migrations_dir": "drizzle/migrations"
     }
   ],
-  // One Git repository per account repository, named by its id. No local simulator exists, so it
-  // is always the remote service: `npm run dev` passes --local to leave it unreachable.
-  // Workers Paid only (deploys on the free plan are refused with code 10403):
+  // One Git repository per account repository, named by its id; the namespace is created with the
+  // first repository. No local simulator exists, so `npm run dev` (--local) leaves it unreachable.
+  // Workers Paid only (deploys on the free plan are refused with code 10403).
   // "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
   // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
   "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
@@ -53,7 +54,9 @@
     // Git tokens: one per fetch or push, which the desktop reuses until a minute before expiry.
     { "name": "GIT_LIMITER", "namespace_id": "4105", "simple": { "limit": 30, "period": 60 } },
     // Pull request writes: comments, reviews and snapshots come in bursts during a review.
-    { "name": "PULL_LIMITER", "namespace_id": "4106", "simple": { "limit": 60, "period": 60 } }
+    { "name": "PULL_LIMITER", "namespace_id": "4106", "simple": { "limit": 60, "period": 60 } },
+    // Push reports: one per push to the account's Git URL, plus retries of earlier ones.
+    { "name": "SYNC_LIMITER", "namespace_id": "4107", "simple": { "limit": 60, "period": 60 } }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]
@@ -87,6 +90,8 @@
         "PUBLIC_ORIGIN": "https://gitdesk-api-dev.telvinteum.workers.dev",
         "GIT_HOSTING": "off"
       },
+      // Its own namespace, so dev repositories never sit beside production ones.
+      // "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk-dev", "remote": true }],
       "secrets": {
         "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
       },
@@ -106,7 +111,8 @@
         { "name": "API_LIMITER", "namespace_id": "5103", "simple": { "limit": 120, "period": 60 } },
         { "name": "WRITE_LIMITER", "namespace_id": "5104", "simple": { "limit": 10, "period": 60 } },
         { "name": "GIT_LIMITER", "namespace_id": "5105", "simple": { "limit": 30, "period": 60 } },
-        { "name": "PULL_LIMITER", "namespace_id": "5106", "simple": { "limit": 60, "period": 60 } }
+        { "name": "PULL_LIMITER", "namespace_id": "5106", "simple": { "limit": 60, "period": 60 } },
+        { "name": "SYNC_LIMITER", "namespace_id": "5107", "simple": { "limit": 60, "period": 60 } }
       ],
       "triggers": {
         "crons": ["0 3 * * *"]

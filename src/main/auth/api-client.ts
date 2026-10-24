@@ -39,6 +39,48 @@ const overviewResponse = z.object({
   serverTime: z.number(),
 });
 // The token is opaque to gitdesk: bounded in size and free of anything that could end a header.
+const syncEventResponse = z.object({
+  event: z.object({
+    result: z.enum(['confirmed', 'unverified', 'rejected', 'failed']),
+    tip: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/)
+      .nullable(),
+  }),
+});
+const oidField = z.string().regex(/^[0-9a-f]{40,64}$/);
+const syncEventPage = z.object({
+  events: z
+    .array(
+      z.object({
+        operationId: z.uuid(),
+        repositoryId: z.string().min(1).max(64),
+        repositoryName: z.string().min(1).max(100),
+        ref: z.string().max(300),
+        oldOid: oidField.nullable(),
+        newOid: oidField,
+        result: z.enum(['confirmed', 'unverified']),
+        tip: oidField.nullable(),
+        createdAt: z.number(),
+      }),
+    )
+    .max(50),
+  nextCursor: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,300}$/)
+    .nullable(),
+});
+const syncStatsResponse = z.object({
+  weeks: z
+    .array(
+      z.object({
+        start: z.number(),
+        confirmed: z.number().int().nonnegative(),
+        unverified: z.number().int().nonnegative(),
+      }),
+    )
+    .max(52),
+});
 const credentialsResponse = z.object({
   remote: gitUrlSchema,
   token: z
@@ -325,6 +367,34 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
         credentialsResponse,
         { method: 'POST', body, token },
       ),
+    // Tells the account about a push to its Git URL; the server checks Artifacts for the commit.
+    reportSync: (
+      token: string,
+      id: string,
+      body: {
+        operationId: string;
+        kind: 'push';
+        ref: string;
+        oldOid: string | null;
+        newOid: string;
+      },
+    ) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/sync-events`,
+        syncEventResponse,
+        { method: 'POST', body, token },
+      ),
+    listSyncEvents: (
+      token: string,
+      query: { cursor: string | null; result: 'all' | 'unverified' },
+    ) => {
+      const params = new URLSearchParams({ limit: '20' });
+      if (query.cursor) params.set('cursor', query.cursor);
+      if (query.result !== 'all') params.set('result', query.result);
+      return request(`/api/v1/sync-events?${params}`, syncEventPage, { token });
+    },
+    syncStats: (token: string) =>
+      request('/api/v1/sync-events/stats', syncStatsResponse, { token }),
     revokeGitCredentials: (token: string, id: string) =>
       request(
         `/api/v1/repositories/${encodeURIComponent(id)}/git-credentials`,

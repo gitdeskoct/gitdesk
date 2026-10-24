@@ -25,6 +25,10 @@ export type RepoRow = {
   error: string | null;
   inspectedAt: number | null;
   statusAt: number | null;
+  // Added while signed out: gets its private remote right after sign-in.
+  autoLinkPending: boolean;
+  // The first commit of its history, so Locate can tell the same repository from another one.
+  rootCommit: string | null;
 };
 
 type RawRow = {
@@ -41,11 +45,13 @@ type RawRow = {
   error: string | null;
   inspected_at: number | null;
   status_at: number | null;
+  auto_link_pending: number;
+  root_commit: string | null;
 };
 
 const SELECT = `SELECT r.id, r.root_path, r.display_name, r.description, r.created_at,
   r.last_opened_at, r.is_pinned, r.remote_id, c.availability, c.status_json, c.error, c.inspected_at,
-  c.status_at
+  c.status_at, r.auto_link_pending, r.root_commit
   FROM local_repositories r LEFT JOIN repository_cache c ON c.repository_id = r.id`;
 
 const ACTIVITY_KEEP = 200;
@@ -73,6 +79,8 @@ const toRow = (raw: RawRow): RepoRow => ({
   error: raw.error,
   inspectedAt: raw.inspected_at,
   statusAt: raw.status_at,
+  autoLinkPending: raw.auto_link_pending === 1,
+  rootCommit: raw.root_commit,
 });
 
 // Every statement is prepared with bound parameters; no value is ever spliced into SQL.
@@ -203,8 +211,20 @@ export function createRepositoryStore(db: AppDatabase) {
 
     setRemote(id: string, remoteId: string | null): void {
       db.prepare(
-        'UPDATE local_repositories SET remote_id = ? WHERE id = ?',
+        'UPDATE local_repositories SET remote_id = ?, auto_link_pending = 0 WHERE id = ?',
       ).run(remoteId, id);
+    },
+
+    setRootCommit(id: string, oid: string): void {
+      db.prepare(
+        'UPDATE local_repositories SET root_commit = ? WHERE id = ?',
+      ).run(oid, id);
+    },
+
+    setAutoLinkPending(id: string, pending: boolean): void {
+      db.prepare(
+        'UPDATE local_repositories SET auto_link_pending = ? WHERE id = ?',
+      ).run(pending ? 1 : 0, id);
     },
 
     // Only fields that are passed change; undefined keeps the stored value.

@@ -116,6 +116,10 @@ export const settingsSchema = z.object({
   // Git hosting: the remote name used when linking adds the account's Git URL, and how long a
   // token in a copied terminal command lasts, in seconds.
   hostingRemoteName: z.enum(['auto', 'gitdesk', 'none']),
+  // Adding, creating or cloning a project gives it a private remote in the account. Nothing is pushed.
+  autoHostedRemote: z.boolean(),
+  // How Pull integrates the upstream unless one pull picks another method.
+  pullStrategy: z.enum(['ff-only', 'merge', 'rebase']),
   hostingTokenLifetime: z.union([
     z.literal(900),
     z.literal(3600),
@@ -179,6 +183,8 @@ export const DEFAULT_SETTINGS: Settings = {
   pullOfferDeleteBranch: false,
   pullWarnBeforeMerge: true,
   hostingRemoteName: 'auto',
+  autoHostedRemote: true,
+  pullStrategy: 'ff-only',
   hostingTokenLifetime: 3600,
   editor: 'system',
   editorGotoLine: true,

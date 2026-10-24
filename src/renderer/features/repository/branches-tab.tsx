@@ -1,4 +1,4 @@
-import { Check, Copy } from 'lucide-react';
+import { Check } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 import type { RepositorySummary } from '../../../shared/repos';
 import {
@@ -6,12 +6,16 @@ import {
   type LocalBranch,
   type SwitchResult,
 } from '../../../shared/workspace';
-import { BranchesArt, OfflineArt } from '../../components/illustrations';
+import {
+  BranchesArt,
+  OfflineArt,
+  RemoteArt,
+} from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
+import { CopyButton } from '../../components/ui/copy-button';
 import { EmptyState } from '../../components/ui/empty-state';
-import { InlineStatus, Loading } from '../../components/ui/status';
+import { Loading } from '../../components/ui/status';
 import { TextField } from '../../components/ui/text-field';
-import { useToast } from '../../components/ui/toast';
 import { relativeTime } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
@@ -28,26 +32,6 @@ function upstreamWords(branch: LocalBranch): string {
   if (!branch.upstream) return 'No upstream';
   if (branch.gone) return `${branch.upstream} · upstream is gone`;
   return `${branch.upstream} · ahead ${branch.ahead ?? 0}, behind ${branch.behind ?? 0} at the last fetch`;
-}
-
-function CopyName({ name }: { name: string }) {
-  const toast = useToast();
-  return (
-    <Button
-      size="sm"
-      variant="ghost"
-      onClick={() =>
-        void navigator.clipboard
-          .writeText(name)
-          .then(() => toast({ tone: 'success', title: 'Branch name copied' }))
-          .catch(() =>
-            toast({ tone: 'danger', title: "Couldn't copy the name" }),
-          )
-      }
-    >
-      <Copy /> Copy name
-    </Button>
-  );
 }
 
 export function BranchesTab({
@@ -234,7 +218,11 @@ export function BranchesTab({
                     Switch
                   </Button>
                 )}
-                <CopyName name={branch.name} />
+                <CopyButton
+                  value={branch.name}
+                  label="branch name"
+                  text="Copy name"
+                />
               </li>
             ))}
           </ul>
@@ -252,10 +240,24 @@ export function BranchesTab({
         meta="Local copies of remote branches, updated by Fetch"
       >
         {!data.remote.length ? (
-          <InlineStatus className="border-y border-line py-3">
-            No remote-tracking branches. Fetch from a remote on the Remotes tab
-            to see its branches.
-          </InlineStatus>
+          <EmptyState
+            compact
+            className="border-t border-line"
+            art={<RemoteArt />}
+            title="No remote-tracking branches"
+            action={
+              <Button
+                size="sm"
+                onClick={() =>
+                  navigate({ name: 'repository', id: repo.id, tab: 'remotes' })
+                }
+              >
+                Open Remotes
+              </Button>
+            }
+          >
+            Fetch from a remote on the Remotes tab to see its branches here.
+          </EmptyState>
         ) : (
           <ul className="border-t border-line">
             {data.remote.map((branch) => (

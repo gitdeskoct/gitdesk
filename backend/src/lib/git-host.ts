@@ -9,6 +9,10 @@ export type GitHost = {
   remove(name: string): Promise<void>;
   token(name: string, scope: GitScope, ttlSeconds: number): Promise<{ token: string; expiresAt: number }>;
   revokeAll(name: string): Promise<number>;
+  // Read-only checks of what a push left on the server.
+  hasCommit(name: string, oid: string): Promise<boolean>;
+  // The commit a branch points at now, or null when there is no such branch.
+  tip(name: string, ref: string): Promise<string | null>;
 };
 
 const isCode = (err: unknown, code: string): boolean =>
@@ -57,6 +61,13 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
         return { token: created.plaintext, expiresAt: Date.parse(created.expiresAt) };
       });
     },
+    hasCommit(name, oid) {
+      return withRepo(artifacts, name, async (repo) => (await repo.readCommit(oid)) !== null);
+    },
+    tip(name, ref) {
+      // log() follows first parents from the ref and returns nothing for a ref it can't resolve.
+      return withRepo(artifacts, name, async (repo) => (await repo.log({ ref, limit: 1 }))[0]?.hash ?? null);
+    },
     revokeAll(name) {
       return withRepo(artifacts, name, async (repo) => {
         const { tokens } = await repo.listTokens();
@@ -69,7 +80,7 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
 }
 
 // Off unless the deployment opts in: Artifacts has no local simulator, so `wrangler dev --local`
-// and tests run without it.
-// ARTIFACTS is bound only on Workers Paid (see wrangler.jsonc), so it may be absent.
+// (GIT_HOSTING=off in .dev.vars) and tests run without it.
+// ARTIFACTS is bound only once the account is on Workers Paid (see wrangler.jsonc), so it may be absent.
 export const gitHostFor = (env: CloudflareBindings & { ARTIFACTS?: Artifacts }): GitHost | null =>
   env.GIT_HOSTING === 'artifacts' && env.ARTIFACTS ? artifactsHost(env.ARTIFACTS) : null;

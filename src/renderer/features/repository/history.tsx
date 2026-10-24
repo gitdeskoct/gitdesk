@@ -71,11 +71,17 @@ export type SummaryCell = {
 // The same hairline strip as Home's statistics, but read-only: these numbers describe one
 // repository and have nowhere further to go.
 export function SummaryStrip({ cells }: { cells: SummaryCell[] }) {
+  // One column per cell once there is room: Overview has five, Sync four.
   return (
     <div
       role="group"
       aria-label="Repository summary"
-      className="grid grid-cols-2 border-y border-line @min-[720px]:grid-cols-5"
+      className={cn(
+        'grid grid-cols-2 border-y border-line',
+        cells.length === 4
+          ? '@min-[720px]:grid-cols-4'
+          : '@min-[720px]:grid-cols-5',
+      )}
     >
       {cells.map((cell, index) => (
         <div
@@ -373,7 +379,7 @@ export const Section = ({
 }: {
   id: string;
   title: string;
-  meta?: string;
+  meta?: ReactNode;
   children: ReactNode;
   className?: string;
 }) => (

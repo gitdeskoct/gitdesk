@@ -308,3 +308,33 @@ export const pullRequestMergeResults = sqliteTable('pull_request_merge_results',
   targetOid: text('target_oid').notNull(),
   createdAt: integer('created_at').notNull(),
 });
+
+// One row per push the desktop reported to its account Git URL, keyed by the desktop's operation
+// id so a retried report is a no-op. result is what the server found in Artifacts when told.
+export const syncEvents = sqliteTable(
+  'sync_events',
+  {
+    operationId: text('operation_id').primaryKey(),
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    kind: text('kind', { enum: ['push'] }).notNull(),
+    ref: text('ref').notNull(),
+    oldOid: text('old_oid'),
+    newOid: text('new_oid').notNull(),
+    result: text('result', { enum: ['confirmed', 'unverified'] }).notNull(),
+    // The branch tip Artifacts reported when the event was recorded; null when it had none.
+    tip: text('tip'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    index('sync_events_repository').on(t.repositoryId, t.createdAt, t.operationId),
+    index('sync_events_account').on(t.accountId, t.createdAt, t.operationId),
+    index('sync_events_time').on(t.createdAt),
+    check('sync_events_kind', sql`${t.kind} IN ('push')`),
+    check('sync_events_result', sql`${t.result} IN ('confirmed', 'unverified')`),
+  ],
+);

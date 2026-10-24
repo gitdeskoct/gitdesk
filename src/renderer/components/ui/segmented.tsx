@@ -21,7 +21,10 @@ export function Segmented<T extends string>({
       value={value}
       onValueChange={(next) => onChange(next as T)}
       orientation="horizontal"
-      className={cn('inline-flex gap-0.5 rounded-sm bg-control p-0.5', className)}
+      className={cn(
+        'inline-flex gap-0.5 rounded-sm bg-control p-0.5',
+        className,
+      )}
     >
       {options.map((option) => (
         <RadioGroup.Item

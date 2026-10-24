@@ -9,6 +9,9 @@ import {
   cloneInputSchema,
   createRepositoryInputSchema,
   initializeInputSchema,
+  linkNamedInputSchema,
+  locateConfirmInputSchema,
+  moveInputSchema,
   remoteCreateInputSchema,
   pinInputSchema,
   refreshInputSchema,
@@ -44,6 +47,18 @@ import {
 } from '../../shared/pulls';
 import { settingsPatchSchema } from '../../shared/settings';
 import type { PullService } from '../pulls/pull-service';
+import type { MoveService } from '../sync/move-service';
+import type { SyncService } from '../sync/sync-service';
+import {
+  accountActivityInputSchema,
+  checkPushInputSchema,
+  publishInputSchema,
+  pullInputSchema,
+  setUpstreamInputSchema,
+  SYNC_IPC as S,
+  syncActivityInputSchema,
+  syncFileDiffInputSchema,
+} from '../../shared/sync';
 import {
   analyticsInputSchema,
   commitDetailInputSchema,
@@ -107,6 +122,8 @@ export function registerIpc(
     workspace: WorkspaceService;
     gitInstall: GitInstallService;
     pulls: PullService;
+    move: MoveService;
+    sync: SyncService;
   },
 ): void {
   const {
@@ -120,7 +137,66 @@ export function registerIpc(
     workspace,
     gitInstall,
     pulls,
+    move,
+    sync,
   } = services;
+  // Sync: ids resolve against the registry in main; remotes and branches are checked against Git.
+  handle(
+    S.overview,
+    repoIdSchema,
+    userFacing((repoId) => sync.overview(repoId)),
+  );
+  handle(
+    S.compare,
+    repoIdSchema,
+    userFacing((repoId) => sync.compare(repoId)),
+  );
+  handle(
+    S.check,
+    repoIdSchema,
+    userFacing((repoId) => sync.check(repoId)),
+  );
+  handle(
+    S.pull,
+    pullInputSchema,
+    userFacing((input) => sync.pull(input)),
+  );
+  handle(S.cancel, z.uuid(), (jobId) => sync.cancel(jobId));
+  handle(
+    S.publish,
+    publishInputSchema,
+    userFacing((input) => sync.publish(input)),
+  );
+  handle(
+    S.setUpstream,
+    setUpstreamInputSchema,
+    userFacing((input) => sync.setUpstream(input)),
+  );
+  handle(
+    S.checkPush,
+    checkPushInputSchema,
+    userFacing((input) => sync.checkPush(input)),
+  );
+  handle(
+    S.activity,
+    syncActivityInputSchema,
+    userFacing((input) => sync.activity(input)),
+  );
+  handle(
+    S.accountActivity,
+    accountActivityInputSchema,
+    userFacing((input) => sync.accountActivity(input)),
+  );
+  handle(
+    S.accountStats,
+    none,
+    userFacing(() => sync.accountStats()),
+  );
+  handle(
+    S.fileDiff,
+    syncFileDiffInputSchema,
+    userFacing((input) => sync.fileDiff(input)),
+  );
   // Pull requests: every input is checked against its schema; repository ids, refs and paths are
   // resolved in main against the registry and Git, never trusted from the renderer.
   handle(
@@ -325,6 +401,11 @@ export function registerIpc(
     userFacing((repoId) => repos.locate(repoId)),
   );
   handle(
+    r.locateConfirm,
+    locateConfirmInputSchema,
+    userFacing((input) => repos.locateConfirm(input)),
+  );
+  handle(
     r.refresh,
     refreshInputSchema,
     userFacing((repoId) => repos.refresh(repoId)),
@@ -454,6 +535,32 @@ export function registerIpc(
     r.revokeGitTokens,
     id,
     userFacing((repoId) => repos.revokeGitTokens(repoId)),
+  );
+  handle(
+    r.linkNamed,
+    linkNamedInputSchema,
+    userFacing((input) => repos.linkNamed(input)),
+  );
+  handle(
+    r.movePreview,
+    id,
+    userFacing((repoId) => move.preview(repoId)),
+  );
+  handle(
+    r.move,
+    moveInputSchema,
+    userFacing((input) => move.move(input)),
+  );
+  handle(r.moveCancel, z.uuid(), (jobId) => move.cancel(jobId));
+  handle(
+    r.moveUndoState,
+    id,
+    userFacing((repoId) => move.undoState(repoId)),
+  );
+  handle(
+    r.undoMove,
+    id,
+    userFacing((repoId) => move.undo(repoId)),
   );
   handle(
     r.history,

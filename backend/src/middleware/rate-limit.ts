@@ -2,7 +2,14 @@ import type { Context, MiddlewareHandler } from 'hono';
 import type { AppEnv } from '../env';
 import { ApiError } from '../lib/errors';
 
-type Limiter = 'AUTH_LIMITER' | 'REFRESH_LIMITER' | 'API_LIMITER' | 'WRITE_LIMITER' | 'GIT_LIMITER' | 'PULL_LIMITER';
+type Limiter =
+  | 'AUTH_LIMITER'
+  | 'REFRESH_LIMITER'
+  | 'API_LIMITER'
+  | 'WRITE_LIMITER'
+  | 'GIT_LIMITER'
+  | 'PULL_LIMITER'
+  | 'SYNC_LIMITER';
 
 export const clientIp = (c: Context<AppEnv>): string =>
   c.req.header('cf-connecting-ip') ?? 'unknown';

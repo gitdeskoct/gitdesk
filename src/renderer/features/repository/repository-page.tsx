@@ -1,15 +1,19 @@
 import * as Tabs from '@radix-ui/react-tabs';
 import {
+  ArrowDownToLine,
   CloudDownload,
   CloudUpload,
   FolderOpen,
   RefreshCw,
+  TriangleAlert,
 } from 'lucide-react';
 import { Fragment, useState, type ReactNode } from 'react';
 import type {
+  LocateResult,
   RemoteRepository,
   RepositorySummary,
 } from '../../../shared/repos';
+import { useLocateConfirm, useSyncOverview } from '../../lib/sync-queries';
 import {
   FolderMissingArt,
   GitMissingArt,
@@ -46,7 +50,9 @@ import {
   useRepoActions,
 } from '../repos/repo-actions';
 import { ManageBand, trashName, type ManageMode } from '../repos/manage';
-import { SyncChip, TreeChip } from '../repos/status';
+import { StaleChip, SyncChip, TreeChip } from '../repos/status';
+import { SyncTab } from '../sync/sync-tab';
+import { usePullAction } from '../sync/use-pull';
 import { Page } from '../shell/page';
 import { Analytics } from './analytics';
 import { BranchPicker, type SwitchOutcome } from './branch-picker';
@@ -398,6 +404,7 @@ const TABS: { value: RepoTab; label: string }[] = [
   { value: 'history', label: 'History' },
   { value: 'branches', label: 'Branches' },
   { value: 'pulls', label: 'Pull requests' },
+  { value: 'sync', label: 'Sync' },
   { value: 'remotes', label: 'Remotes' },
   { value: 'overview', label: 'Overview' },
   { value: 'settings', label: 'Settings' },
@@ -480,14 +487,19 @@ function FetchButton({ repo }: { repo: RepositorySummary }) {
         : names[0]) ?? null;
   if (!repo.status?.hasRemotes || !remote) return null;
   return action.running ? (
-    <Button
-      size="sm"
-      onClick={action.cancel}
-      aria-label={`Cancel fetching ${remote}`}
-    >
-      <CloudDownload />
-      {action.progress ? `${action.progress.percent}%` : 'Fetching'} · Cancel
-    </Button>
+    <>
+      <Button size="sm" pending>
+        {action.progress ? `${action.progress.percent}%` : 'Fetching'}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={action.cancel}
+        aria-label={`Cancel fetching ${remote}`}
+      >
+        Cancel
+      </Button>
+    </>
   ) : (
     <Button size="sm" onClick={() => action.start(remote)}>
       <CloudDownload />
@@ -504,10 +516,19 @@ function PushButton({ repo }: { repo: RepositorySummary }) {
   const ahead = status.upstream ? (status.ahead ?? 0) : null;
   if (action.running)
     return (
-      <Button size="sm" onClick={action.cancel} aria-label="Cancel push">
-        <CloudUpload />
-        {action.progress ? `${action.progress.percent}%` : 'Pushing'} · Cancel
-      </Button>
+      <>
+        <Button size="sm" pending>
+          {action.progress ? `${action.progress.percent}%` : 'Pushing'}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={action.cancel}
+          aria-label="Cancel push"
+        >
+          Cancel
+        </Button>
+      </>
     );
   return (
     <Button
@@ -521,6 +542,32 @@ function PushButton({ repo }: { repo: RepositorySummary }) {
     >
       <CloudUpload />
       Push{ahead ? ` ${ahead}` : ''}
+    </Button>
+  );
+}
+
+// Pulls the upstream with the default method; shown when the last fetch found commits to pull.
+// A stopped pull is explained on the Sync tab, where its reason and files have room.
+function PullButton({ repo }: { repo: RepositorySummary }) {
+  const action = usePullAction(repo.id, { toast: true });
+  const { data: settings } = useSettings();
+  const { navigate } = useNavigation();
+  const status = repo.status;
+  if (!status?.upstream || !status.behind || status.operation) return null;
+  return (
+    <Button
+      size="sm"
+      pending={action.running}
+      title={`${status.behind} ${status.behind === 1 ? 'commit' : 'commits'} to pull`}
+      onClick={() =>
+        !action.running &&
+        (status.ahead
+          ? navigate({ name: 'repository', id: repo.id, tab: 'sync' })
+          : action.start(settings?.pullStrategy ?? 'ff-only'))
+      }
+    >
+      {!action.running && <ArrowDownToLine />}
+      Pull {status.behind}
     </Button>
   );
 }
@@ -554,6 +601,18 @@ function RepositoryView({
   const remote = remoteQuery.data ?? null;
   const [mode, setMode] = useState<ManageMode | null>(null);
   const [outcome, setOutcome] = useState<SwitchOutcome | null>(null);
+  const [different, setDifferent] = useState<Extract<
+    LocateResult,
+    { status: 'different' }
+  > | null>(null);
+  const confirmLocate = useLocateConfirm(repo.id);
+  // gitdesk's own pull waiting on conflicts is explained by Sync, not as someone else's merge.
+  const syncState = useSyncOverview(repo.id, repo.statusAt);
+  const ownPull =
+    syncState.data?.pending?.kind === 'pull' &&
+    syncState.data.pending.state === 'conflict_resolution'
+      ? syncState.data.pending
+      : null;
   const { actions, busy } = useRepoActions(repo, setMode, remote);
   const [measure, width] = useWidth();
   const gone = () => navigate({ name: 'repositories' });
@@ -645,7 +704,12 @@ function RepositoryView({
             <Button
               variant="primary"
               pending={locate.isPending}
-              onClick={() => locate.mutate(repo.id)}
+              onClick={() =>
+                locate.mutate(repo.id, {
+                  onSuccess: (found) =>
+                    setDifferent(found.status === 'different' ? found : null),
+                })
+              }
             >
               Locate folder
             </Button>
@@ -655,6 +719,59 @@ function RepositoryView({
             ? `It was at ${repo.displayPath}. It may be on a drive that isn't connected. The registration stays until you remove it.`
             : `The folder at ${repo.displayPath} is there, but Git no longer recognises it.`}
         </EmptyState>
+        {different && (
+          <div
+            role="alert"
+            className="flex flex-wrap items-center gap-3 bg-warning-soft px-3 py-2.5 text-[0.8125rem] text-ink"
+          >
+            <TriangleAlert
+              aria-hidden
+              className="size-4 shrink-0 text-warning"
+            />
+            <span className="min-w-[16rem] flex-1">
+              <b className="font-semibold">
+                That folder holds a different repository.
+              </b>{' '}
+              {different.displayPath} starts at{' '}
+              <span className="font-mono">
+                {different.found ?? 'no commit'}
+              </span>
+              , but {repo.name} started at{' '}
+              <span className="font-mono">{different.expected}</span>. Using it
+              would attach {repo.name}'s remote link and history in gitdesk to
+              other work.
+            </span>
+            <Button
+              size="sm"
+              pending={locate.isPending}
+              onClick={() =>
+                locate.mutate(repo.id, {
+                  onSuccess: (found) =>
+                    setDifferent(found.status === 'different' ? found : null),
+                })
+              }
+            >
+              Choose another folder
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              pending={confirmLocate.isPending}
+              onClick={() =>
+                confirmLocate.mutate(different.token, {
+                  onSuccess: () => setDifferent(null),
+                })
+              }
+            >
+              Use it anyway
+            </Button>
+          </div>
+        )}
+        {confirmLocate.error && (
+          <InlineStatus tone="danger" className="mt-3">
+            {ipcErrorMessage(confirmLocate.error, "Couldn't use that folder.")}
+          </InlineStatus>
+        )}
         {mode && mode !== 'rename' && (
           <ManageBand
             mode={mode}
@@ -715,6 +832,13 @@ function RepositoryView({
               />
               <TreeChip repo={repo} />
               <SyncChip repo={repo} />
+              {status?.fetchedAt && (
+                <StaleChip
+                  repo={repo}
+                  now={Date.now()}
+                  label={`Checked ${relativeTime(status.fetchedAt)}`}
+                />
+              )}
               <span className="text-xs whitespace-nowrap text-muted">
                 {busy ??
                   (status?.fetchedAt
@@ -726,6 +850,7 @@ function RepositoryView({
                         : '')}
               </span>
               <FetchButton repo={repo} />
+              <PullButton repo={repo} />
               <PushButton repo={repo} />
             </div>
           </div>
@@ -735,7 +860,26 @@ function RepositoryView({
               {repo.error}
             </InlineStatus>
           )}
-          {status && (status.conflicts > 0 || status.operation) && (
+          {ownPull && tab !== 'sync' && (
+            <InlineStatus
+              tone="warning"
+              className="mt-3"
+              action={
+                <Button
+                  size="sm"
+                  onClick={() =>
+                    navigate({ name: 'repository', id: repo.id, tab: 'sync' })
+                  }
+                >
+                  Open Sync
+                </Button>
+              }
+            >
+              gitdesk's pull of {ownPull.remote} is waiting on conflicts.
+              Resolve them on the Sync tab to finish, or abort it there.
+            </InlineStatus>
+          )}
+          {!ownPull && status && (status.conflicts > 0 || status.operation) && (
             <InlineStatus
               tone={status.conflicts > 0 ? 'danger' : 'warning'}
               className="mt-3"
@@ -814,6 +958,9 @@ function RepositoryView({
           </Tabs.Content>
           <Tabs.Content value="pulls" className={tabContent}>
             <PullsTab repo={repo} width={width} />
+          </Tabs.Content>
+          <Tabs.Content value="sync" className={tabContent}>
+            {scrolling(<SyncTab repo={repo} width={width} />)}
           </Tabs.Content>
           <Tabs.Content value="remotes" className={tabContent}>
             {scrolling(<RemotesTab repo={repo} />)}

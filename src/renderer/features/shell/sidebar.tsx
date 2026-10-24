@@ -4,6 +4,7 @@ import {
   Folder,
   GitPullRequest,
   House,
+  RefreshCw,
   Settings,
   type LucideIcon,
 } from 'lucide-react';
@@ -24,6 +25,7 @@ type Item = {
 const code: Item[] = [
   { route: 'repositories', label: 'Repositories', icon: Folder },
   { route: 'pulls', label: 'Pull requests', icon: GitPullRequest },
+  { route: 'sync-activity', label: 'Sync activity', icon: RefreshCw },
   { route: 'issues', label: 'Issues', icon: CircleDot, soon: true },
 ];
 

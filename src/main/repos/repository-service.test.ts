@@ -21,6 +21,7 @@ import {
 import { DEFAULT_SETTINGS } from '../../shared/settings';
 import { openDatabase } from '../db/database';
 import { UserError } from '../errors';
+import { NameTakenError } from '../remote/remote-service';
 import { bucketWeeks, weekStart } from './git-inspector';
 import { createRepositoryService, displayPath } from './repository-service';
 import { createRepositoryStore } from './repository-store';
@@ -636,5 +637,136 @@ describe('disconnect, rename and trash', () => {
       'Nothing was deleted',
     );
     expect(service.list()).toHaveLength(1);
+  });
+});
+
+describe('automatic private remote', () => {
+  const made = (id: string, name: string) => ({
+    id,
+    name,
+    description: null,
+    visibility: 'private' as const,
+    defaultBranch: 'main',
+    status: 'ready' as const,
+    gitUrl: null,
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  it('links a project added while signed in, once', async () => {
+    picked = makeRepo('app');
+    remoteCreate.mockResolvedValue(made('remote-1', 'app'));
+    const { service, store } = setup({ signedIn: () => true });
+    const result = await service.add();
+    if (result.status !== 'added') throw new Error('not added');
+    await vi.waitFor(() =>
+      expect(store.get(result.repository.id)?.remoteId).toBe('remote-1'),
+    );
+    expect(remoteCreate).toHaveBeenCalledTimes(1);
+    expect(remoteCreate).toHaveBeenCalledWith(
+      { name: 'app', description: null },
+      result.repository.id,
+    );
+    expect(service.list()[0]?.autoLink).toBeNull();
+  });
+
+  it('waits for sign-in, then links the projects added meanwhile', async () => {
+    picked = makeRepo('app');
+    let signedIn = false;
+    remoteCreate.mockResolvedValue(made('remote-1', 'app'));
+    const { service, store } = setup({ signedIn: () => signedIn });
+    const result = await service.add();
+    if (result.status !== 'added') throw new Error('not added');
+    expect(remoteCreate).not.toHaveBeenCalled();
+    expect(service.list()[0]?.autoLink).toEqual({ state: 'waiting' });
+
+    signedIn = true;
+    service.handleAuth({ status: 'authenticated' });
+    await vi.waitFor(() =>
+      expect(store.get(result.repository.id)?.remoteId).toBe('remote-1'),
+    );
+    expect(store.get(result.repository.id)?.autoLinkPending).toBe(false);
+    expect(remoteCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it('tries numbered names when the folder name is taken, then asks', async () => {
+    picked = makeRepo('app');
+    remoteCreate.mockRejectedValue(new NameTakenError('taken'));
+    const { service, store } = setup({ signedIn: () => true });
+    const result = await service.add();
+    if (result.status !== 'added') throw new Error('not added');
+    await vi.waitFor(() =>
+      expect(service.list()[0]?.autoLink).toEqual({
+        state: 'name-taken',
+        name: 'app',
+      }),
+    );
+    expect(remoteCreate.mock.calls.map(([input]) => input.name)).toEqual([
+      'app',
+      ...[2, 3, 4, 5, 6, 7, 8, 9].map((n) => `app-${n}`),
+    ]);
+
+    remoteCreate.mockResolvedValue(made('remote-2', 'mine'));
+    await service.linkNamed({ id: result.repository.id, name: 'mine' });
+    expect(store.get(result.repository.id)?.remoteId).toBe('remote-2');
+    expect(service.list()[0]?.autoLink).toBeNull();
+  });
+
+  it('reports a failure on the row and does nothing when local-only', async () => {
+    picked = makeRepo('app');
+    remoteCreate.mockRejectedValue(
+      new UserError("Can't reach the gitdesk server."),
+    );
+    const { service } = setup({ signedIn: () => true });
+    await service.add();
+    await vi.waitFor(() =>
+      expect(service.list()[0]?.autoLink).toEqual({
+        state: 'failed',
+        message: "Can't reach the gitdesk server.",
+      }),
+    );
+
+    remoteCreate.mockClear();
+    picked = makeRepo('other');
+    const local = setup({
+      signedIn: () => true,
+      settings: () => ({
+        ...DEFAULT_SETTINGS,
+        watchRepositories: false,
+        localOnly: true,
+      }),
+    });
+    await local.service.add();
+    expect(remoteCreate).not.toHaveBeenCalled();
+    expect(local.service.list().every((repo) => repo.autoLink === null)).toBe(
+      true,
+    );
+  });
+});
+
+describe('locate', () => {
+  it('moves to the same repository at once and asks about a different one', async () => {
+    const root = makeRepo('app');
+    picked = root;
+    const { service, store } = setup();
+    const added = await service.add();
+    if (added.status !== 'added') throw new Error('not added');
+    const id = added.repository.id;
+    await vi.waitFor(() => expect(store.get(id)?.rootCommit).toBeTruthy());
+
+    const moved = path.join(dir, 'moved-app');
+    renameSync(root, moved);
+    picked = moved;
+    const same = await service.locate(id);
+    expect(same).toMatchObject({ status: 'located' });
+    expect(store.get(id)?.rootPath.toLowerCase()).toContain('moved-app');
+
+    picked = makeRepo('stranger');
+    const other = await service.locate(id);
+    expect(other).toMatchObject({ status: 'different' });
+    expect(store.get(id)?.rootPath.toLowerCase()).toContain('moved-app');
+    if (other.status !== 'different') return;
+    await service.locateConfirm({ id, token: other.token });
+    expect(store.get(id)?.rootPath.toLowerCase()).toContain('stranger');
   });
 });

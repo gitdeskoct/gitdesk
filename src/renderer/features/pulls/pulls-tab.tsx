@@ -305,13 +305,7 @@ export function PullsTab({
               pull={current}
               onOpen={() => open(current)}
             />
-          ) : (
-            !list.isPending && (
-              <p className="text-[0.8125rem] text-muted">
-                Select a pull request to see it here.
-              </p>
-            )
-          )}
+          ) : null}
         </div>
       </div>
     );
