@@ -104,6 +104,7 @@ const overview = (over: Partial<SyncOverview> = {}): SyncOverview => ({
   upstream: 'origin/main',
   remote: 'origin',
   state: 'diverged',
+  noCommits: false,
   ahead: 2,
   behind: 1,
   changed: 0,
@@ -342,8 +343,30 @@ describe('sync tab', () => {
     await openSync();
     expect(await screen.findByText('Upstream gone')).toBeInTheDocument();
     expect(
-      await screen.findByRole('heading', { name: 'main lost its upstream' }),
+      await screen.findByRole('heading', {
+        name: "origin/main isn't on the remote",
+      }),
     ).toBeInTheDocument();
+  });
+
+  it('calls an empty clone new, not gone, and offers no publish yet', async () => {
+    install(
+      [repo({ ahead: null, behind: null, headOid: null })],
+      overview({
+        state: 'no-upstream',
+        noCommits: true,
+        ahead: null,
+        behind: null,
+      }),
+    );
+    await openSync();
+    expect(
+      await screen.findByRole('heading', { name: 'main has no commits yet' }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText('Upstream gone')).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole('heading', { name: 'Publish or track' }),
+    ).not.toBeInTheDocument();
   });
 });
 

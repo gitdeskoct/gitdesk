@@ -342,7 +342,15 @@ function RemoveOrDelete({
 }
 
 // The workspace for one registered repository: what Git reports here, and what the account holds.
-export function RepositoryPage({ id, tab }: { id: string; tab?: RepoTab }) {
+export function RepositoryPage({
+  id,
+  tab,
+  newPull,
+}: {
+  id: string;
+  tab?: RepoTab;
+  newPull?: { source: string; target: string };
+}) {
   const { navigate } = useNavigation();
   const repos = useRepositories();
   const repo = repos.data?.find((r) => r.id === id);
@@ -396,7 +404,9 @@ export function RepositoryPage({ id, tab }: { id: string; tab?: RepoTab }) {
         </EmptyState>
       </Page>
     );
-  return <RepositoryView repo={repo} crumbs={crumbs} tab={tab} />;
+  return (
+    <RepositoryView repo={repo} crumbs={crumbs} tab={tab} newPull={newPull} />
+  );
 }
 
 const TABS: { value: RepoTab; label: string }[] = [
@@ -580,10 +590,12 @@ function RepositoryView({
   repo,
   crumbs,
   tab: routeTab,
+  newPull,
 }: {
   repo: RepositorySummary;
   crumbs: { label: string; onSelect?: () => void }[];
   tab?: RepoTab;
+  newPull?: { source: string; target: string };
 }) {
   useNow();
   const { navigate } = useNavigation();
@@ -799,7 +811,8 @@ function RepositoryView({
       <div className="mx-auto max-w-(--content-max)">{children}</div>
     </div>
   );
-  const tabContent = 'flex min-h-0 flex-1 flex-col focus-visible:outline-none';
+  const tabContent =
+    'flex min-h-0 flex-1 flex-col focus-visible:-outline-offset-2';
 
   return (
     <Page crumbs={crumbs} actions={header} fill>
@@ -957,7 +970,7 @@ function RepositoryView({
             )}
           </Tabs.Content>
           <Tabs.Content value="pulls" className={tabContent}>
-            <PullsTab repo={repo} width={width} />
+            <PullsTab repo={repo} width={width} newPull={newPull} />
           </Tabs.Content>
           <Tabs.Content value="sync" className={tabContent}>
             {scrolling(<SyncTab repo={repo} width={width} />)}

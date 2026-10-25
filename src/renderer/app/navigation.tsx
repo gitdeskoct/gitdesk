@@ -40,7 +40,13 @@ export type Route =
   | { name: 'repositories'; show?: RepoShow; scope?: RepoScope }
   // A registered repository, by gitdesk's id; the path stays in main. Without a tab it opens on
   // the repository's own "opens on" choice.
-  | { name: 'repository'; id: string; tab?: RepoTab }
+  // `newPull` opens the Pull requests tab on a new pull request for those branches.
+  | {
+      name: 'repository';
+      id: string;
+      tab?: RepoTab;
+      newPull?: { source: string; target: string };
+    }
   // A repository in the account with no registration on this computer, by its remote id.
   | { name: 'remote-repository'; id: string }
   // One pull request inside its repository; the repository and its tab stay one click away.

@@ -89,13 +89,26 @@ export function HostingSection({ status }: { status: AuthStatus }) {
               Check now
             </Button>
           ) : (
-            <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink">
-              {hosting ? (
-                <CircleCheck aria-hidden className="size-4 text-success" />
-              ) : (
-                <CircleAlert aria-hidden className="size-4 text-warning" />
+            <span className="inline-flex items-center gap-3">
+              <span className="inline-flex items-center gap-1.5 text-sm font-medium text-ink">
+                {hosting ? (
+                  <CircleCheck aria-hidden className="size-4 text-success" />
+                ) : (
+                  <CircleAlert aria-hidden className="size-4 text-warning" />
+                )}
+                {hosting ? 'Available' : 'Off'}
+              </span>
+              {/* A server that turns hosting on would otherwise show up only at the next
+                  automatic refresh, up to 10 minutes later. */}
+              {!hosting && (
+                <Button
+                  size="sm"
+                  pending={refresh.isPending}
+                  onClick={() => refresh.mutate()}
+                >
+                  Check again
+                </Button>
               )}
-              {hosting ? 'Available' : 'Off'}
             </span>
           )}
         </SettingRow>

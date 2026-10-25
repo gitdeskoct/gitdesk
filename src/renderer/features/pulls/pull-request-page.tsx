@@ -369,7 +369,7 @@ function PullView({
           </div>
           <Tabs.Content
             value="overview"
-            className="flex min-h-0 flex-1 flex-col focus-visible:outline-none"
+            className="flex min-h-0 flex-1 flex-col focus-visible:-outline-offset-2"
           >
             {scrolling(
               <OverviewTab
@@ -382,7 +382,7 @@ function PullView({
           </Tabs.Content>
           <Tabs.Content
             value="files"
-            className="flex min-h-0 flex-1 flex-col focus-visible:outline-none"
+            className="flex min-h-0 flex-1 flex-col focus-visible:-outline-offset-2"
           >
             {width >= 1100 ? (
               <FilesTab
@@ -406,7 +406,7 @@ function PullView({
           </Tabs.Content>
           <Tabs.Content
             value="commits"
-            className="flex min-h-0 flex-1 flex-col focus-visible:outline-none"
+            className="flex min-h-0 flex-1 flex-col focus-visible:-outline-offset-2"
           >
             {scrolling(
               <CommitsTab
@@ -417,13 +417,13 @@ function PullView({
           </Tabs.Content>
           <Tabs.Content
             value="activity"
-            className="flex min-h-0 flex-1 flex-col focus-visible:outline-none"
+            className="flex min-h-0 flex-1 flex-col focus-visible:-outline-offset-2"
           >
             {scrolling(<ActivityTab repo={repo} detail={detail.data} />)}
           </Tabs.Content>
           <Tabs.Content
             value="merge"
-            className="flex min-h-0 flex-1 flex-col focus-visible:outline-none"
+            className="flex min-h-0 flex-1 flex-col focus-visible:-outline-offset-2"
           >
             {scrolling(<MergeTab repo={repo} detail={detail.data} />)}
           </Tabs.Content>

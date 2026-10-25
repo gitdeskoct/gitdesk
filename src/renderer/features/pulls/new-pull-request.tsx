@@ -24,11 +24,13 @@ const PROBLEMS = {
 export function NewPullRequest({
   repo,
   store,
+  initial,
   onCreated,
   onCancel,
 }: {
   repo: RepositorySummary;
   store: 'local' | 'account';
+  initial?: { source: string; target: string };
   onCreated: (pull: PullRequest) => void;
   onCancel: () => void;
 }) {
@@ -37,8 +39,8 @@ export function NewPullRequest({
   const current = repo.status?.branch ?? null;
   const fallbackTarget =
     local.find((b) => b.name === 'main' || b.name === 'master')?.name ?? null;
-  const [target, setTarget] = useState<string | null>(null);
-  const [source, setSource] = useState<string | null>(null);
+  const [target, setTarget] = useState<string | null>(initial?.target ?? null);
+  const [source, setSource] = useState<string | null>(initial?.source ?? null);
   const chosenTarget = target ?? fallbackTarget;
   // The current branch when it isn't the target, else the most recently changed other branch.
   const chosenSource =

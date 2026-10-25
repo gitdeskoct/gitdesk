@@ -111,15 +111,22 @@ function sentence(sync: SyncOverview): { title: string; detail: string } {
         detail: `${plural(ahead, 'commit')} here ${ahead === 1 ? 'is' : 'are'} not on the remote, and ${plural(behind, 'commit')} on the remote ${behind === 1 ? 'is' : 'are'} not here. Pull with Merge or Rebase, then push.`,
       };
     case 'no-upstream':
+      if (sync.noCommits)
+        return {
+          title: `${branch} has no commits yet`,
+          detail:
+            'Commit your first change on the Changes tab, then publish it from here.',
+        };
       return {
         title: `${branch} is only on this computer`,
         detail:
           'It has no branch on a remote yet. Publish it to push it and track it, or track a branch that already exists.',
       };
+    // Git can't tell a deleted branch from one that was never pushed (a clone of an empty repository).
     case 'gone':
       return {
-        title: `${branch} lost its upstream`,
-        detail: `${upstream} was deleted on the remote. Your branch and its commits are still here.`,
+        title: `${upstream} isn't on the remote`,
+        detail: `It was deleted there, or nothing was pushed to it yet. ${branch} and its commits are still here; publishing it creates the branch again.`,
       };
     default:
       return { title: '', detail: '' };
@@ -625,11 +632,12 @@ export function SyncTab({
         </Band>
       )}
 
-      {(sync.state === 'no-upstream' || sync.state === 'gone') && (
-        <Section id="publish-heading" title="Publish or track">
-          <PublishForm repo={repo} sync={sync} />
-        </Section>
-      )}
+      {(sync.state === 'no-upstream' || sync.state === 'gone') &&
+        !sync.noCommits && (
+          <Section id="publish-heading" title="Publish or track">
+            <PublishForm repo={repo} sync={sync} />
+          </Section>
+        )}
 
       {tracked && (behind > 0 || sync.state === 'diverged' || strategy) && (
         <Section

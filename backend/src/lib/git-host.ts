@@ -79,8 +79,64 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
   };
 }
 
-// Off unless the deployment opts in: Artifacts has no local simulator, so `wrangler dev --local`
-// (GIT_HOSTING=off in .dev.vars) and tests run without it.
-// ARTIFACTS is bound only once the account is on Workers Paid (see wrangler.jsonc), so it may be absent.
-export const gitHostFor = (env: CloudflareBindings & { ARTIFACTS?: Artifacts }): GitHost | null =>
-  env.GIT_HOSTING === 'artifacts' && env.ARTIFACTS ? artifactsHost(env.ARTIFACTS) : null;
+// Development only: scripts/local-git-host.mjs on this machine, which serves real Git smart HTTP in
+// place of Artifacts (Artifacts has no local simulator). Its admin API answers only on loopback and
+// with the shared secret from .dev.vars.
+export function localGitHost(admin: string, secret: string): GitHost {
+  const call = async <T>(method: string, path: string, body?: unknown): Promise<T> => {
+    const res = await fetch(new URL(path, admin), {
+      method,
+      headers: { 'x-local-git-secret': secret, 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) throw new Error(`local git host answered ${res.status}`);
+    return res.json<T>();
+  };
+  const repo = (name: string) => `/repos/${encodeURIComponent(name)}`;
+  return {
+    async ensure(name, defaultBranch) {
+      return assertRemote((await call<{ remote: string }>('POST', '/repos', { name, defaultBranch })).remote);
+    },
+    async remove(name) {
+      await call('DELETE', repo(name));
+    },
+    token: (name, scope, ttlSeconds) =>
+      call<{ token: string; expiresAt: number }>('POST', `${repo(name)}/tokens`, { scope, ttlSeconds }),
+    revokeAll: async (name) => (await call<{ revoked: number }>('DELETE', `${repo(name)}/tokens`)).revoked,
+    hasCommit: async (name, oid) =>
+      (await call<{ exists: boolean }>('GET', `${repo(name)}/commits/${encodeURIComponent(oid)}`)).exists,
+    tip: async (name, ref) =>
+      (await call<{ oid: string | null }>('GET', `${repo(name)}/tip?ref=${encodeURIComponent(ref)}`)).oid,
+  };
+}
+
+const isLoopback = (url: string): boolean => {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return protocol === 'http:' && (hostname === '127.0.0.1' || hostname === 'localhost');
+  } catch {
+    return false;
+  }
+};
+
+type HostingEnv = CloudflareBindings & {
+  // Bound only once the account is on Workers Paid (see wrangler.jsonc), so it may be absent.
+  ARTIFACTS?: Artifacts;
+  // .dev.vars only, for GIT_HOSTING=local.
+  LOCAL_GIT_HOST?: string;
+  LOCAL_GIT_SECRET?: string;
+};
+
+// Off unless the deployment opts in. "artifacts" is the real service; "local" is the development
+// stand-in and refuses any admin URL that isn't on this machine. Tests run with neither.
+export function gitHostFor(env: HostingEnv): GitHost | null {
+  if (env.GIT_HOSTING === 'artifacts' && env.ARTIFACTS) return artifactsHost(env.ARTIFACTS);
+  if (
+    env.GIT_HOSTING === 'local' &&
+    env.LOCAL_GIT_HOST &&
+    isLoopback(env.LOCAL_GIT_HOST) &&
+    (env.LOCAL_GIT_SECRET?.length ?? 0) >= 16
+  )
+    return localGitHost(env.LOCAL_GIT_HOST, env.LOCAL_GIT_SECRET!);
+  return null;
+}

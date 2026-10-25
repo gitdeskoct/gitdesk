@@ -59,9 +59,12 @@ function meta(pull: PullRequest): string {
 export function PullsTab({
   repo,
   width,
+  newPull,
 }: {
   repo: RepositorySummary;
   width: number;
+  // Opens straight on a new pull request for these branches (from a revert, say).
+  newPull?: { source: string; target: string };
 }) {
   const { navigate } = useNavigation();
   const { data: settings } = useSettings();
@@ -70,7 +73,7 @@ export function PullsTab({
   const [status, setStatus] = useState<PullStatus>('open');
   const [search, setSearch] = useState('');
   const q = useDeferredValue(search.trim());
-  const [creating, setCreating] = useState(false);
+  const [creating, setCreating] = useState(!!newPull);
   const [selected, setSelected] = useState<string | null>(null);
   const list = usePullList(repo.id, status, q);
   const pages = list.data?.pages ?? [];
@@ -97,6 +100,7 @@ export function PullsTab({
           <NewPullRequest
             repo={repo}
             store={store}
+            initial={newPull}
             onCancel={() => setCreating(false)}
             onCreated={(pull) => {
               setCreating(false);

@@ -161,6 +161,11 @@ describe('move to gitdesk', () => {
     expect(git(root, 'remote')).toBe('origin');
     expect(git(root, 'remote', 'get-url', 'origin')).toBe(hostedUrl);
     expect(config(root, 'branch.main.remote')).toBe('origin');
+    // `git remote remove` drops .merge too; main must still track origin/main.
+    expect(config(root, 'branch.main.merge')).toBe('refs/heads/main');
+    expect(git(root, 'rev-parse', '--abbrev-ref', 'main@{upstream}')).toBe(
+      'origin/main',
+    );
     expect(git(root, 'rev-parse', 'origin/main')).toBe(
       git(root, 'rev-parse', 'main'),
     );

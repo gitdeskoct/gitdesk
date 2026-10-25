@@ -4,7 +4,9 @@
   "type": "module",
   "scripts": {
     "dev": "wrangler dev --local",
-    "dev:remote": "wrangler dev",
+    "dev:remote": "wrangler dev --var GIT_HOSTING:artifacts",
+    "dev:hosted": "node scripts/dev-hosted.mjs",
+    "git-host:local": "node scripts/local-git-host.mjs .wrangler/local-git-host",
     "deploy": "wrangler deploy --minify --env=",
     "deploy:dev": "wrangler deploy --minify --env dev",
     "cf-typegen": "wrangler types --env-interface CloudflareBindings --strict-vars=false",
