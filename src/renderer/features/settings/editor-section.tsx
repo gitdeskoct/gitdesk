@@ -46,8 +46,8 @@ function Option({
     <RadioGroup.Item
       value={value}
       className={cn(
-        'group grid min-h-14 w-full grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-3 border-b border-l-2 border-b-line border-l-transparent py-2 pr-3 pl-2.5 text-left outline-offset-[-2px] hover:bg-row-hover',
-        'data-[state=checked]:border-l-accent data-[state=checked]:bg-accent-soft',
+        'group grid min-h-14 w-full grid-cols-[1.75rem_minmax(0,1fr)_auto] items-center gap-3 border-b border-line py-2 pr-3 pl-3 text-left outline-offset-[-2px] hover:bg-row-hover',
+        'data-[state=checked]:bg-accent-soft',
       )}
     >
       <span

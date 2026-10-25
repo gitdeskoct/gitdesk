@@ -15,75 +15,9 @@ export const THEME_PAIRS: Record<CodeTheme, { light: string; dark: string }> = {
   'rose-pine': { light: 'rose-pine-dawn', dark: 'rose-pine-moon' },
 };
 
-const BY_EXTENSION: Record<string, string> = {
-  ts: 'typescript',
-  mts: 'typescript',
-  cts: 'typescript',
-  tsx: 'tsx',
-  js: 'javascript',
-  mjs: 'javascript',
-  cjs: 'javascript',
-  jsx: 'jsx',
-  json: 'json',
-  jsonc: 'jsonc',
-  css: 'css',
-  scss: 'scss',
-  less: 'less',
-  html: 'html',
-  htm: 'html',
-  vue: 'vue',
-  svelte: 'svelte',
-  astro: 'astro',
-  md: 'markdown',
-  markdown: 'markdown',
-  mdx: 'mdx',
-  yml: 'yaml',
-  yaml: 'yaml',
-  toml: 'toml',
-  ini: 'ini',
-  xml: 'xml',
-  svg: 'xml',
-  py: 'python',
-  rb: 'ruby',
-  go: 'go',
-  rs: 'rust',
-  java: 'java',
-  kt: 'kotlin',
-  kts: 'kotlin',
-  swift: 'swift',
-  c: 'c',
-  h: 'c',
-  cpp: 'cpp',
-  cc: 'cpp',
-  cxx: 'cpp',
-  hpp: 'cpp',
-  cs: 'csharp',
-  php: 'php',
-  sh: 'shellscript',
-  bash: 'shellscript',
-  zsh: 'shellscript',
-  ps1: 'powershell',
-  sql: 'sql',
-  lua: 'lua',
-  dart: 'dart',
-  r: 'r',
-  scala: 'scala',
-  graphql: 'graphql',
-  gql: 'graphql',
-  prisma: 'prisma',
-  dockerfile: 'dockerfile',
-  makefile: 'make',
-  tf: 'hcl',
-};
+import { languageOf } from '../../../shared/file-types';
 
-export function languageOf(path: string): string | null {
-  const name = path.split('/').pop()!.toLowerCase();
-  if (name === 'dockerfile' || name.startsWith('dockerfile.'))
-    return 'dockerfile';
-  if (name === 'makefile') return 'make';
-  const ext = name.includes('.') ? name.split('.').pop()! : '';
-  return BY_EXTENSION[ext] ?? null;
-}
+export { languageOf };
 
 // The surfaces code sits on in each app theme, from globals.css. A token color must reach
 // 4.5:1 on every one of them, changed-word tints included.

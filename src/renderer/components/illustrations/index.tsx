@@ -161,6 +161,34 @@ export const EditorArt = () => (
   </Art>
 );
 
+// A folder tree with one file picked: the Files tab before anything is open.
+export const FilesArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <path d="M8 8h14l4 4h14v8H8z" />
+    <path d="M14 20v24M14 30h8M14 42h8" />
+    <rect x="26" y="26" width="24" height="8" rx="2" {...accent} />
+    <rect x="26" y="38" width="18" height="8" rx="2" />
+  </Art>
+);
+
+// One file page, the line that matters marked: a file Files can describe but not show.
+export const FileArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <path d="M18 4h20l10 10v34H18z" />
+    <path d="M38 4v10h10M24 22h16M24 30h10" />
+    <path d="M24 38h18" {...accent} />
+  </Art>
+);
+
+// A file that points somewhere else.
+export const LinkArt = () => (
+  <Art viewBox="0 0 64 52" width={104} height={84} strokeWidth={1.2}>
+    <path d="M22 20V4h20l10 10v34H22v-8" />
+    <path d="M42 4v10h10" />
+    <path d="M8 30h22m-6-6 6 6-6 6" {...accent} />
+  </Art>
+);
+
 // Bleeding drawings for the sign-in tiles: larger, on a solid tile color.
 export const CommitGraphArt = ({ className }: { className?: string }) => (
   <Art

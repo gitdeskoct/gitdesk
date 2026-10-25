@@ -228,6 +228,96 @@ const listResponse = z.object({
   nextCursor: z.string().max(400).nullable(),
 });
 
+// Hosted files. Names and paths are checked to their shapes here and against the folder asked
+// for in the service, so a misbehaving server can't put a path like ../x or .git on screen.
+const MiB = 1024 * 1024;
+const entryName = z
+  .string()
+  .min(1)
+  .max(255)
+  .refine(
+    (n) =>
+      !n.includes('/') &&
+      !n.includes('\\') &&
+      !n.includes('\0') &&
+      n !== '.' &&
+      n !== '..' &&
+      n.replace(/[. ]+$/, '').toLowerCase() !== '.git',
+  );
+const sourceBranchesResponse = z.object({
+  defaultBranch: z.string().min(1).max(255),
+  branches: z
+    .array(z.object({ name: z.string().min(1).max(255), oid }))
+    .max(50),
+});
+const sourceTreeResponse = z.object({
+  commit: oid,
+  entries: z
+    .array(
+      z.object({
+        name: entryName,
+        path: z.string().min(1).max(4096),
+        type: z.enum(['dir', 'file', 'symlink', 'submodule']),
+        oid,
+      }),
+    )
+    .max(500),
+  nextCursor: z
+    .string()
+    .regex(/^[A-Za-z0-9_-]{1,600}$/)
+    .nullable(),
+});
+const size = z.number().int().nonnegative();
+const sourceBlobResponse = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('text'),
+    oid,
+    size,
+    text: z.string().max(5 * MiB),
+  }),
+  z.object({
+    kind: z.literal('image'),
+    oid,
+    size: size.max(MiB),
+    mime: z.enum([
+      'image/png',
+      'image/jpeg',
+      'image/gif',
+      'image/webp',
+      'image/avif',
+      'image/bmp',
+      'image/x-icon',
+      'image/svg+xml',
+    ]),
+    base64: z
+      .string()
+      .max(2 * MiB)
+      .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+  }),
+  z.object({
+    kind: z.literal('binary'),
+    oid,
+    size,
+    reason: z.enum(['binary', 'encoding']),
+  }),
+  z.object({
+    kind: z.literal('too-large'),
+    oid,
+    size: size.nullable(),
+    limit: size,
+  }),
+  z.object({
+    kind: z.literal('raw'),
+    oid,
+    size: size.max(5 * MiB),
+    base64: z
+      .string()
+      .max(7 * MiB)
+      .regex(/^[A-Za-z0-9+/]*={0,2}$/),
+  }),
+]);
+export type SourceBlobResponse = z.infer<typeof sourceBlobResponse>;
+
 export type TokenResponse = z.infer<typeof tokenResponse>;
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
@@ -483,6 +573,42 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
         method: 'DELETE',
         token,
       }),
+    sourceBranches: (token: string, id: string) =>
+      request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/branches`,
+        sourceBranchesResponse,
+        { token },
+      ),
+    sourceTree: (
+      token: string,
+      id: string,
+      query: { ref: string; path: string; cursor: string | null },
+    ) => {
+      const params = new URLSearchParams({ ref: query.ref, path: query.path });
+      if (query.cursor) params.set('cursor', query.cursor);
+      return request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/tree?${params}`,
+        sourceTreeResponse,
+        { token },
+      );
+    },
+    sourceBlob: (
+      token: string,
+      id: string,
+      oid: string,
+      query: { path: string; max: number; raw: boolean },
+    ) => {
+      const params = new URLSearchParams({
+        path: query.path,
+        max: String(query.max),
+        raw: query.raw ? '1' : '0',
+      });
+      return request(
+        `/api/v1/repositories/${encodeURIComponent(id)}/blobs/${encodeURIComponent(oid)}?${params}`,
+        sourceBlobResponse,
+        { token },
+      );
+    },
   };
 }
 

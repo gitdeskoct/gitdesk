@@ -12,6 +12,7 @@ export type SettingsSection =
   | 'appearance'
   | 'code'
   | 'workspace'
+  | 'files'
   | 'editor'
   | 'git'
   | 'shortcuts'
@@ -23,6 +24,7 @@ export type SettingsSection =
   | 'about';
 export type RepoTab =
   | 'changes'
+  | 'source'
   | 'history'
   | 'branches'
   | 'pulls'
@@ -31,6 +33,7 @@ export type RepoTab =
   | 'overview'
   | 'settings';
 export type PullTab = 'overview' | 'files' | 'commits' | 'activity' | 'merge';
+export type SourceTarget = { path?: string; ref?: string; line?: number };
 export type RepoShow = 'all' | 'changed' | 'ahead' | 'behind' | 'problems';
 // Where a repository lives. Counts overlap: a linked repository is local and remote at once.
 export type RepoScope = 'all' | 'local' | 'remote' | 'linked';
@@ -46,9 +49,17 @@ export type Route =
       id: string;
       tab?: RepoTab;
       newPull?: { source: string; target: string };
+      // The Files tab opened on one file, at a branch or commit when a review or History asks.
+      source?: SourceTarget;
     }
   // A repository in the account with no registration on this computer, by its remote id.
-  | { name: 'remote-repository'; id: string }
+  // `view: 'source'` shows its files from the hosted copy.
+  | {
+      name: 'remote-repository';
+      id: string;
+      view?: 'source';
+      source?: SourceTarget;
+    }
   // One pull request inside its repository; the repository and its tab stay one click away.
   | { name: 'pull-request'; repoId: string; id: string; tab?: PullTab }
   | { name: 'settings'; section: SettingsSection; row?: string };

@@ -270,9 +270,9 @@ export function PullsTab({
                     onClick={() => setSelected(pull.id)}
                     onDoubleClick={() => open(pull)}
                     className={cn(
-                      'block w-full border-b border-l-2 border-line border-l-transparent px-4 py-3 text-left focus-visible:outline-offset-[-2px]',
+                      'block w-full border-b border-line py-3 pr-4 pl-[1.125rem] text-left focus-visible:outline-offset-[-2px]',
                       pull === current
-                        ? 'border-l-accent bg-accent-soft'
+                        ? 'bg-accent-soft'
                         : 'hover:bg-row-hover',
                     )}
                   >

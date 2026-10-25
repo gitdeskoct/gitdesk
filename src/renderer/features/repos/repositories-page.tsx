@@ -699,10 +699,8 @@ function RepoList({
               onDoubleClick={() => onOpen(item)}
               onKeyDown={(event) => event.key === 'Enter' && onOpen(item)}
               className={cn(
-                'grid min-h-14 cursor-default gap-1 border-b border-l-2 border-b-line py-2.5 pr-3 pl-2.5 outline-offset-[-2px] transition-colors',
-                selected
-                  ? 'border-l-accent bg-accent-soft'
-                  : 'border-l-transparent hover:bg-row-hover',
+                'grid min-h-14 cursor-default gap-1 border-b border-line py-2.5 pr-3 pl-3 outline-offset-[-2px] transition-colors',
+                selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
               )}
             >
               <span className="flex min-w-0 items-center gap-2">

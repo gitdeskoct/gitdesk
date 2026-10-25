@@ -3,6 +3,7 @@ import type { SyncApi } from './sync';
 import type { PullsApi } from './pulls';
 import type { ReposApi } from './repos';
 import type { Settings, SettingsPatch } from './settings';
+import type { SourceApi } from './source';
 import type { WorkspaceApi } from './workspace';
 
 export const accountSummarySchema = z.object({
@@ -178,4 +179,5 @@ export interface DesktopApi {
   workspace: WorkspaceApi;
   pulls: PullsApi;
   sync: SyncApi;
+  source: SourceApi;
 }

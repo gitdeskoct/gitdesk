@@ -19,7 +19,7 @@ const LIGHT_BACKGROUNDS = [
 describe('highlight', () => {
   it('picks a grammar from the file name', () => {
     expect(languageOf('src/app.tsx')).toBe('tsx');
-    expect(languageOf('Dockerfile')).toBe('dockerfile');
+    expect(languageOf('Dockerfile')).toBe('docker');
     expect(languageOf('notes.unknown')).toBeNull();
   });
 

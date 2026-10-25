@@ -1,12 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  lstat,
-  readFile,
-  readdir,
-  readlink,
-  realpath,
-  stat,
-} from 'node:fs/promises';
+import { lstat, readFile, readdir, readlink, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type { ChangedFile, ProgressEvent } from '../../shared/repos';
 import type { Settings } from '../../shared/settings';
@@ -56,6 +49,7 @@ import {
   WORKSPACE_STATUS_ARGS,
 } from './git-inspector';
 import { parseStatus } from './git-status';
+import { resolveInside } from './paths';
 import type { RepositoryStore } from './repository-store';
 import { measureRepository } from './repo-size';
 import type { TreeWatcher } from './tree-watcher';
@@ -416,13 +410,10 @@ export function createWorkspaceService(deps: {
 
   // A repository file as an absolute path that stays inside the repository, symlinks included.
   async function insideRoot(root: string, rel: string): Promise<string> {
-    const target = path.resolve(root, rel);
-    const realRoot = await realpath(root);
-    const parent = await realpath(path.dirname(target)).catch(() => null);
-    const relative = parent ? path.relative(realRoot, parent) : '..';
-    if (relative.startsWith('..') || path.isAbsolute(relative))
+    const inside = await resolveInside(root, rel);
+    if (!inside)
       throw new WorkspaceError('That file is outside the repository.');
-    return target;
+    return inside.abs;
   }
 
   async function diff(input: DiffInput): Promise<DiffResult> {

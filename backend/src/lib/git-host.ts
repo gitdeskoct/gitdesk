@@ -13,7 +13,22 @@ export type GitHost = {
   hasCommit(name: string, oid: string): Promise<boolean>;
   // The commit a branch points at now, or null when there is no such branch.
   tip(name: string, ref: string): Promise<string | null>;
+  // Read-only object access for browsing files: one object by id, null when it isn't there or
+  // isn't that kind. A blob larger than `max` comes back with its size and no bytes; size is null
+  // when the host stopped reading before it knew.
+  readCommit(name: string, oid: string): Promise<HostCommit | null>;
+  readTree(name: string, oid: string): Promise<HostTreeEntry[] | null>;
+  readBlob(name: string, oid: string, max: number): Promise<HostBlob | null>;
 };
+
+export type HostCommit = { oid: string; treeOid: string; author: string; committedAt: number; message: string };
+export type HostTreeEntry = {
+  name: string;
+  mode: string;
+  oid: string;
+  type: 'tree' | 'blob' | 'symlink' | 'gitlink' | 'exec';
+};
+export type HostBlob = { size: number | null; bytes: Uint8Array | null };
 
 const isCode = (err: unknown, code: string): boolean =>
   typeof err === 'object' && err !== null && 'code' in err && err.code === code;
@@ -76,6 +91,41 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
         return revoked;
       });
     },
+    readCommit(name, oid) {
+      return withRepo(artifacts, name, async (repo) => {
+        const commit = await repo.readCommit(oid);
+        return commit
+          ? {
+              oid: commit.hash,
+              treeOid: commit.treeHash,
+              author: commit.author.name,
+              committedAt: commit.committedAt,
+              message: commit.message,
+            }
+          : null;
+      });
+    },
+    readTree(name, oid) {
+      return withRepo(artifacts, name, async (repo) => {
+        const entries = await repo.readTree(oid);
+        return entries?.map((e) => ({ name: e.name, mode: e.mode, oid: e.hash, type: e.type })) ?? null;
+      });
+    },
+    readBlob(name, oid, max) {
+      return withRepo(artifacts, name, async (repo) => {
+        let blob: Blob | null;
+        try {
+          blob = await repo.readBlob(oid);
+        } catch (err) {
+          // Artifacts refuses to buffer a blob it can't hold; that is a size answer, not a failure.
+          if (isCode(err, 'MEMORY_LIMIT')) return { size: null, bytes: null };
+          throw err;
+        }
+        if (!blob) return null;
+        if (blob.size > max) return { size: blob.size, bytes: null };
+        return { size: blob.size, bytes: new Uint8Array(await blob.arrayBuffer()) };
+      });
+    },
   };
 }
 
@@ -107,6 +157,26 @@ export function localGitHost(admin: string, secret: string): GitHost {
       (await call<{ exists: boolean }>('GET', `${repo(name)}/commits/${encodeURIComponent(oid)}`)).exists,
     tip: async (name, ref) =>
       (await call<{ oid: string | null }>('GET', `${repo(name)}/tip?ref=${encodeURIComponent(ref)}`)).oid,
+    readCommit: async (name, oid) =>
+      (await call<{ commit: HostCommit | null }>('GET', `${repo(name)}/objects/${oid}/commit`)).commit,
+    // The script answers in Artifacts' own shape (hash), mapped here the same way artifactsHost does.
+    readTree: async (name, oid) => {
+      const { entries } = await call<{
+        entries: { name: string; mode: string; hash: string; type: HostTreeEntry['type'] }[] | null;
+      }>('GET', `${repo(name)}/objects/${oid}/tree`);
+      return entries?.map((e) => ({ name: e.name, mode: e.mode, oid: e.hash, type: e.type })) ?? null;
+    },
+    readBlob: async (name, oid, max) => {
+      const { blob } = await call<{ blob: { size: number; base64: string | null } | null }>(
+        'GET',
+        `${repo(name)}/objects/${oid}/blob?max=${max}`,
+      );
+      if (!blob) return null;
+      return {
+        size: blob.size,
+        bytes: blob.base64 === null ? null : Uint8Array.from(atob(blob.base64), (c) => c.charCodeAt(0)),
+      };
+    },
   };
 }
 

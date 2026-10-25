@@ -330,7 +330,24 @@ export function RepoSettingsTab({ repo }: { repo: RepositorySummary }) {
               onChange={(openOn) => patch({ openOn })}
               options={[
                 { value: 'changes', label: 'Changes' },
+                { value: 'source', label: 'Files' },
                 { value: 'overview', label: 'Overview' },
+              ]}
+            />
+          </SettingRow>
+          <SettingRow
+            id="repo-files-layout"
+            label="Files layout"
+            description={`Global is ${settings?.sourceLayout ?? 'auto'}.`}
+          >
+            <Segmented
+              label="Files layout for this repository"
+              value={own.sourceLayout}
+              onChange={(sourceLayout) => patch({ sourceLayout })}
+              options={[
+                { value: 'global', label: 'Follow global' },
+                { value: 'centered', label: 'Centered' },
+                { value: 'split', label: 'Split' },
               ]}
             />
           </SettingRow>

@@ -192,6 +192,25 @@ describe('repository service', () => {
     expect(repo!.inspectedAt!).toBeGreaterThanOrEqual(statusAt!);
   });
 
+  it('starts with watching on when a folder was deleted while gitdesk was closed', async () => {
+    const root = makeRepo('app');
+    picked = root;
+    const first = setup();
+    const added = await first.service.add();
+    if (added.status !== 'added') throw new Error('not added');
+    first.service.dispose();
+    rmSync(root, { recursive: true, force: true });
+
+    // The cached row still says available, as it does on the next launch.
+    const { service } = setup({
+      settings: () => ({ ...DEFAULT_SETTINGS, watchRepositories: true }),
+    });
+    expect(() => service.start()).not.toThrow();
+    await vi.waitFor(() =>
+      expect(service.list()[0]?.availability).toBe('missing'),
+    );
+  });
+
   // A downloaded repository's .git/config is untrusted: reading its status must not run its programs.
   it("does not run a repository's core.fsmonitor command", async () => {
     const root = makeRepo('hostile');

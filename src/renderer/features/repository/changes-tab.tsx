@@ -1,6 +1,7 @@
 import {
   ArrowLeft,
   Copy,
+  FileText,
   FolderOpen,
   Minus,
   Plus,
@@ -36,6 +37,7 @@ import {
 import { EmptyState } from '../../components/ui/empty-state';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { useToast } from '../../components/ui/toast';
+import { useNavigation } from '../../app/navigation';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
 import { ipcErrorMessage } from '../../lib/ipc-error';
@@ -220,6 +222,7 @@ function FileRow({
   expanded?: boolean;
 }) {
   const [dir, name] = splitPath(file.path);
+  const { navigate } = useNavigation();
   const reveal = useRevealFile(repoId);
   const copy = useCopyFilePath(repoId);
   const open = useOpenInEditor(repoId);
@@ -244,10 +247,8 @@ function FileRow({
           data-key={keyOf(file)}
           onClick={onSelect}
           className={cn(
-            'grid min-h-9 cursor-default grid-cols-[1rem_1.5rem_minmax(0,1fr)_2rem] items-center gap-2 border-b border-l-2 border-b-line py-1 pr-1.5 pl-2.5 outline-offset-[-2px] transition-colors',
-            selected
-              ? 'border-l-accent bg-accent-soft'
-              : 'border-l-transparent hover:bg-row-hover',
+            'grid min-h-9 cursor-default grid-cols-[1rem_1.5rem_minmax(0,1fr)_2rem] items-center gap-2 border-b border-line py-1 pr-1.5 pl-3 outline-offset-[-2px] transition-colors',
+            selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
           )}
         >
           <Checkbox
@@ -312,6 +313,20 @@ function FileRow({
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
+        {file.code !== 'D' && (
+          <ContextMenuItem
+            onSelect={() =>
+              navigate({
+                name: 'repository',
+                id: repoId,
+                tab: 'source',
+                source: { path: file.path },
+              })
+            }
+          >
+            <FileText /> Open in Files
+          </ContextMenuItem>
+        )}
         <ContextMenuItem
           onSelect={() =>
             open.mutate(

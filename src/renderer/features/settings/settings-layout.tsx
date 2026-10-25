@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   Braces,
   Cloud,
+  FolderTree,
   GitPullRequest,
   Info,
   Laptop,
@@ -29,6 +30,7 @@ import { AccountSection } from './account-section';
 import { AppearanceSection } from './appearance-section';
 import { CodeSection } from './code-section';
 import { EditorSection } from './editor-section';
+import { FilesSection } from './files-section';
 import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
@@ -50,6 +52,7 @@ const GROUPS: {
       { id: 'appearance', icon: Palette },
       { id: 'code', icon: Braces },
       { id: 'workspace', icon: LayoutDashboard },
+      { id: 'files', icon: FolderTree },
       { id: 'pulls', icon: GitPullRequest },
       { id: 'sync', icon: RefreshCw },
       { id: 'editor', icon: AppWindow },
@@ -131,6 +134,7 @@ export function SettingsLayout({
     appearance: <AppearanceSection />,
     code: <CodeSection />,
     workspace: <WorkspaceSection />,
+    files: <FilesSection />,
     pulls: <PullsSection />,
     sync: <SyncSection />,
     editor: <EditorSection />,

@@ -11,6 +11,7 @@ import {
   type RepositorySummary,
 } from '../shared/repos';
 import { PULLS_IPC as P } from '../shared/pulls';
+import { SOURCE_IPC as F, type SourceChange } from '../shared/source';
 import { SYNC_IPC as S } from '../shared/sync';
 import { WORKSPACE_IPC as W } from '../shared/workspace';
 
@@ -200,6 +201,25 @@ const api: DesktopApi = {
     fileDiff: (input) => ipcRenderer.invoke(S.fileDiff, input),
     accountActivity: (input) => ipcRenderer.invoke(S.accountActivity, input),
     accountStats: () => ipcRenderer.invoke(S.accountStats),
+  },
+  source: {
+    list: (input) => ipcRenderer.invoke(F.list, input),
+    read: (input) => ipcRenderer.invoke(F.read, input),
+    resolve: (input) => ipcRenderer.invoke(F.resolve, input),
+    paths: (input) => ipcRenderer.invoke(F.paths, input),
+    lastChange: (input) => ipcRenderer.invoke(F.lastChange, input),
+    reveal: (input) => ipcRenderer.invoke(F.reveal, input),
+    stats: (id) => ipcRenderer.invoke(F.stats, id),
+    remoteBranches: (id) => ipcRenderer.invoke(F.remoteBranches, id),
+    remoteList: (input) => ipcRenderer.invoke(F.remoteList, input),
+    remoteRead: (input) => ipcRenderer.invoke(F.remoteRead, input),
+    remoteSave: (input) => ipcRenderer.invoke(F.remoteSave, input),
+    onChanged(callback) {
+      const listener = (_event: IpcRendererEvent, change: SourceChange) =>
+        callback(change);
+      ipcRenderer.on(F.changed, listener);
+      return () => ipcRenderer.removeListener(F.changed, listener);
+    },
   },
 };
 

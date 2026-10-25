@@ -10,6 +10,7 @@ import { validate } from '../../middleware/validate';
 import { listPage as activityPage } from '../activity/activity';
 import { repositoryPullRoutes } from '../pull-requests/routes';
 import { repositorySyncRoutes } from '../sync/routes';
+import { repositorySourceRoutes } from '../source/routes';
 import { activityQuery } from '../activity/routes';
 import {
   createRepository,
@@ -155,6 +156,7 @@ export function repositoryRoutes(gitHost: GitHostFor) {
 
   repositoryPullRoutes(app);
   repositorySyncRoutes(app, gitHost);
+  repositorySourceRoutes(app, gitHost, viaGitHost);
 
   app.post(
     '/',

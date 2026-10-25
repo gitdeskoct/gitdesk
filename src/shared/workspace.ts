@@ -341,23 +341,30 @@ export type RepoConfigInput = z.infer<typeof repoConfigInputSchema>;
 // gitdesk's own per-repository choices. 'global' and null follow the matching app setting.
 export type RepoPreferences = {
   layout: 'global' | 'centered' | 'split';
-  openOn: 'changes' | 'overview';
+  sourceLayout: 'global' | 'centered' | 'split';
+  openOn: 'changes' | 'source' | 'overview';
   editor: EditorId | null;
   autoFetch: 'global' | 0 | 5 | 15 | 30;
   defaultRemote: string | null;
+  // Files opened in the Files tab, newest first.
+  recentFiles: string[];
 };
 export const DEFAULT_REPO_PREFERENCES: RepoPreferences = {
   layout: 'global',
+  sourceLayout: 'global',
   openOn: 'changes',
   editor: null,
   autoFetch: 'global',
   defaultRemote: null,
+  recentFiles: [],
 };
 export const repoPreferencesInputSchema = z
   .object({
     id: repoIdSchema,
     layout: z.enum(['global', 'centered', 'split']).optional(),
-    openOn: z.enum(['changes', 'overview']).optional(),
+    sourceLayout: z.enum(['global', 'centered', 'split']).optional(),
+    openOn: z.enum(['changes', 'source', 'overview']).optional(),
+    recentFiles: z.array(repoPathSchema).max(10).optional(),
     editor: z.enum(EDITOR_IDS).nullable().optional(),
     autoFetch: z
       .union([
