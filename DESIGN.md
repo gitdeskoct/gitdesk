@@ -269,7 +269,7 @@ A folder path, remote URL or Git URL that doesn't fit loses its middle, never it
 - **Merging asks first, inline.** The Merge tab lists what was checked, the two methods (default, or always a merge commit) and the push choice, then confirms in a band that names both branches. Uncommitted changes refuse the merge; gitdesk never stashes. A stale approval, requested changes and unresolved threads are warnings, never blocks.
 - **Partial success says so.** A merge that worked here but couldn't push reads "Merged locally · Push pending" with Push again. One the account hasn't heard about yet is retried with the same operation, so it is never recorded twice.
 - **Conflicts are a screen, not a toast.** Each conflicted file shows the target and source versions with a Use button each, the working file with its markers labelled, Open in editor, and Mark resolved, which stays unavailable while markers remain. Continue stays unavailable until Git reports no unmerged file; Abort confirms in a `danger-soft` band.
-- **Revert adds, never erases.** A merged pull request offers a revert onto a new branch or the target. For a merge commit the side to keep is a choice that names both parents. The pull request stays merged.
+- **Revert adds, never erases.** A merged pull request offers a revert onto a new branch or the target. For a merge commit the side to keep is a choice that names both parents. The pull request stays merged. A revert on a new branch ends with Open a pull request, which opens the form with that branch and the target already chosen.
 - **Choice lists use round radio marks.** The one exception to the 6px rule: a radio is round so it never reads as a checkbox.
 
 ## Git hosting
@@ -278,11 +278,11 @@ A folder path, remote URL or Git URL that doesn't fit loses its middle, never it
 - **Tokens stay out of sight.** No screen ever shows a token. Copy terminal command copies a command and says only until when its token works; its row also says that anyone who sees the command can push until then.
 - **Revoke confirms inline**, in a `danger-soft` band that names the repository and says copied commands stop working.
 - **Push never forces.** The header shows Push with the count the upstream doesn't have yet. A refused push explains fetching and merging first; it never offers to force.
-- **Off is a state, not an error.** When the server has Git hosting off, the URL row says so in words, the clone button stays unavailable with the reason beside it, and Settings › Git hosting shows Off with a warning icon.
+- **Off is a state, not an error.** When the server has Git hosting off, the URL row says so in words, the clone button stays unavailable with the reason beside it, and Settings › Git hosting shows Off with a warning icon and Check again, so a server that turns hosting on shows up without waiting for the next account refresh.
 
 ## Remote sync
 
-- **Git's states, in words.** The Sync tab names one of Up to date, Ahead, Behind, Diverged, No upstream and Upstream gone in a sentence, with To push, To pull, Changed files and Remote last checked in the strip. Counts from a fetch over an hour old say so, in the strip and in a "Checked …" chip in the header.
+- **Git's states, in words.** The Sync tab names one of Up to date, Ahead, Behind, Diverged, No upstream and Upstream gone in a sentence, with To push, To pull, Changed files and Remote last checked in the strip. Gone never claims a deletion Git can't see: the branch may have been deleted or never pushed. A branch with no commits yet (an empty clone) is new, not gone, and offers no Publish until its first commit. Counts from a fetch over an hour old say so, in the strip and in a "Checked …" chip in the header.
 - **Pull never surprises.** Fast-forward only is the default (Settings › Sync). Diverged histories disable it and a warning band names Merge or Rebase; the choice on the tab is for one pull. A merge or rebase that conflicts opens the shared conflict screen in its own words (Yours and Incoming), a rebase one replayed commit at a time; Abort puts the branch back where it was. gitdesk never stashes and never force-pushes.
 - **Unknown is a state.** A push cut off after its data was sent is "Push result unknown", with Check status, which asks the remote. Nothing is pushed again until then.
 - **Confirmed means the server found it.** A push to the account's Git URL is reported by operation id and checked against Artifacts; Sync activity tags it Confirmed by server, Not confirmed or Refused, and its chart asks "Did your pushes reach the server?".

@@ -57,7 +57,7 @@ const PULL_STOPS: Partial<Record<SyncCode, string>> = {
   DIVERGED:
     'Both sides have new commits, so a fast-forward is not possible. Nothing changed. Pull with Merge or Rebase to bring them together.',
   STALE_REFERENCE:
-    'The branch this one tracks was deleted on the remote. Publish it again or track another branch.',
+    "The branch this one tracks isn't on the remote: it was deleted there, or never pushed. Publish this branch or track another one.",
   LOCAL_CONFLICT:
     'The pull stopped on conflicts. Resolve them on the Sync tab.',
 };
@@ -413,7 +413,8 @@ export function createSyncService(deps: {
       let state: SyncState;
       if (!status || status.detached || !t.branch) state = 'detached';
       else if (!status.hasRemotes) state = 'no-remote';
-      else if (!t.upstream) state = 'no-upstream';
+      // With no commits yet, Git calls the upstream gone only because nothing was ever pushed.
+      else if (!t.upstream || status.headOid === null) state = 'no-upstream';
       else if (status.ahead === null || status.behind === null) state = 'gone';
       else if (status.ahead && status.behind) state = 'diverged';
       else if (status.ahead) state = 'ahead';
@@ -428,6 +429,7 @@ export function createSyncService(deps: {
         upstream: t.upstream,
         remote,
         state,
+        noCommits: !!status && !status.detached && status.headOid === null,
         ahead: status?.ahead ?? null,
         behind: status?.behind ?? null,
         changed: status

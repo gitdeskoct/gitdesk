@@ -495,12 +495,23 @@ export function createMoveService(deps: {
             await run(root, ['remote', 'add', '--', 'origin', hosted!]);
           else if (hostedName !== 'origin')
             await run(root, ['remote', 'rename', '--', hostedName, 'origin']);
-          // Branches that tracked a removed remote follow the same branch on origin.
+          // Branches that tracked a removed remote follow the same branch on origin. `git remote
+          // remove` deleted both their .remote and .merge, so both are written back.
           const removed = new Set(others.map((other) => other.name));
+          const moved = new Set(
+            upstreams
+              .map(([key, value]) => [UPSTREAM_KEY.exec(key), value] as const)
+              .filter(([m, value]) => m?.[2] === 'remote' && removed.has(value))
+              .map(([m]) => m![1]),
+          );
           for (const [key, value] of upstreams) {
             const match = UPSTREAM_KEY.exec(key);
-            if (match?.[2] === 'remote' && removed.has(value))
-              await run(root, ['config', key, 'origin']);
+            if (!match || !moved.has(match[1])) continue;
+            await run(root, [
+              'config',
+              key,
+              match[2] === 'remote' ? 'origin' : value,
+            ]);
           }
           await transfer(read ?? undefined)
             .raw(['fetch', '--prune', '--recurse-submodules=no', 'origin'])

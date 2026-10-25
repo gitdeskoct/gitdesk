@@ -78,7 +78,8 @@ export function syncState(repo: RepositorySummary): SyncState {
   if (repo.availability !== 'available' || !status) return 'unknown';
   if (!status.hasRemotes) return 'no-remote';
   // Ahead/behind is only claimed when Git reported it for a known upstream.
-  if (!status.upstream) return 'no-upstream';
+  // With no commits yet, Git calls the upstream gone only because nothing was ever pushed.
+  if (!status.upstream || status.headOid === null) return 'no-upstream';
   if (status.ahead === null || status.behind === null) return 'gone';
   if (status.ahead > 0 && status.behind > 0) return 'diverged';
   if (status.ahead > 0) return 'ahead';

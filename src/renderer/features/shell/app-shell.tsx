@@ -36,7 +36,9 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
         />
       );
     case 'repository':
-      return <RepositoryPage id={route.id} tab={route.tab} />;
+      return (
+        <RepositoryPage id={route.id} tab={route.tab} newPull={route.newPull} />
+      );
     case 'remote-repository':
       return <RemoteRepositoryPage id={route.id} />;
     case 'pull-request':

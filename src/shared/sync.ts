@@ -91,6 +91,8 @@ export type SyncOverview = {
   // The remote the upstream lives on.
   remote: string | null;
   state: SyncState;
+  // The branch has no commits yet (a new or freshly cloned empty repository): nothing to publish.
+  noCommits: boolean;
   ahead: number | null;
   behind: number | null;
   changed: number;

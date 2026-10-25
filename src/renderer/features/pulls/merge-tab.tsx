@@ -22,6 +22,7 @@ import { EmptyState } from '../../components/ui/empty-state';
 import { JobProgress } from '../../components/ui/job-progress';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { useToast } from '../../components/ui/toast';
+import { useNavigation } from '../../app/navigation';
 import { cn } from '../../lib/cn';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
@@ -159,22 +160,8 @@ function MergePanel({
         <h2 className="text-[0.9375rem] font-semibold text-ink">
           Before merging
         </h2>
+        {/* Mergeability itself is the band below, with when it was checked and a re-check. */}
         <ul className="mt-2 border-t border-line">
-          <Check_
-            ok={
-              latest.mergeability === 'mergeable'
-                ? true
-                : latest.mergeability === 'conflicts'
-                  ? false
-                  : 'warn'
-            }
-          >
-            {latest.mergeability === 'mergeable'
-              ? `Git found no conflicts merging ${shortOid(latest.sourceOid)} into ${shortOid(latest.targetOid)}.`
-              : latest.mergeability === 'conflicts'
-                ? 'Git found conflicts. You can merge and resolve them here, file by file.'
-                : 'Not checked against these commits yet.'}
-          </Check_>
           <Check_ ok={dirty === 0}>
             {dirty === 0
               ? 'No uncommitted changes in tracked files.'
@@ -757,6 +744,7 @@ function RevertPanel({
   detail: PullDetail;
 }) {
   const { pull } = detail;
+  const { navigate } = useNavigation();
   const info = useRevertInfo(repo.id, pull.id, true);
   const revert = useRevertPull(repo.id, pull.id);
   const [mainline, setMainline] = useState<'1' | '2'>('1');
@@ -892,6 +880,22 @@ function RevertPanel({
           </span>{' '}
           on{' '}
           <span className="font-mono text-[0.78125rem]">{result.branch}</span>.
+          {result.branch !== pull.targetRef && (
+            <Button
+              size="sm"
+              className="ml-3"
+              onClick={() =>
+                navigate({
+                  name: 'repository',
+                  id: repo.id,
+                  tab: 'pulls',
+                  newPull: { source: result.branch, target: pull.targetRef },
+                })
+              }
+            >
+              Open a pull request
+            </Button>
+          )}
         </InlineStatus>
       )}
       {result && <Outcome result={result} />}

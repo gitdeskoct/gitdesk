@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { getDb } from '../src/db/client';
 import { repositories } from '../src/db/schema';
-import { artifactsHost, assertRemote, type GitHost } from '../src/lib/git-host';
+import { artifactsHost, assertRemote, gitHostFor, type GitHost } from '../src/lib/git-host';
 import { call, fakeGoogle, postJson, signIn } from './helpers';
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -253,5 +253,21 @@ describe('artifacts host', () => {
     expect(token.expiresAt).toBe(Date.parse('2026-10-22T12:00:00.000Z'));
     expect(await host.revokeAll('r1')).toBe(2);
     expect(disposed).toEqual(['r1', 'r1']);
+  });
+});
+
+describe('choosing the git host', () => {
+  const base = { ...env, GIT_HOSTING: 'local', LOCAL_GIT_SECRET: 'local-secret-0123456789' };
+
+  it('uses the local development host only on this machine and with a real secret', () => {
+    expect(gitHostFor({ ...base, LOCAL_GIT_HOST: 'http://127.0.0.1:9444' })).not.toBeNull();
+    expect(gitHostFor({ ...base, LOCAL_GIT_HOST: 'https://git.example.com' })).toBeNull();
+    expect(gitHostFor({ ...base, LOCAL_GIT_HOST: 'http://10.0.0.5:9444' })).toBeNull();
+    expect(gitHostFor({ ...base, LOCAL_GIT_HOST: 'http://127.0.0.1:9444', LOCAL_GIT_SECRET: 'short' })).toBeNull();
+  });
+
+  it('stays off without a setting, and without the Artifacts binding', () => {
+    expect(gitHostFor({ ...env, GIT_HOSTING: 'off' })).toBeNull();
+    expect(gitHostFor({ ...env, GIT_HOSTING: 'artifacts' })).toBeNull();
   });
 });

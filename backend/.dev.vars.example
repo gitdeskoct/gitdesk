@@ -5,5 +5,7 @@ GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GOOGLE_CLIENT_SECRET=your-client-secret
 # 64 random bytes, base64url, used only locally. Generate: node -e "console.log(require('crypto').randomBytes(64).toString('base64url'))"
 JWT_SIGNING_KEY=replace-with-random-base64url
-# "off" for `npm run dev` (Artifacts has no local simulator). "artifacts" with `npm run dev:remote`.
-GIT_HOSTING=off
+# GIT_HOSTING is not set here: .dev.vars would override the scripts' --var. wrangler.jsonc keeps it
+# "off" for `npm run dev`; `npm run dev:hosted` sets "local" and `npm run dev:remote` "artifacts".
+# Shared by the Worker and the local Git host. Generate like JWT_SIGNING_KEY; at least 16 characters.
+LOCAL_GIT_SECRET=replace-with-random-base64url

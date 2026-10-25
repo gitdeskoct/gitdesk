@@ -87,7 +87,8 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 - **The URL** is the `remote` Artifacts returns, `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/gitdesk/<id>.git`. It is stored in `repositories.git_remote` only after it is checked to be plain https with no user, password, query or fragment, and it is sent to clients as `gitUrl`.
 - **Tokens.** Git authenticates with a repository-scoped bearer token from `POST /repositories/:id/git-credentials`: `read` for fetch and clone, `write` for push, 15 minutes for the desktop's own commands, 1 or 8 hours for a command copied to a terminal. The token is returned once, is never stored, logged or recorded as activity, and the response is `Cache-Control: no-store`.
 - **Git traffic never passes through the Worker.** Git talks to Artifacts directly, so Worker body and CPU limits don't apply to packs.
-- **Turning it on.** `GIT_HOSTING` must be `artifacts` and the `ARTIFACTS` binding present. Artifacts needs the Workers Paid plan and has no local simulator, so `npm run dev` runs with `--local` and `.dev.vars` sets `GIT_HOSTING=off`; `npm run dev:remote` uses the real service. Tests pass a fake host to `createApp`.
+- **Turning it on.** `GIT_HOSTING` must be `artifacts` and the `ARTIFACTS` binding present. Artifacts needs the Workers Paid plan and has no local simulator (Miniflare only proxies it to the real service), so `npm run dev` runs with `--local` and hosting off; `npm run dev:remote` sets `GIT_HOSTING=artifacts` and uses the real service. `.dev.vars` must not set `GIT_HOSTING`, because it would override the scripts' `--var`. Tests pass a fake host to `createApp`.
+- **Hosting on this machine.** `GIT_HOSTING=local` points the Worker at `scripts/local-git-host.mjs`, a development stand-in for Artifacts: real Git smart HTTP over HTTPS through `git http-backend`, the same read and write bearer tokens, revoke and the commit checks. The Worker accepts it only at a loopback admin URL with `LOCAL_GIT_SECRET`, so a deployed Worker can't use it. See [Git hosting on this machine](#git-hosting-on-this-machine).
 - **Limits** (Artifacts, October 2026): 1 GB per repository, push over Git protocol v1, billed from 14 October 2026 at $0.15 per 1,000 operations after 10,000 a month and $0.50 per GB-month after 1 GB.
 
 ### Tables
@@ -111,7 +112,7 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 | Name | Kind | Where it is set | Used for |
 | --- | --- | --- | --- |
 | `PUBLIC_ORIGIN` | var | `wrangler.jsonc`: `https://gitdesk-api.telvinteum.workers.dev` (production), `https://gitdesk-api-dev.telvinteum.workers.dev` (`env.dev`); `http://localhost:8787` in `.dev.vars` and `vitest.config.ts` | Google redirect URI and JWT issuer |
-| `GIT_HOSTING` | var | `wrangler.jsonc` (`off`, because the account is on the free plan), `off` in `.dev.vars` | Whether repositories get a Git URL |
+| `GIT_HOSTING` | var | `wrangler.jsonc` (`off`, because the account is on the free plan); the dev scripts set it with `--var`, never `.dev.vars` | Whether repositories get a Git URL: `off`, `artifacts`, or `local` for the development Git host |
 | `SYNC_LIMITER` | Rate limit binding | `wrangler.jsonc`, namespace 4107 (production) or 5107 (`env.dev`), 60 a minute per account | Push reports |
 | `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, commented out until the account is on Workers Paid (a free-plan deploy with it is refused, code 10403) | Git repositories and their tokens |
 | `GOOGLE_CLIENT_ID` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
@@ -174,6 +175,20 @@ npm run dev
 ```
 
 The Worker listens on `http://localhost:8787`. Point the desktop app at it with `VITE_API_ORIGIN=http://localhost:8787` in the root `.env`.
+
+#### Git hosting on this machine
+
+To use push confirmation, cloning from gitdesk and Move to gitdesk without Workers Paid, run the local Git host and the Worker with hosting on, in two terminals:
+
+```bash
+npm run git-host:local
+```
+
+```bash
+npm run dev:hosted
+```
+
+The host prints its request log and the certificate Git must trust. Git on Windows needs the OpenSSL backend for that: run the desktop app with a `HOME` whose `.gitconfig` has `[http "https://127.0.0.1:9443/"]` with `sslBackend = openssl` and `sslCAInfo = <printed path>`, so your own Git config stays untouched. Repositories live in `.wrangler/local-git-host`; tokens are in memory and end with the process.
 
 ### 5. Tests
 
@@ -287,7 +302,9 @@ npm run cf-typegen
 | Script | Command |
 | --- | --- |
 | `dev` | `wrangler dev --local` (Git hosting off) |
-| `dev:remote` | `wrangler dev` (uses the real Artifacts service) |
+| `dev:remote` | `wrangler dev` with `GIT_HOSTING=artifacts` (uses the real Artifacts service) |
+| `dev:hosted` | `wrangler dev --local` with `GIT_HOSTING=local` (`scripts/dev-hosted.mjs` passes `LOCAL_GIT_SECRET` from `.dev.vars`) |
+| `git-host:local` | The local Git host for `dev:hosted` |
 | `test` | `vitest run` |
 | `typecheck` | `tsc --noEmit` |
 | `deploy` | `wrangler deploy --minify` |
