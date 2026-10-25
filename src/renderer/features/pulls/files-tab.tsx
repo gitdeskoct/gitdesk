@@ -1,4 +1,6 @@
+import { FileText } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { useNavigation } from '../../app/navigation';
 import type { PullDetail, PullFile } from '../../../shared/pulls';
 import type { RepositorySummary } from '../../../shared/repos';
 import type { DiffLine } from '../../../shared/workspace';
@@ -48,6 +50,7 @@ export function FilesTab({
   onRefresh: () => void;
 }) {
   const { pull, comparison } = detail;
+  const { navigate } = useNavigation();
   const { data: settings } = useSettings();
   const updateSettings = useUpdateSettings();
   const version = pull.latest?.version ?? null;
@@ -402,6 +405,23 @@ export function FilesTab({
         {!file.binary && ` · +${file.added ?? 0} −${file.removed ?? 0}`}
       </span>
       <span className="ml-auto flex items-center gap-2.5">
+        {file.status !== 'deleted' && comparison && (
+          // The source side of the comparison under review, not whatever the branch holds now.
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() =>
+              navigate({
+                name: 'repository',
+                id: repo.id,
+                tab: 'source',
+                source: { path: file.path, ref: comparison.sourceOid },
+              })
+            }
+          >
+            <FileText /> View file
+          </Button>
+        )}
         <Segmented
           label="Diff layout"
           value={diffSplit ? 'split' : 'unified'}

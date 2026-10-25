@@ -9,6 +9,9 @@ const STATUS = {
   RATE_LIMITED: 429,
   VALIDATION_FAILED: 400,
   NOT_FOUND: 404,
+  // Browsing files: the branch or commit, or the folder within it, isn't in the repository.
+  REF_NOT_FOUND: 404,
+  PATH_NOT_FOUND: 404,
   NAME_TAKEN: 409,
   INVALID_STATE: 409,
   LIMIT_REACHED: 403,

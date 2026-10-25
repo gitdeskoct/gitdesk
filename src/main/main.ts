@@ -1,3 +1,4 @@
+import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -16,6 +17,7 @@ import log from 'electron-log/main';
 import started from 'electron-squirrel-startup';
 import { accountSummarySchema, IPC, type AuthStatus } from '../shared/ipc';
 import { REPOS_IPC } from '../shared/repos';
+import { SOURCE_IPC } from '../shared/source';
 import { createAppService } from './app/app-service';
 import { createApiClient } from './auth/api-client';
 import { AuthService } from './auth/auth-service';
@@ -30,6 +32,11 @@ import {
 import { createGitIdentity } from './git/git-identity';
 import { createGitInstall } from './git/git-install';
 import { createTreeWatcher } from './repos/tree-watcher';
+import {
+  createSourceService,
+  type SourceService,
+} from './repos/source-service';
+import { createRemoteSource } from './remote/source-remote';
 import {
   createWorkspaceService,
   type WorkspaceService,
@@ -320,6 +327,8 @@ async function start() {
   reposAuth = (status) => repos.handleAuth(status);
   // Set right after the sync service exists; a push only finishes after both are made.
   let sync: SyncService | null = null;
+  // Set right after the workspace service, whose registry it reads roots from.
+  let source: SourceService | null = null;
   const ws = createWorkspaceService({
     journal,
     forgetAuth: (remoteId) => tokens.forget(remoteId),
@@ -331,7 +340,11 @@ async function start() {
       store.addActivity(id, type, detail, Date.now()),
     settings: () => settings.get(),
     watcher: createTreeWatcher({
-      onChange: (id) => void repos.refresh(id).catch(() => undefined),
+      onChange: (id, dirs) => {
+        void repos.refresh(id).catch(() => undefined);
+        source?.invalidate(id);
+        mainWindow?.webContents.send(SOURCE_IPC.changed, { id, dirs });
+      },
       onGone: (id) => void repos.refresh(id).catch(() => undefined),
     }),
     emitProgress: (event) =>
@@ -347,6 +360,35 @@ async function start() {
     },
   });
   workspace = ws;
+  const localSource = createSourceService({
+    rootOf: (id) => ws.rootOf(id),
+    // Paths here were checked to be inside a registered repository; nothing is opened or run.
+    showItemInFolder: (target) => shell.showItemInFolder(target),
+  });
+  source = localSource;
+  const remoteSource = createRemoteSource({
+    api,
+    auth,
+    settings: () => settings.get(),
+    log,
+    // The renderer never names the destination: the person picks it in the system dialog.
+    async saveFile(suggestedName, bytes) {
+      const options: Electron.SaveDialogOptions = {
+        title: 'Save a copy',
+        defaultPath: path.join(
+          app.getPath('downloads'),
+          suggestedName.replace(/[<>:"/\\|?*]|\p{Cc}/gu, '_') || 'file',
+        ),
+        properties: ['showOverwriteConfirmation', 'dontAddToRecent'],
+      };
+      const result = mainWindow
+        ? await dialog.showSaveDialog(mainWindow, options)
+        : await dialog.showSaveDialog(options);
+      if (result.canceled || !result.filePath) return false;
+      await writeFile(result.filePath, bytes);
+      return true;
+    },
+  });
   const gitInstall = createGitInstall({
     db,
     async pickFile() {
@@ -481,6 +523,8 @@ async function start() {
       pulls,
       move,
       sync: syncService,
+      source: localSource,
+      remoteSource,
     },
   );
 

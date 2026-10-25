@@ -82,6 +82,20 @@ import type { WorkspaceService } from '../repos/workspace-service';
 import log from 'electron-log/main';
 import { UserError } from '../errors';
 import type { RemoteService } from '../remote/remote-service';
+import type { RemoteSource } from '../remote/source-remote';
+import type { SourceService } from '../repos/source-service';
+import {
+  remoteSourceListInputSchema,
+  remoteSourceReadInputSchema,
+  remoteSourceSaveInputSchema,
+  SOURCE_IPC,
+  sourceFileInputSchema,
+  sourceListInputSchema,
+  sourcePathsInputSchema,
+  sourceReadInputSchema,
+  sourceResolveInputSchema,
+  sourceRevealInputSchema,
+} from '../../shared/source';
 import type { RepositoryService } from '../repos/repository-service';
 import type { AppService } from '../app/app-service';
 import type { AuthService } from '../auth/auth-service';
@@ -124,6 +138,8 @@ export function registerIpc(
     pulls: PullService;
     move: MoveService;
     sync: SyncService;
+    source: SourceService;
+    remoteSource: RemoteSource;
   },
 ): void {
   const {
@@ -139,7 +155,68 @@ export function registerIpc(
     pulls,
     move,
     sync,
+    source,
+    remoteSource,
   } = services;
+
+  // Files: every path is checked against the registered root on disk in main, and a commit is
+  // only ever an id Git or the Worker resolved.
+  const F = SOURCE_IPC;
+  handle(
+    F.list,
+    sourceListInputSchema,
+    userFacing((input) => source.list(input)),
+  );
+  handle(
+    F.read,
+    sourceReadInputSchema,
+    userFacing((input) => source.read(input)),
+  );
+  handle(
+    F.resolve,
+    sourceResolveInputSchema,
+    userFacing((input) => source.resolve(input)),
+  );
+  handle(
+    F.paths,
+    sourcePathsInputSchema,
+    userFacing((input) => source.paths(input)),
+  );
+  handle(
+    F.lastChange,
+    sourceFileInputSchema,
+    userFacing((input) => source.lastChange(input)),
+  );
+  handle(
+    F.reveal,
+    sourceRevealInputSchema,
+    userFacing((input) => source.reveal(input)),
+  );
+  handle(
+    F.stats,
+    repoIdSchema,
+    userFacing((repoId) => source.stats(repoId)),
+  );
+  handle(
+    F.remoteBranches,
+    repoIdSchema,
+    userFacing((repoId) => remoteSource.branches(repoId)),
+  );
+  handle(
+    F.remoteList,
+    remoteSourceListInputSchema,
+    userFacing((input) => remoteSource.list(input)),
+  );
+  handle(
+    F.remoteRead,
+    remoteSourceReadInputSchema,
+    userFacing((input) => remoteSource.read(input)),
+  );
+  handle(
+    F.remoteSave,
+    remoteSourceSaveInputSchema,
+    userFacing((input) => remoteSource.save(input)),
+  );
   // Sync: ids resolve against the registry in main; remotes and branches are checked against Git.
   handle(
     S.overview,

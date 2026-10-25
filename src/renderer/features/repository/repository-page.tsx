@@ -43,7 +43,13 @@ import {
   useWatchRepository,
 } from '../../lib/queries';
 import { useWidth } from '../../lib/use-width';
-import { useNavigation, type RepoTab } from '../../app/navigation';
+import {
+  useNavigation,
+  type RepoTab,
+  type SourceTarget,
+} from '../../app/navigation';
+import { SourceExplorer } from '../source/source-explorer';
+import { FilesSummary } from '../source/files-summary';
 import {
   fileManagerLabel,
   RepoMenuButton,
@@ -346,10 +352,12 @@ export function RepositoryPage({
   id,
   tab,
   newPull,
+  source,
 }: {
   id: string;
   tab?: RepoTab;
   newPull?: { source: string; target: string };
+  source?: SourceTarget;
 }) {
   const { navigate } = useNavigation();
   const repos = useRepositories();
@@ -405,12 +413,19 @@ export function RepositoryPage({
       </Page>
     );
   return (
-    <RepositoryView repo={repo} crumbs={crumbs} tab={tab} newPull={newPull} />
+    <RepositoryView
+      repo={repo}
+      crumbs={crumbs}
+      tab={tab}
+      newPull={newPull}
+      source={source}
+    />
   );
 }
 
 const TABS: { value: RepoTab; label: string }[] = [
   { value: 'changes', label: 'Changes' },
+  { value: 'source', label: 'Files' },
   { value: 'history', label: 'History' },
   { value: 'branches', label: 'Branches' },
   { value: 'pulls', label: 'Pull requests' },
@@ -591,11 +606,13 @@ function RepositoryView({
   crumbs,
   tab: routeTab,
   newPull,
+  source,
 }: {
   repo: RepositorySummary;
   crumbs: { label: string; onSelect?: () => void }[];
   tab?: RepoTab;
   newPull?: { source: string; target: string };
+  source?: SourceTarget;
 }) {
   useNow();
   const { navigate } = useNavigation();
@@ -625,7 +642,19 @@ function RepositoryView({
     syncState.data.pending.state === 'conflict_resolution'
       ? syncState.data.pending
       : null;
-  const { actions, busy } = useRepoActions(repo, setMode, remote);
+  // Rename confirms in the header; the rest confirm in Overview's "Remove or delete" section, so a
+  // menu choice made on another tab goes there instead of opening a band nobody can see.
+  const openMode = (next: ManageMode) => {
+    setMode(next);
+    if (next === 'rename' || tab === 'overview') return;
+    navigate({ name: 'repository', id: repo.id, tab: 'overview' });
+    requestAnimationFrame(() =>
+      document
+        .getElementById('manage-heading')
+        ?.scrollIntoView({ block: 'start' }),
+    );
+  };
+  const { actions, busy } = useRepoActions(repo, openMode, remote);
   const [measure, width] = useWidth();
   const gone = () => navigate({ name: 'repositories' });
 
@@ -955,6 +984,9 @@ function RepositoryView({
           <Tabs.Content value="changes" className={tabContent}>
             <ChangesTab repo={repo} layout={layout} />
           </Tabs.Content>
+          <Tabs.Content value="source" className={tabContent}>
+            <SourceExplorer mode={{ kind: 'local', repo }} target={source} />
+          </Tabs.Content>
           <Tabs.Content value="history" className={tabContent}>
             <HistoryTab
               repo={repo}
@@ -982,6 +1014,7 @@ function RepositoryView({
             {scrolling(
               <>
                 <Analytics repo={repo} />
+                <FilesSummary repo={repo} />
                 <PullAnalytics repo={repo} />
                 {status && (
                   <Section id="details-heading" title="This repository">

@@ -93,6 +93,7 @@ Light amber is the only tone with dark text on the accent fill. _Why: white on #
 - `ink` is primary text. `muted` is descriptions, metadata and secondary labels.
 - `faint` is for SVG line art, disabled glyphs and decorative strokes. **It is never used for text.**
 - `accent` marks the primary action, the selection and focus. One primary action per view.
+- A selected list row is an `accent-soft` fill, never a colored strip on its edge. The Files tree marks the open file with its icon and name in `accent`, semibold, with no fill.
 - `success`, `warning`, `danger` and `record` are for state only, never decoration.
 
 ## Contrast

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { readFile, realpath, stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import type {
   AddCommentInput,
@@ -37,6 +37,7 @@ import type { DiffResult, PushResult } from '../../shared/workspace';
 import type { AppDatabase } from '../db/database';
 import { UserError } from '../errors';
 import { describeGitError, gitAt } from '../repos/git-inspector';
+import { resolveInside } from '../repos/paths';
 import type { RepositoryStore } from '../repos/repository-store';
 import { sanitizeOutput } from '../repos/workspace-service';
 import {
@@ -509,16 +510,12 @@ export function createPullService(deps: {
     root: string,
     rel: string,
   ): Promise<string | null> {
-    const target = path.resolve(root, rel);
-    const realRoot = await realpath(root);
-    const parent = await realpath(path.dirname(target)).catch(() => null);
-    const relative = parent ? path.relative(realRoot, parent) : '..';
-    if (relative.startsWith('..') || path.isAbsolute(relative))
-      throw new PullError('That file is outside the repository.');
-    const info = await stat(target).catch(() => null);
-    if (!info?.isFile()) return null;
-    if (info.size > MAX_WORKING_BYTES) return null;
-    return readFile(target, 'utf8');
+    const inside = await resolveInside(root, rel);
+    if (!inside) throw new PullError('That file is outside the repository.');
+    // lstat: a symlink is never followed, so a link pointing out of the repository isn't read.
+    if (!inside.stat?.isFile()) return null;
+    if (inside.stat.size > MAX_WORKING_BYTES) return null;
+    return readFile(inside.abs, 'utf8');
   }
 
   async function conflictState(repoId: string): Promise<ConflictState> {

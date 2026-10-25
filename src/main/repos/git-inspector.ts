@@ -1,3 +1,4 @@
+import { spawn } from 'node:child_process';
 import { existsSync, realpath } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
@@ -124,6 +125,65 @@ export function gitAt(
       ...(options.auth ? Object.keys(options.auth) : []),
     ],
   }).env({ ...gitEnv(), ...options.auth });
+}
+
+export type GitBytes = { code: number | null; stdout: Buffer };
+
+// For output simple-git would mangle: file bytes from cat-file, or NUL-separated lists fed through
+// stdin. Same binary, environment and safe config as gitAt; output past maxBytes stops the process.
+export function gitBytes(
+  dir: string,
+  args: string[],
+  options: {
+    maxBytes: number;
+    input?: string;
+    timeoutMs?: number;
+    // check-ignore refuses literal pathspecs; callers turning it off keep magic out themselves.
+    literalPathspecs?: boolean;
+  },
+): Promise<GitBytes> {
+  const env = gitEnv();
+  if (options.literalPathspecs === false) delete env.GIT_LITERAL_PATHSPECS;
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      gitBinary ?? 'git',
+      [...SAFE_CONFIG.flatMap((c) => ['-c', c]), ...args],
+      {
+        cwd: dir,
+        env,
+        shell: false,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'ignore'],
+      },
+    );
+    const chunks: Buffer[] = [];
+    let size = 0;
+    let settled = false;
+    const finish = (err: Error | null, code: number | null = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve({ code, stdout: Buffer.concat(chunks, size) });
+    };
+    const timer = setTimeout(() => {
+      child.kill();
+      finish(new GitError('Git took too long to answer.'));
+    }, options.timeoutMs ?? TIMEOUT_MS);
+    child.stdout.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > options.maxBytes) {
+        child.kill();
+        finish(new GitError('Git returned more than gitdesk reads at once.'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    child.on('error', (err) => finish(err));
+    child.on('close', (code) => finish(null, code));
+    child.stdin.on('error', () => undefined);
+    child.stdin.end(options.input ?? '');
+  });
 }
 
 // A bearer token for exactly one https URL, passed as GIT_CONFIG_* so it never appears in the

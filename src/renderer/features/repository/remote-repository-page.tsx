@@ -3,6 +3,7 @@ import {
   CircleCheck,
   Clock,
   CloudDownload,
+  FolderOpen,
   RefreshCw,
 } from 'lucide-react';
 import { useState } from 'react';
@@ -29,7 +30,8 @@ import {
   useSettings,
   useSignIn,
 } from '../../lib/queries';
-import { useNavigation } from '../../app/navigation';
+import { useNavigation, type SourceTarget } from '../../app/navigation';
+import { SourceExplorer } from '../source/source-explorer';
 import { REMOTE_ACTIVITY } from '../home/workspace-sections';
 import { ManageBand, type ManageMode } from '../repos/manage';
 import { RepoMenuButton, useRemoteActions } from '../repos/repo-actions';
@@ -40,7 +42,15 @@ import { GitUrlField } from './git-url';
 import { REMOTE_STATUS, RepoTags, Section } from './history';
 
 // A repository in the account. Everything shown comes from the server; nothing here touches disk.
-export function RemoteRepositoryPage({ id }: { id: string }) {
+export function RemoteRepositoryPage({
+  id,
+  view,
+  source,
+}: {
+  id: string;
+  view?: 'source';
+  source?: SourceTarget;
+}) {
   useNow();
   const { navigate } = useNavigation();
   const { data: auth } = useAuthStatus();
@@ -143,7 +153,73 @@ export function RemoteRepositoryPage({ id }: { id: string }) {
       </Page>
     );
   }
+  if (view === 'source')
+    return <RemoteFiles id={id} crumbs={crumbs} target={source} />;
   return <RemoteView id={id} crumbs={crumbs} />;
+}
+
+// The hosted copy's files, full height like a workspace tab, pinned to one commit.
+function RemoteFiles({
+  id,
+  crumbs,
+  target,
+}: {
+  id: string;
+  crumbs: { label: string; onSelect?: () => void }[];
+  target?: SourceTarget;
+}) {
+  const { navigate } = useNavigation();
+  const remote = useRemoteRepository(id, true).data!;
+  const local = useRepositories().data?.find((r) => r.remoteId === id);
+  const [cloning, setCloning] = useState(false);
+  const canClone = !local && remote.status === 'ready' && !!remote.gitUrl;
+  return (
+    <Page
+      crumbs={[
+        crumbs[0]!,
+        {
+          label: remote.name,
+          onSelect: () => navigate({ name: 'remote-repository', id }),
+        },
+        { label: 'Files' },
+      ]}
+      fill
+      width="full"
+      actions={
+        local ? (
+          <Button
+            size="sm"
+            onClick={() =>
+              navigate({ name: 'repository', id: local.id, tab: 'source' })
+            }
+          >
+            Open the local copy
+          </Button>
+        ) : canClone ? (
+          <Button size="sm" variant="primary" onClick={() => setCloning(true)}>
+            <CloudDownload />
+            Clone to this computer
+          </Button>
+        ) : undefined
+      }
+      aside={
+        cloning ? (
+          <ClonePanel initial={remote} onClose={() => setCloning(false)} />
+        ) : undefined
+      }
+    >
+      <SourceExplorer
+        mode={{
+          kind: 'remote',
+          repoId: id,
+          name: remote.name,
+          defaultBranch: remote.defaultBranch,
+          localId: local?.id ?? null,
+        }}
+        target={target}
+      />
+    </Page>
+  );
 }
 
 function RemoteView({
@@ -304,6 +380,31 @@ function RemoteView({
             {relativeTime(remote.updatedAt)}
           </dd>
         </dl>
+      </Section>
+
+      <Section
+        id="remote-files"
+        title="Files"
+        meta="Read from the hosted copy, one commit at a time"
+      >
+        <InlineStatus
+          className="border-y border-line py-3"
+          action={
+            <Button
+              size="sm"
+              disabled={remote.status !== 'ready' || !remote.gitUrl}
+              onClick={() =>
+                navigate({ name: 'remote-repository', id, view: 'source' })
+              }
+            >
+              <FolderOpen /> Browse files
+            </Button>
+          }
+        >
+          {remote.status === 'ready' && remote.gitUrl
+            ? `Read the files on ${remote.defaultBranch} or any pushed branch, without cloning.`
+            : 'Files can be browsed once the repository has a Git URL and something is pushed to it.'}
+        </InlineStatus>
       </Section>
 
       <Section id="remote-local" title="On this computer">

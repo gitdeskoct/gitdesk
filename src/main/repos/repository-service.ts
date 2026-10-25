@@ -304,9 +304,18 @@ export function createRepositoryService(deps: {
         setTimeout(() => void enqueue([id]), WATCH_DEBOUNCE_MS),
       );
     };
+    // A folder moved or deleted while gitdesk was closed still reads as available until inspected;
+    // simple-git throws for it right away, so inspect it instead of watching (it then reads missing).
+    let git: ReturnType<typeof gitAt>;
+    try {
+      git = gitAt(row.rootPath);
+    } catch {
+      void enqueue([id]);
+      return;
+    }
     // Git reports where its data lives: a linked worktree or submodule has a .git file that points
     // elsewhere, and its refs live in the shared common directory.
-    void gitAt(row.rootPath)
+    void git
       .raw(['rev-parse', '--absolute-git-dir', '--git-common-dir'])
       .then(async (output) => {
         const [own, common] = output.split('\n').map((line) => line.trim());

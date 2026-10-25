@@ -115,6 +115,44 @@ export function parseStatus(output: string): ParsedStatus {
   return status;
 }
 
+export type StatusPath = {
+  path: string;
+  // Porcelain v2 letters, '.' for unchanged. Untracked is '?', a conflict is 'U' on both sides.
+  x: string;
+  y: string;
+  submodule: boolean;
+};
+
+// Every path in `git status --porcelain=v2 -z`, without parseStatus's display cap: the Files tab
+// marks folders by what is below them, so a cut-off list would leave folders unmarked.
+export function parseStatusPaths(output: string, max = 200_000): StatusPath[] {
+  const paths: StatusPath[] = [];
+  const records = output.split('\0');
+  for (let i = 0; i < records.length && paths.length < max; i++) {
+    const record = records[i]!;
+    const type = record[0];
+    if (type === '?')
+      paths.push({ path: pathOf(record, 1), x: '?', y: '?', submodule: false });
+    else if (type === 'u')
+      paths.push({
+        path: pathOf(record, FIELDS_BEFORE_PATH.u),
+        x: 'U',
+        y: 'U',
+        submodule: false,
+      });
+    else if ((type === '1' || type === '2') && record[1] === ' ') {
+      paths.push({
+        path: pathOf(record, FIELDS_BEFORE_PATH[type]),
+        x: record[2] ?? '.',
+        y: record[3] ?? '.',
+        submodule: record.slice(5, 6) === 'S',
+      });
+      if (type === '2') i++;
+    }
+  }
+  return paths.filter((p) => p.path && p.path.length <= MAX_PATH);
+}
+
 // `git log -1 --format=%H%x00%ct%x00%s`
 export function parseLastCommit(output: string): RepoStatus['lastCommit'] {
   const [oid, seconds, ...subject] = output.replace(/\n$/, '').split('\0');

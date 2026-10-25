@@ -43,6 +43,15 @@ function fakeHost() {
     async tip() {
       return null;
     },
+    async readCommit() {
+      return null;
+    },
+    async readTree() {
+      return null;
+    },
+    async readBlob() {
+      return null;
+    },
   };
   return { host, repos, issued, state };
 }
@@ -269,5 +278,30 @@ describe('choosing the git host', () => {
   it('stays off without a setting, and without the Artifacts binding', () => {
     expect(gitHostFor({ ...env, GIT_HOSTING: 'off' })).toBeNull();
     expect(gitHostFor({ ...env, GIT_HOSTING: 'artifacts' })).toBeNull();
+  });
+
+  it('reads tree entries and blobs from the local host in the same shape as Artifacts', async () => {
+    const id = 'a'.repeat(40);
+    const answers: Record<string, unknown> = {
+      [`/repos/r1/objects/${id}/tree`]: { entries: [{ name: 'a.ts', mode: '100644', hash: 'b'.repeat(40), type: 'blob' }] },
+      [`/repos/r1/objects/${id}/blob`]: { blob: { size: 5, base64: btoa('hello') } },
+    };
+    const seen: string[] = [];
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      seen.push(new Headers(init?.headers).get('x-local-git-secret') ?? '');
+      return Response.json(answers[url.pathname] ?? null);
+    }) as typeof fetch;
+    try {
+      const host = gitHostFor({ ...base, LOCAL_GIT_HOST: 'http://127.0.0.1:9444' })!;
+      expect(await host.readTree('r1', id)).toEqual([{ name: 'a.ts', mode: '100644', oid: 'b'.repeat(40), type: 'blob' }]);
+      const blob = await host.readBlob('r1', id, 10);
+      expect(blob?.size).toBe(5);
+      expect(new TextDecoder().decode(blob!.bytes!)).toBe('hello');
+      expect(seen.every((secret) => secret === base.LOCAL_GIT_SECRET)).toBe(true);
+    } finally {
+      globalThis.fetch = original;
+    }
   });
 });

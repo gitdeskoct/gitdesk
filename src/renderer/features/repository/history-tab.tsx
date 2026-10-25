@@ -30,6 +30,7 @@ function CommitDetailView({
 }) {
   const detail = useCommitDetail(repoId, oid);
   const mine = useMyEmails();
+  const { navigate } = useNavigation();
   if (detail.isPending) return <Loading label="Reading the commit…" />;
   if (detail.isError)
     return (
@@ -146,11 +147,23 @@ function CommitDetailView({
             key={`${file.oldPath ?? ''}:${file.path}`}
             className="grid grid-cols-[minmax(0,1fr)_auto] gap-3 border-b border-line py-2"
           >
-            <span
-              className="min-w-0 truncate font-mono text-[0.78125rem] text-ink"
-              title={file.path}
-            >
-              {file.path}
+            <span className="min-w-0 truncate font-mono text-[0.78125rem] text-ink">
+              {/* Opens the file as this commit left it, in Files. */}
+              <button
+                type="button"
+                title={`Open ${file.path} at ${commit.oid.slice(0, 7)} in Files`}
+                className="rounded-[4px] text-left hover:underline focus-visible:outline-offset-0"
+                onClick={() =>
+                  navigate({
+                    name: 'repository',
+                    id: repoId,
+                    tab: 'source',
+                    source: { path: file.path, ref: commit.oid },
+                  })
+                }
+              >
+                {file.path}
+              </button>
               {file.oldPath && (
                 <span className="text-muted"> from {file.oldPath}</span>
               )}
@@ -191,10 +204,8 @@ function CommitItem({
       data-oid={commit.oid}
       onClick={onSelect}
       className={cn(
-        'grid cursor-default grid-cols-[1.75rem_minmax(0,1fr)] items-center gap-x-2.5 border-b border-l-2 border-b-line py-2.5 pr-3 pl-2.5 outline-offset-[-2px] transition-colors',
-        selected
-          ? 'border-l-accent bg-accent-soft'
-          : 'border-l-transparent hover:bg-row-hover',
+        'grid cursor-default grid-cols-[1.75rem_minmax(0,1fr)] items-center gap-x-2.5 border-b border-line py-2.5 pr-3 pl-3 outline-offset-[-2px] transition-colors',
+        selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
       )}
     >
       <AuthorAvatar name={commit.author} email={commit.email} />

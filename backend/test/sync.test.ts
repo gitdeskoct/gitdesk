@@ -36,6 +36,15 @@ function fakeHost(fail = false) {
     async tip(name, ref) {
       return stored.get(name)?.tips.get(ref) ?? null;
     },
+    async readCommit() {
+      return null;
+    },
+    async readTree() {
+      return null;
+    },
+    async readBlob() {
+      return null;
+    },
   };
   return { host, stored };
 }

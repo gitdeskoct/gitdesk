@@ -123,6 +123,46 @@ const admin = http.createServer(async (req, res) => {
       }
       return json(res, 200, { oid });
     }
+    // Read-only object access for the Files tab, the same shape Artifacts' readCommit, readTree and
+    // readBlob give: one object by id, never a path, so nothing here can leave the repository.
+    if (parts[2] === 'objects' && /^[0-9a-f]{40,64}$/.test(parts[3] ?? '') && req.method === 'GET') {
+      const oid = parts[3];
+      const type = (() => {
+        try {
+          return git(dir, ['cat-file', '-t', oid]);
+        } catch {
+          return null;
+        }
+      })();
+      if (parts[4] === 'commit') {
+        if (type !== 'commit') return json(res, 200, { commit: null });
+        const [hash, tree, author, seconds, ...message] = git(dir, [
+          'log', '-1', '--no-color', '--format=%H%x00%T%x00%an%x00%ct%x00%B', oid,
+        ]).split('\0');
+        return json(res, 200, {
+          commit: { oid: hash, treeOid: tree, author, committedAt: Number(seconds), message: message.join('') },
+        });
+      }
+      if (parts[4] === 'tree') {
+        if (type !== 'tree') return json(res, 200, { entries: null });
+        const out = execFileSync('git', ['ls-tree', '-z', oid], { cwd: dir, encoding: 'utf8' });
+        const entries = out.split('\0').filter(Boolean).map((record) => {
+          const tab = record.indexOf('\t');
+          const [mode, kind, hash] = record.slice(0, tab).split(' ');
+          const type =
+            kind === 'tree' ? 'tree' : kind === 'commit' ? 'gitlink' : mode === '120000' ? 'symlink' : mode === '100755' ? 'exec' : 'blob';
+          return { name: record.slice(tab + 1), mode, hash, type };
+        });
+        return json(res, 200, { entries });
+      }
+      if (parts[4] === 'blob') {
+        if (type !== 'blob') return json(res, 200, { blob: null });
+        const max = Math.min(Number(url.searchParams.get('max') ?? 0) || 0, 8 * 1024 * 1024);
+        const size = Number(git(dir, ['cat-file', '-s', oid]));
+        const bytes = size <= max ? execFileSync('git', ['cat-file', 'blob', oid], { cwd: dir, maxBuffer: max + 1 }) : null;
+        return json(res, 200, { blob: { size, base64: bytes ? bytes.toString('base64') : null } });
+      }
+    }
     return json(res, 404, { error: 'not found' });
   } catch (err) {
     log('admin error', err.message);
