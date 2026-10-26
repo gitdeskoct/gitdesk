@@ -96,6 +96,15 @@ export const settingsSchema = z.object({
   diffIgnoreWhitespace: z.boolean(),
   diffWrap: z.boolean(),
   diffSyntax: z.boolean(),
+  // Lockfiles and minified files open folded; only the view changes, never the patch.
+  diffCollapseGenerated: z.boolean(),
+  // The Changes list: how Git's status is asked for, and what the diff lets you stage.
+  changesUntracked: z.enum(['all', 'normal']),
+  changesRenames: z.boolean(),
+  changesSubmodules: z.enum(['none', 'dirty', 'all']),
+  changesPartial: z.boolean(),
+  // Every discard first saves the discarded changes as a patch in the app data folder.
+  changesKeepDiscarded: z.boolean(),
   // The Files tab: tree, viewer and how large a text file opens without asking (in MiB).
   sourceLayout: z.enum(['auto', 'centered', 'split']),
   sourceShowIgnored: z.boolean(),
@@ -125,6 +134,18 @@ export const settingsSchema = z.object({
   pullPushAfterMerge: z.boolean(),
   pullOfferDeleteBranch: z.boolean(),
   pullWarnBeforeMerge: z.boolean(),
+  // Branches tab: what a merge and a new branch start with, and how much Git checks by itself.
+  branchAutoMergeability: z.enum(['off', 'compare', 'list']),
+  branchMergeMethod: z.enum(['default', 'no-ff', 'ff-only']),
+  branchPushAfterMerge: z.boolean(),
+  branchOfferDelete: z.boolean(),
+  branchSwitchNew: z.boolean(),
+  // git follows branch.autoSetupMerge; always and never pass --track and --no-track.
+  branchTrack: z.enum(['git', 'always', 'never']),
+  branchSort: z.enum(['recent', 'name']),
+  branchShowRemote: z.boolean(),
+  // Days without a commit before a branch reads as stale; 0 never does.
+  branchStaleDays: z.union([z.literal(0), z.literal(30), z.literal(90)]),
   // Git hosting: the remote name used when linking adds the account's Git URL, and how long a
   // token in a copied terminal command lasts, in seconds.
   hostingRemoteName: z.enum(['auto', 'gitdesk', 'none']),
@@ -186,6 +207,12 @@ export const DEFAULT_SETTINGS: Settings = {
   diffIgnoreWhitespace: false,
   diffWrap: false,
   diffSyntax: true,
+  diffCollapseGenerated: true,
+  changesUntracked: 'all',
+  changesRenames: true,
+  changesSubmodules: 'none',
+  changesPartial: true,
+  changesKeepDiscarded: true,
   sourceLayout: 'auto',
   sourceShowIgnored: false,
   sourceShowHidden: true,
@@ -205,6 +232,15 @@ export const DEFAULT_SETTINGS: Settings = {
   pullPushAfterMerge: true,
   pullOfferDeleteBranch: false,
   pullWarnBeforeMerge: true,
+  branchAutoMergeability: 'list',
+  branchMergeMethod: 'default',
+  branchPushAfterMerge: false,
+  branchOfferDelete: true,
+  branchSwitchNew: true,
+  branchTrack: 'git',
+  branchSort: 'recent',
+  branchShowRemote: true,
+  branchStaleDays: 90,
   hostingRemoteName: 'auto',
   autoHostedRemote: true,
   pullStrategy: 'ff-only',

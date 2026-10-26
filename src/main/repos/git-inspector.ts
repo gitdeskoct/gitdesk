@@ -10,7 +10,7 @@ import type {
   RepositoryHistory,
 } from '../../shared/repos';
 import { UserError } from '../errors';
-import { parseLastCommit, parseStatus } from './git-status';
+import { parseLastCommit, parseNumstatAll, parseStatus } from './git-status';
 
 const TIMEOUT_MS = 20_000;
 
@@ -127,23 +127,30 @@ export function gitAt(
   }).env({ ...gitEnv(), ...options.auth });
 }
 
-export type GitBytes = { code: number | null; stdout: Buffer };
+export type GitBytes = { code: number | null; stdout: Buffer; stderr: string };
 
-// For output simple-git would mangle: file bytes from cat-file, or NUL-separated lists fed through
-// stdin. Same binary, environment and safe config as gitAt; output past maxBytes stops the process.
+// For output simple-git would mangle (file bytes, NUL-separated lists, exact patches) and for writes
+// whose exit code matters: simple-git reports a non-zero exit with empty stderr as success.
+// Same binary, environment and safe config as gitAt; output past maxBytes stops the process.
 export function gitBytes(
   dir: string,
   args: string[],
   options: {
     maxBytes: number;
-    input?: string;
+    input?: string | Buffer;
     timeoutMs?: number;
+    // Commands that would open an editor (continue, revert) accept the prepared message instead.
+    noEditor?: boolean;
     // check-ignore refuses literal pathspecs; callers turning it off keep magic out themselves.
     literalPathspecs?: boolean;
   },
 ): Promise<GitBytes> {
   const env = gitEnv();
   if (options.literalPathspecs === false) delete env.GIT_LITERAL_PATHSPECS;
+  if (options.noEditor) {
+    env.GIT_EDITOR = 'true';
+    env.GIT_SEQUENCE_EDITOR = 'true';
+  }
   return new Promise((resolve, reject) => {
     const child = spawn(
       gitBinary ?? 'git',
@@ -153,18 +160,19 @@ export function gitBytes(
         env,
         shell: false,
         windowsHide: true,
-        stdio: ['pipe', 'pipe', 'ignore'],
+        stdio: ['pipe', 'pipe', 'pipe'],
       },
     );
     const chunks: Buffer[] = [];
     let size = 0;
+    let stderr = '';
     let settled = false;
     const finish = (err: Error | null, code: number | null = null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (err) reject(err);
-      else resolve({ code, stdout: Buffer.concat(chunks, size) });
+      else resolve({ code, stdout: Buffer.concat(chunks, size), stderr });
     };
     const timer = setTimeout(() => {
       child.kill();
@@ -178,6 +186,9 @@ export function gitBytes(
         return;
       }
       chunks.push(chunk);
+    });
+    child.stderr.on('data', (chunk: Buffer) => {
+      if (stderr.length < 16_000) stderr += chunk.toString('utf8');
     });
     child.on('error', (err) => finish(err));
     child.on('close', (code) => finish(null, code));
@@ -272,14 +283,41 @@ export const STATUS_ARGS = [
   '-z',
   '--untracked-files=normal',
 ];
-// The workspace lists every untracked file, not just its new folder, so each can be staged alone.
-export const WORKSPACE_STATUS_ARGS = [
-  'status',
-  '--porcelain=v2',
-  '--branch',
-  '-z',
-  '--untracked-files=all',
-];
+// How the Changes list asks Git (Settings › Git › Changes and staging). By default every untracked
+// file is listed on its own, not just its new folder, so each can be staged alone.
+export type ChangesOptions = {
+  untracked: 'all' | 'normal';
+  renames: boolean;
+  submodules: 'none' | 'dirty' | 'all';
+};
+export const DEFAULT_CHANGES_OPTIONS: ChangesOptions = {
+  untracked: 'all',
+  renames: true,
+  submodules: 'none',
+};
+export function workspaceStatusArgs(
+  options: ChangesOptions = DEFAULT_CHANGES_OPTIONS,
+): string[] {
+  return [
+    'status',
+    '--porcelain=v2',
+    '--branch',
+    '-z',
+    `--untracked-files=${options.untracked}`,
+    options.renames ? '--find-renames' : '--no-renames',
+    `--ignore-submodules=${options.submodules}`,
+  ];
+}
+export const WORKSPACE_STATUS_ARGS = workspaceStatusArgs();
+export const changesOptions = (settings: {
+  changesUntracked: ChangesOptions['untracked'];
+  changesRenames: boolean;
+  changesSubmodules: ChangesOptions['submodules'];
+}): ChangesOptions => ({
+  untracked: settings.changesUntracked,
+  renames: settings.changesRenames,
+  submodules: settings.changesSubmodules,
+});
 
 export async function inspect(root: string): Promise<Inspection> {
   try {
@@ -468,11 +506,43 @@ export async function history(
   }
 }
 
-export async function listChanges(root: string): Promise<RepositoryChanges> {
+export async function listChanges(
+  root: string,
+  options: ChangesOptions = DEFAULT_CHANGES_OPTIONS,
+): Promise<RepositoryChanges> {
   try {
+    const git = gitAt(root);
     const { files, truncated } = parseStatus(
-      await gitAt(root).raw(WORKSPACE_STATUS_ARGS),
+      await git.raw(workspaceStatusArgs(options)),
     );
+    // Each side's line counts come from that side's own comparison: Index → Working tree for
+    // unstaged rows, HEAD → Index for staged ones. Counts are a nicety, so a failure leaves them out.
+    const numstat = (cached: boolean) =>
+      git
+        .raw([
+          'diff',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--no-color',
+          options.renames ? '-M' : '--no-renames',
+          `--ignore-submodules=${options.submodules}`,
+          ...(cached ? ['--cached'] : []),
+          '--numstat',
+          '-z',
+        ])
+        .then(parseNumstatAll)
+        .catch(() => new Map<string, never>());
+    const [unstaged, staged] = await Promise.all([
+      files.some((f) => f.kind === 'modified') ? numstat(false) : new Map(),
+      files.some((f) => f.kind === 'staged') ? numstat(true) : new Map(),
+    ]);
+    for (const file of files) {
+      const counts = (file.kind === 'staged' ? staged : unstaged).get(
+        file.path,
+      );
+      if (counts && file.kind !== 'conflict' && file.kind !== 'untracked')
+        Object.assign(file, counts);
+    }
     return { files, truncated };
   } catch (err) {
     throw new GitError(describeGitError(err));

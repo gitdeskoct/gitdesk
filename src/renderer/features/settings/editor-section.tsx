@@ -16,6 +16,7 @@ import {
   useSettings,
   useUpdateSettings,
 } from '../../lib/queries';
+import { EditorLogo, hasEditorLogo } from '../repository/editor-button';
 import { PageTitle } from '../shell/page';
 
 const CHECKED_FOR =
@@ -147,7 +148,17 @@ export function EditorSection() {
               name={editor.name}
               detail={editor.location}
               path
-              icon={initials(editor.name)}
+              icon={
+                hasEditorLogo(editor.id, editor.icon) ? (
+                  <EditorLogo
+                    id={editor.id}
+                    icon={editor.icon}
+                    className="size-5"
+                  />
+                ) : (
+                  initials(editor.name)
+                )
+              }
             />
           ))}
           <Option
@@ -192,7 +203,7 @@ export function EditorSection() {
         <SettingRow
           id="editor-goto-line"
           label="Open files at the changed line"
-          description="VS Code, Cursor, Zed, Sublime Text, Notepad++ and JetBrains IDEs jump to the first changed line."
+          description="VS Code, Cursor, Zed, Sublime Text, Notepad++ and JetBrains IDEs jump to the first changed line, or to the first conflict marker in a conflicted file."
         >
           <Switch
             aria-label="Open files at the changed line"

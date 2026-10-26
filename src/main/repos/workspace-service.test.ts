@@ -4,6 +4,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -124,6 +125,7 @@ async function setup(
       dispose: vi.fn(),
     },
     desktop,
+    discardDir: path.join(dir, 'discarded'),
   });
   cleanups.push(() => service.dispose());
   return { id, service, repos, store, desktop, copyText };
@@ -285,6 +287,175 @@ describe('workspace changes and diffs', () => {
   });
 });
 
+describe('staging parts of a file', () => {
+  const lines = (n: number, change: (i: number) => string = String) =>
+    Array.from({ length: n }, (_, i) => change(i)).join('\n') + '\n';
+  const read = (
+    service: Awaited<ReturnType<typeof setup>>['service'],
+    id: string,
+    file: string,
+    side: 'unstaged' | 'staged' | 'untracked',
+  ) =>
+    service.diff({
+      id,
+      path: file,
+      side,
+      context: 3,
+      ignoreWhitespace: false,
+      full: false,
+    });
+
+  it('stages, unstages and discards chosen lines through git apply', async () => {
+    const root = makeRepo();
+    writeFileSync(path.join(root, 'list.txt'), lines(12));
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'list');
+    // Two separate hunks: lines 1 and 10 change.
+    writeFileSync(
+      path.join(root, 'list.txt'),
+      lines(12, (i) => (i === 1 ? 'one!' : i === 10 ? 'ten!' : String(i))),
+    );
+    const { id, service } = await setup(root);
+    const diff = await read(service, id, 'list.txt', 'unstaged');
+    if (diff.status !== 'text') throw new Error(diff.status);
+    expect(diff.hunks).toHaveLength(2);
+    expect(diff.token).toMatch(/^[0-9a-f]{40}$/);
+
+    // Only the second hunk's added line: its removal stays as context.
+    const added = diff.hunks[1]!.lines.findIndex((l) => l.kind === 'add');
+    expect(
+      await service.applySelection({
+        id,
+        path: 'list.txt',
+        side: 'unstaged',
+        action: 'stage',
+        token: diff.token!,
+        context: 3,
+        hunks: [{ index: 1, lines: [added] }],
+      }),
+    ).toEqual({ status: 'applied', saved: false });
+    expect(git(root, 'show', ':list.txt')).toBe(
+      lines(12, (i) => (i === 10 ? '10\nten!' : String(i))),
+    );
+
+    const staged = await read(service, id, 'list.txt', 'staged');
+    if (staged.status !== 'text') throw new Error(staged.status);
+    expect(
+      await service.applySelection({
+        id,
+        path: 'list.txt',
+        side: 'staged',
+        action: 'unstage',
+        token: staged.token!,
+        context: 3,
+        hunks: [{ index: 0 }],
+      }),
+    ).toMatchObject({ status: 'applied' });
+    expect(git(root, 'diff', '--cached', '--name-only').trim()).toBe('');
+
+    // Discard the first hunk from the working tree; a copy is kept first.
+    const again = await read(service, id, 'list.txt', 'unstaged');
+    if (again.status !== 'text') throw new Error(again.status);
+    expect(
+      await service.applySelection({
+        id,
+        path: 'list.txt',
+        side: 'unstaged',
+        action: 'discard',
+        token: again.token!,
+        context: 3,
+        hunks: [{ index: 0 }],
+      }),
+    ).toEqual({ status: 'applied', saved: true });
+    expect(readFileSync(path.join(root, 'list.txt'), 'utf8')).toBe(
+      lines(12, (i) => (i === 10 ? 'ten!' : String(i))),
+    );
+    const kept = path.join(dir, 'discarded', 'app');
+    expect(
+      readFileSync(path.join(kept, readdirSync(kept)[0]!), 'utf8'),
+    ).toContain('+one!');
+  });
+
+  it('refuses a stale selection and a held index lock, changing nothing', async () => {
+    const root = makeRepo();
+    writeFileSync(path.join(root, 'README.md'), '# hi\nmore\n');
+    const { id, service } = await setup(root);
+    const diff = await read(service, id, 'README.md', 'unstaged');
+    if (diff.status !== 'text') throw new Error(diff.status);
+    const input = {
+      id,
+      path: 'README.md',
+      side: 'unstaged' as const,
+      action: 'stage' as const,
+      token: diff.token!,
+      context: 3,
+      hunks: [{ index: 0 }],
+    };
+    writeFileSync(path.join(root, 'README.md'), '# hi\nmore\nand more\n');
+    expect(await service.applySelection(input)).toEqual({ status: 'stale' });
+
+    writeFileSync(path.join(root, '.git', 'index.lock'), '');
+    expect(await service.applySelection(input)).toMatchObject({
+      status: 'rejected',
+      reason: 'busy',
+    });
+    await expect(service.stage({ id, paths: ['README.md'] })).rejects.toThrow(
+      /Another Git process/,
+    );
+    expect(existsSync(path.join(root, '.git', 'index.lock'))).toBe(true);
+    rmSync(path.join(root, '.git', 'index.lock'));
+    expect(git(root, 'diff', '--cached', '--name-only').trim()).toBe('');
+  });
+
+  it('stages part of an untracked file with spaces and accents in its name', async () => {
+    const root = makeRepo();
+    const name = 'notes café.txt';
+    writeFileSync(path.join(root, name), 'keep\nskip\n');
+    const { id, service } = await setup(root);
+    const diff = await read(service, id, name, 'untracked');
+    if (diff.status !== 'text') throw new Error(diff.status);
+    expect(
+      await service.applySelection({
+        id,
+        path: name,
+        side: 'untracked',
+        action: 'stage',
+        token: diff.token!,
+        context: 3,
+        hunks: [{ index: 0, lines: [0] }],
+      }),
+    ).toMatchObject({ status: 'applied' });
+    expect(git(root, 'show', `:${name}`)).toBe('keep\n');
+  });
+
+  it('discards staged and working changes back to HEAD, keeping a copy', async () => {
+    const root = makeRepo();
+    writeFileSync(path.join(root, 'README.md'), 'staged\n');
+    git(root, 'add', 'README.md');
+    writeFileSync(path.join(root, 'README.md'), 'staged and more\n');
+    const { id, service } = await setup(root);
+    expect(await service.discardAll({ id, paths: ['README.md'] })).toEqual({
+      saved: true,
+    });
+    expect(readFileSync(path.join(root, 'README.md'), 'utf8')).toBe('# hi\n');
+    expect(git(root, 'status', '--porcelain').trim()).toBe('');
+  });
+
+  it('reports binary sizes on both sides', async () => {
+    const root = makeRepo();
+    writeFileSync(path.join(root, 'b.bin'), Buffer.from([0, 1, 2, 3]));
+    git(root, 'add', '.');
+    git(root, 'commit', '-q', '-m', 'bin');
+    writeFileSync(path.join(root, 'b.bin'), Buffer.from([0, 1, 2, 3, 4, 5]));
+    const { id, service } = await setup(root);
+    expect(await read(service, id, 'b.bin', 'unstaged')).toMatchObject({
+      status: 'binary',
+      oldSize: 4,
+      newSize: 6,
+    });
+  });
+});
+
 describe('committing', () => {
   it('commits staged work locally and refuses when nothing is staged', async () => {
     const root = makeRepo();
@@ -345,6 +516,44 @@ describe('committing', () => {
       'lint failed',
     );
     expect(git(root, 'rev-parse', 'HEAD')).toBe(before);
+  });
+
+  it('treats a hook that fails without a word as a refused commit', async () => {
+    const root = makeRepo();
+    writeFileSync(
+      path.join(root, '.git', 'hooks', 'pre-commit'),
+      '#!/bin/sh\nexit 1\n',
+      { mode: 0o755 },
+    );
+    writeFileSync(path.join(root, 'README.md'), 'v2\n');
+    const { id, service } = await setup(root);
+    await service.stage({ id, paths: ['README.md'] });
+    const before = git(root, 'rev-parse', 'HEAD');
+    expect(
+      await service.commit({ id, summary: 'Quiet', description: '' }),
+    ).toMatchObject({ status: 'rejected', reason: 'hook' });
+    expect(git(root, 'rev-parse', 'HEAD')).toBe(before);
+  });
+
+  it('reads the identity Git will commit with and where it was set', async () => {
+    const root = makeRepo();
+    git(root, 'config', 'user.name', 'Repo Person');
+    git(root, 'config', 'user.email', 'repo@example.com');
+    const { id, service } = await setup(root);
+    const name = process.env.GIT_AUTHOR_NAME;
+    const email = process.env.GIT_AUTHOR_EMAIL;
+    delete process.env.GIT_AUTHOR_NAME;
+    delete process.env.GIT_AUTHOR_EMAIL;
+    try {
+      expect(await service.commitIdentity(id)).toEqual({
+        name: 'Repo Person',
+        email: 'repo@example.com',
+        scope: 'local',
+      });
+    } finally {
+      process.env.GIT_AUTHOR_NAME = name;
+      process.env.GIT_AUTHOR_EMAIL = email;
+    }
   });
 });
 

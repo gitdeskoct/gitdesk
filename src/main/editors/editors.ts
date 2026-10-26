@@ -314,7 +314,7 @@ const usableWindowsExe = (file: string | null): string | null =>
     ? file
     : null;
 
-export type FoundEditor = DetectedEditor & {
+export type FoundEditor = Omit<DetectedEditor, 'icon'> & {
   family: Family;
   // The program main starts. On macOS without a CLI it is the .app, opened with `open -a`.
   exe: string;

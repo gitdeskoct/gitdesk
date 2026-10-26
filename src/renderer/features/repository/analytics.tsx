@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react';
 import type { RepositorySummary } from '../../../shared/repos';
+import { fileType } from '../../../shared/file-types';
 import type {
   AnalyticsRange,
   RepositoryAnalytics,
@@ -12,7 +13,7 @@ import { InlineStatus, Loading } from '../../components/ui/status';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
 import { ipcErrorMessage } from '../../lib/ipc-error';
-import { useAnalytics } from '../../lib/queries';
+import { useAnalytics, useRepositoryChanges } from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
 import { AuthorAvatar } from './author-avatar';
 import { Section, SummaryStrip } from './history';
@@ -421,6 +422,85 @@ function TopList({
   );
 }
 
+// What the working tree holds right now, by kind of file. Counted by path, so a file with staged and
+// unstaged edits counts once; it reads Git's status, not history, so it never waits on the log.
+function ChangedKinds({
+  repo,
+  tables,
+}: {
+  repo: RepositorySummary;
+  tables: boolean;
+}) {
+  const { navigate } = useNavigation();
+  const changes = useRepositoryChanges(
+    repo.id,
+    repo.statusAt,
+    repo.status !== null,
+  );
+  if (changes.isPending) return <Loading label="Reading changed files…" />;
+  if (changes.isError)
+    return (
+      <InlineStatus tone="danger">
+        {ipcErrorMessage(changes.error, "Couldn't read the changed files.")}
+      </InlineStatus>
+    );
+  const paths = new Map<string, string>();
+  for (const file of changes.data.files)
+    paths.set(
+      file.path,
+      file.submodule ? 'Submodule' : fileType(file.path).label,
+    );
+  const counts = new Map<string, number>();
+  for (const label of paths.values())
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  const items = [...counts]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
+  if (!items.length)
+    return (
+      <EmptyState
+        compact
+        art={<CommitsArt />}
+        title="Nothing is changed right now"
+        action={
+          <Button
+            size="sm"
+            onClick={() =>
+              navigate({ name: 'repository', id: repo.id, tab: 'changes' })
+            }
+          >
+            Open Changes
+          </Button>
+        }
+      >
+        Edits you save show up here by kind of file.
+      </EmptyState>
+    );
+  const top = items[0]!;
+  return (
+    <>
+      <p className="-mt-1 mb-3 text-[0.8125rem] text-muted">
+        {items.length === 1
+          ? `All ${paths.size} changed ${paths.size === 1 ? 'file is' : 'files are'} ${top.name}.`
+          : `Mostly ${top.name}: ${top.count} of ${paths.size} changed files.`}
+        {changes.data.truncated ? ' Git listed the first 500 paths only.' : ''}
+      </p>
+      <TopList
+        items={items}
+        label={(n) => (n === 1 ? 'changed file' : 'changed files')}
+        empty={null}
+      />
+      {tables && (
+        <ChartTable
+          caption="Changed files by kind"
+          head={['Kind', 'Changed files']}
+          rows={items.map((item) => [item.name, item.count])}
+        />
+      )}
+    </>
+  );
+}
+
 // Charts built from local history only; nothing here asks the server. Each one is titled with the
 // question it answers, has a sentence that answers it, and a table with the same numbers.
 export function Analytics({ repo }: { repo: RepositorySummary }) {
@@ -662,6 +742,13 @@ export function Analytics({ repo }: { repo: RepositorySummary }) {
         )}
       >
         {body}
+        <Section
+          id="chart-changed-kinds"
+          title="What kinds of files are changed right now?"
+          meta="Uncommitted files by kind, from Git's status"
+        >
+          <ChangedKinds repo={repo} tables={tables} />
+        </Section>
       </div>
     </div>
   );

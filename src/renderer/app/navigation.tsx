@@ -1,3 +1,4 @@
+import type { BranchRef } from '../../shared/branches';
 import {
   createContext,
   useCallback,
@@ -51,6 +52,12 @@ export type Route =
       newPull?: { source: string; target: string };
       // The Files tab opened on one file, at a branch or commit when a review or History asks.
       source?: SourceTarget;
+      // The Branches tab's comparison of two branches; `merge` opens it on the merge panel.
+      compare?: {
+        base: BranchRef | null;
+        source: BranchRef | null;
+        merge?: boolean;
+      };
     }
   // A repository in the account with no registration on this computer, by its remote id.
   // `view: 'source'` shows its files from the hosted copy.

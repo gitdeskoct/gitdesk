@@ -2,7 +2,7 @@ import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { getDb } from '../src/db/client';
-import { syncEvents } from '../src/db/schema';
+import { repositoryBranches } from '../src/db/schema';
 import { artifactsHost, type GitHost, type HostTreeEntry } from '../src/lib/git-host';
 import { call, fakeGoogle, postJson, signIn } from './helpers';
 
@@ -174,28 +174,20 @@ describe('browsing hosted files', () => {
     expect(raw).toMatchObject({ kind: 'raw', size: 3, base64: 'AQAC' });
   });
 
-  it('lists the default branch and the branches pushes reported, with their tips', async () => {
+  it('lists the default branch and the confirmed branch index, with their real tips', async () => {
     const { fake, owner, repo, get } = await setup();
     const tree = fake.add.tree([]);
     const main = fake.add.commit(tree, 'main');
     const feature = fake.add.commit(tree, 'feature');
-    const accountId = (owner as unknown as { account: { id: string } }).account.id;
     await getDb(env.DB)
-      .insert(syncEvents)
-      .values(
-        ['refs/heads/feature', 'refs/heads/deleted'].map((ref) => ({
-          operationId: crypto.randomUUID(),
-          repositoryId: repo.id,
-          accountId,
-          kind: 'push' as const,
-          ref,
-          oldOid: null,
-          newOid: main,
-          result: 'confirmed' as const,
-          tip: null,
-          createdAt: 1,
-        })),
-      );
+      .insert(repositoryBranches)
+      .values([
+        { repositoryId: repo.id, name: 'feature', oid: main, updatedAt: 2, deletedAt: null },
+        // Indexed but no longer on the server: its missing tip drops it.
+        { repositoryId: repo.id, name: 'stale', oid: main, updatedAt: 3, deletedAt: null },
+        // A confirmed deletion is never listed.
+        { repositoryId: repo.id, name: 'gone', oid: null, updatedAt: 4, deletedAt: 4 },
+      ]);
     const body = (await (await get(owner.access_token, '/branches')).json()) as {
       defaultBranch: string;
       branches: { name: string; oid: string }[];

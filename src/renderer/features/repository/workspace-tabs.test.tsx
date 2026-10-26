@@ -214,6 +214,15 @@ function install(list: RepositorySummary[] = [repo()]) {
     git: { getIdentity: vi.fn(never) },
     repos,
     workspace,
+    branches: {
+      overview: vi.fn(async () => ({
+        ...(await (workspace.branches as () => Promise<object>)()),
+        target: null,
+        merged: [],
+        protected: [],
+      })),
+      listMergeability: vi.fn(async () => []),
+    },
   } as unknown as DesktopApi;
 }
 
@@ -235,6 +244,105 @@ beforeEach(() => {
   install();
 });
 afterEach(() => vi.restoreAllMocks());
+
+describe('staging parts of a file', () => {
+  const TOKEN = 'f'.repeat(40);
+  const openEdited = async () => {
+    settings = { ...DEFAULT_SETTINGS, workspaceLayout: 'split' };
+    install();
+    const diff = workspace.diff!.getMockImplementation() as (input: {
+      path: string;
+    }) => Promise<object>;
+    workspace.diff = vi.fn(async (input: { path: string }) => ({
+      ...(await diff(input)),
+      token: TOKEN,
+    }));
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1000,
+    } as DOMRect);
+    await openRepo();
+    await userEvent.click(
+      await screen.findByRole('option', { name: /src\/edited\.ts/ }),
+    );
+    await screen.findByRole('table', { name: 'Diff of src/edited.ts' });
+  };
+
+  it('labels the comparison and stages chosen lines through Git with a spinner', async () => {
+    await openEdited();
+    expect(
+      screen.getByText(/compared: Index to Working tree/),
+    ).toBeInTheDocument();
+    workspace.applySelection = vi.fn(never);
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'Select added line 1 for staging',
+      }),
+    );
+    expect(screen.getByText(/changed line selected/)).toBeInTheDocument();
+    const stage = screen.getByRole('button', { name: 'Stage lines' });
+    await userEvent.click(stage);
+    expect(workspace.applySelection).toHaveBeenCalledWith({
+      id: ID,
+      path: 'src/edited.ts',
+      side: 'unstaged',
+      action: 'stage',
+      token: TOKEN,
+      context: 3,
+      hunks: [{ index: 0, lines: [1] }],
+    });
+    expect(stage).toHaveAttribute('aria-busy', 'true');
+  });
+
+  it('says so when the file changed while it was open, and when Git is busy', async () => {
+    await openEdited();
+    workspace.applySelection = vi.fn(async () => ({ status: 'stale' }));
+    await userEvent.click(
+      screen.getAllByRole('button', { name: 'Stage change' })[0]!,
+    );
+    expect(
+      await screen.findByText(/changed while you were reviewing it/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Nothing was staged/)).toBeInTheDocument();
+
+    workspace.applySelection = vi.fn(async () => ({
+      status: 'rejected',
+      reason: 'busy',
+      message: 'Another Git process is using this repository.',
+    }));
+    await userEvent.click(
+      screen.getAllByRole('button', { name: 'Stage change' })[0]!,
+    );
+    expect(
+      await screen.findByText('Another Git process is using this repository.'),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Try again' }),
+    ).toBeInTheDocument();
+  });
+
+  it('confirms a discard inline and names the saved copy', async () => {
+    await openEdited();
+    workspace.applySelection = vi.fn(async () => ({
+      status: 'applied',
+      saved: true,
+    }));
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Discard change…' }),
+    );
+    expect(
+      screen.getByText(/A copy is saved in Discarded changes first/),
+    ).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Discard change 1' }),
+    );
+    expect(workspace.applySelection).toHaveBeenCalledWith(
+      expect.objectContaining({ action: 'discard', hunks: [{ index: 0 }] }),
+    );
+    expect(
+      await screen.findByText('Discarded the selected changes'),
+    ).toBeInTheDocument();
+  });
+});
 
 describe('changes', () => {
   it('groups files the way Git keeps them apart and stages one with a spinner', async () => {
@@ -336,6 +444,29 @@ describe('changes', () => {
     expect(
       await screen.findByRole('table', { name: 'Diff of src/staged.ts' }),
     ).toBeInTheDocument();
+  });
+
+  it('stages one file with Space from the list, not its select box', async () => {
+    await openRepo();
+    const row = await screen.findByRole('option', { name: /src\/edited\.ts/ });
+    row.focus();
+    await userEvent.click(row);
+    await userEvent.keyboard(' ');
+    expect(workspace.stage).toHaveBeenCalledWith({
+      id: ID,
+      paths: ['src/edited.ts'],
+    });
+  });
+
+  it('names the identity Git will commit with and where it comes from', async () => {
+    workspace.commitIdentity = vi.fn(async () => ({
+      name: 'Repo Person',
+      email: 'repo@example.com',
+      scope: 'local',
+    }));
+    await openRepo();
+    expect(await screen.findByText('Repo Person')).toBeInTheDocument();
+    expect(screen.getByText(/repository setting/)).toBeInTheDocument();
   });
 
   it('folds the commit message away in the split layout and remembers it', async () => {

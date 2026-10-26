@@ -15,6 +15,12 @@ import type {
 } from '../../../shared/repos';
 import { useLocateConfirm, useSyncOverview } from '../../lib/sync-queries';
 import {
+  useAbortMerge,
+  useConflicts,
+  useContinueMerge,
+} from '../../lib/pull-queries';
+import { useToast } from '../../components/ui/toast';
+import {
   FolderMissingArt,
   GitMissingArt,
   NoResultsArt,
@@ -46,6 +52,7 @@ import { useWidth } from '../../lib/use-width';
 import {
   useNavigation,
   type RepoTab,
+  type Route,
   type SourceTarget,
 } from '../../app/navigation';
 import { SourceExplorer } from '../source/source-explorer';
@@ -62,7 +69,11 @@ import { usePullAction } from '../sync/use-pull';
 import { Page } from '../shell/page';
 import { Analytics } from './analytics';
 import { BranchPicker, type SwitchOutcome } from './branch-picker';
-import { BranchesTab } from './branches-tab';
+import { BranchHealth } from '../branches/branch-health';
+import { BranchesTab } from '../branches/branches-tab';
+type BranchCompareRoute = NonNullable<
+  Extract<Route, { name: 'repository' }>['compare']
+>;
 import { ChangesTab } from './changes-tab';
 import { OpenInEditorButton } from './editor-button';
 import {
@@ -353,11 +364,13 @@ export function RepositoryPage({
   tab,
   newPull,
   source,
+  compare,
 }: {
   id: string;
   tab?: RepoTab;
   newPull?: { source: string; target: string };
   source?: SourceTarget;
+  compare?: BranchCompareRoute;
 }) {
   const { navigate } = useNavigation();
   const repos = useRepositories();
@@ -419,6 +432,7 @@ export function RepositoryPage({
       tab={tab}
       newPull={newPull}
       source={source}
+      compare={compare}
     />
   );
 }
@@ -488,7 +502,7 @@ function SwitchNotice({
   const words = {
     'other-worktree': `${target} is checked out in another worktree, so Git won't check it out here too.`,
     operation:
-      'A merge or rebase is in progress. Finish or abort it in your editor or terminal first.',
+      'A merge, pick, revert or rebase is in progress. Continue or abort it from the band above first.',
     exists: `A local branch named ${target} already exists. Switch to it instead.`,
     'not-found': `${target} isn't there any more. The branch list was refreshed.`,
   }[result.reason];
@@ -496,6 +510,121 @@ function SwitchNotice({
     <InlineStatus tone="warning" action={close}>
       {words}
     </InlineStatus>
+  );
+}
+
+// A merge, pick, revert or rebase in progress, started here or in a terminal: Continue runs Git's
+// own continue once nothing is unmerged, Abort confirms inline and names what it leaves alone.
+function OperationBand({
+  repo,
+  onChanges,
+}: {
+  repo: RepositorySummary;
+  onChanges: () => void;
+}) {
+  const status = repo.status!;
+  const conflicts = useConflicts(repo.id, repo.statusAt);
+  const proceed = useContinueMerge(repo.id);
+  const abort = useAbortMerge(repo.id);
+  const toast = useToast();
+  const [aborting, setAborting] = useState(false);
+  const operation = conflicts.data?.operation ?? status.operation;
+  const other = conflicts.data?.external?.otherChanges ?? [];
+  const open = status.conflicts;
+  if (!operation)
+    return (
+      <InlineStatus
+        tone="danger"
+        className="mt-3"
+        action={
+          <Button size="sm" onClick={onChanges}>
+            Go to Changes
+          </Button>
+        }
+      >
+        {`${open} ${open === 1 ? 'file has' : 'files have'} unresolved conflicts. Resolve them, then mark them resolved on Changes.`}
+      </InlineStatus>
+    );
+  return (
+    <div className="mt-3 grid gap-2">
+      <InlineStatus
+        tone={open ? 'danger' : 'warning'}
+        action={
+          <span className="flex flex-wrap gap-2">
+            {open > 0 ? (
+              <Button size="sm" onClick={onChanges}>
+                Resolve on Changes
+              </Button>
+            ) : (
+              <Button
+                size="sm"
+                variant="primary"
+                pending={proceed.isPending}
+                onClick={() =>
+                  proceed.mutate(undefined, {
+                    onSuccess: (result) =>
+                      toast({
+                        tone: 'success',
+                        title: `Continued the ${operation}`,
+                        description:
+                          result.status === 'continued' && result.remaining
+                            ? `The next step stopped on ${result.remaining} conflicted ${result.remaining === 1 ? 'file' : 'files'}.`
+                            : undefined,
+                      }),
+                  })
+                }
+              >
+                Continue {operation}
+              </Button>
+            )}
+            <Button size="sm" onClick={() => setAborting(true)}>
+              Abort…
+            </Button>
+          </span>
+        }
+      >
+        {open
+          ? `A ${operation} is in progress with ${open} unresolved ${open === 1 ? 'conflict' : 'conflicts'}.`
+          : `A ${operation} is in progress and every conflict is resolved. Continue makes its commit; nothing is pushed.`}
+      </InlineStatus>
+      {aborting && (
+        <div
+          role="alert"
+          className="flex flex-wrap items-center gap-3 bg-danger-soft px-3 py-2.5 text-[0.8125rem] text-ink"
+        >
+          <span className="min-w-0 flex-1">
+            <b className="font-semibold">Abort this {operation}?</b> Git puts{' '}
+            {status.branch ?? 'HEAD'} back where it was before it and drops the
+            resolutions made so far.{' '}
+            {other.length
+              ? `Your edits outside the conflict stay as they are: ${other.join(', ')}.`
+              : ''}
+          </span>
+          <Button
+            size="sm"
+            variant="danger"
+            className="bg-surface"
+            pending={abort.isPending}
+            onClick={() =>
+              abort.mutate(undefined, { onSuccess: () => setAborting(false) })
+            }
+          >
+            Abort {operation}
+          </Button>
+          <Button size="sm" autoFocus onClick={() => setAborting(false)}>
+            Keep going
+          </Button>
+        </div>
+      )}
+      {[proceed.error, abort.error].map(
+        (error, i) =>
+          error && (
+            <InlineStatus key={i} tone="danger">
+              {ipcErrorMessage(error, "That step didn't run.")}
+            </InlineStatus>
+          ),
+      )}
+    </div>
   );
 }
 
@@ -607,12 +736,14 @@ function RepositoryView({
   tab: routeTab,
   newPull,
   source,
+  compare,
 }: {
   repo: RepositorySummary;
   crumbs: { label: string; onSelect?: () => void }[];
   tab?: RepoTab;
   newPull?: { source: string; target: string };
   source?: SourceTarget;
+  compare?: BranchCompareRoute;
 }) {
   useNow();
   const { navigate } = useNavigation();
@@ -922,14 +1053,12 @@ function RepositoryView({
             </InlineStatus>
           )}
           {!ownPull && status && (status.conflicts > 0 || status.operation) && (
-            <InlineStatus
-              tone={status.conflicts > 0 ? 'danger' : 'warning'}
-              className="mt-3"
-            >
-              {status.operation
-                ? `A ${status.operation} is in progress${status.conflicts ? ` with ${status.conflicts} unresolved ${status.conflicts === 1 ? 'conflict' : 'conflicts'}` : ''}. Finish or abort it in your editor or terminal, then refresh.`
-                : `${status.conflicts} ${status.conflicts === 1 ? 'file has' : 'files have'} unresolved conflicts. Resolve them in your editor, then mark them resolved on Changes.`}
-            </InlineStatus>
+            <OperationBand
+              repo={repo}
+              onChanges={() =>
+                navigate({ name: 'repository', id: repo.id, tab: 'changes' })
+              }
+            />
           )}
           {remote && remote.status !== 'ready' && (
             <InlineStatus tone="warning" className="mt-3">
@@ -994,12 +1123,12 @@ function RepositoryView({
             />
           </Tabs.Content>
           <Tabs.Content value="branches" className={tabContent}>
-            {scrolling(
-              <BranchesTab
-                repo={repo}
-                onOutcome={(next) => setOutcome(keepNotice(next))}
-              />,
-            )}
+            <BranchesTab
+              repo={repo}
+              width={width}
+              compare={compare}
+              onOutcome={(next) => setOutcome(keepNotice(next))}
+            />
           </Tabs.Content>
           <Tabs.Content value="pulls" className={tabContent}>
             <PullsTab repo={repo} width={width} newPull={newPull} />
@@ -1014,6 +1143,7 @@ function RepositoryView({
             {scrolling(
               <>
                 <Analytics repo={repo} />
+                <BranchHealth repo={repo} />
                 <FilesSummary repo={repo} />
                 <PullAnalytics repo={repo} />
                 {status && (

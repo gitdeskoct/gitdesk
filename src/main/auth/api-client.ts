@@ -463,10 +463,10 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
       id: string,
       body: {
         operationId: string;
-        kind: 'push';
+        kind: 'push' | 'delete';
         ref: string;
         oldOid: string | null;
-        newOid: string;
+        newOid: string | null;
       },
     ) =>
       request(

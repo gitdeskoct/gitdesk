@@ -221,6 +221,38 @@ const MIGRATIONS = [
   );
   ALTER TABLE local_repositories ADD COLUMN auto_link_pending INTEGER NOT NULL DEFAULT 0;
   ALTER TABLE local_repositories ADD COLUMN root_commit TEXT;`,
+  // Branch merges from the Branches tab and deletions of a remote branch join the journal.
+  `CREATE TABLE merge_operations_next (
+    id TEXT PRIMARY KEY,
+    repository_id TEXT NOT NULL REFERENCES local_repositories (id) ON DELETE CASCADE,
+    pull_id TEXT,
+    kind TEXT NOT NULL CHECK (kind IN ('merge', 'revert', 'fetch', 'pull', 'push', 'move', 'branch-merge', 'remote-delete')),
+    state TEXT NOT NULL,
+    strategy TEXT,
+    source_oid TEXT NOT NULL,
+    target_oid TEXT,
+    result_oid TEXT,
+    push INTEGER NOT NULL DEFAULT 0,
+    recorded INTEGER NOT NULL DEFAULT 0,
+    head_ref TEXT,
+    conflicts_json TEXT NOT NULL DEFAULT '[]',
+    message TEXT,
+    commit_message TEXT,
+    remote TEXT,
+    branch TEXT,
+    error_code TEXT,
+    server_result TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  );
+  INSERT INTO merge_operations_next SELECT id, repository_id, pull_id, kind, state, strategy,
+    source_oid, target_oid, result_oid, push, recorded, head_ref, conflicts_json, message,
+    commit_message, remote, branch, error_code, server_result, created_at, updated_at
+  FROM merge_operations;
+  DROP TABLE merge_operations;
+  ALTER TABLE merge_operations_next RENAME TO merge_operations;
+  CREATE INDEX merge_operations_repo ON merge_operations (repository_id, updated_at);
+  CREATE INDEX merge_operations_time ON merge_operations (created_at);`,
 ];
 
 export type AppDatabase = DatabaseSync;

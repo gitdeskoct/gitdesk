@@ -21,6 +21,7 @@ import {
   useGitIdentity,
   useGitInstall,
   useOpenGitInstallPage,
+  useRevealDiscarded,
   useSetGitIdentity,
   useSetGlobalPrune,
   useSettings,
@@ -300,9 +301,20 @@ const FETCH_INTERVALS = [
   { value: '30', label: '30 min' },
 ] as const;
 
+const UNTRACKED = [
+  { value: 'all', label: 'Each file' },
+  { value: 'normal', label: 'Folders only' },
+] as const;
+const SUBMODULES = [
+  { value: 'none', label: 'All' },
+  { value: 'dirty', label: 'Commits only' },
+  { value: 'all', label: 'Hide' },
+] as const;
+
 function CommitFetchGroups() {
   const { data: settings } = useSettings();
   const update = useUpdateSettings();
+  const showDiscarded = useRevealDiscarded();
   const install = useGitInstall();
   const prune = useSetGlobalPrune();
   if (!settings) return null;
@@ -358,6 +370,241 @@ function CommitFetchGroups() {
           description="Hooks in a repository run on commit, switch and fetch, the same as in a terminal. Viewing status, diffs and history never runs them."
         >
           <span className="text-xs text-muted">Always</span>
+        </SettingRow>
+      </SettingGroup>
+      <SettingGroup title="Changes and staging">
+        <SettingRow
+          id="changes-untracked"
+          label="Untracked files"
+          description="Each file lists every new file on its own, so each can be staged alone. Folders only shows a new folder as one row."
+        >
+          <Segmented
+            label="Untracked files"
+            value={settings.changesUntracked}
+            options={UNTRACKED}
+            onChange={(changesUntracked) => update.mutate({ changesUntracked })}
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-renames"
+          label="Detect renames"
+          description="Git pairs a deleted and an added file as one rename when their contents are mostly the same."
+        >
+          <Switch
+            aria-label="Detect renames"
+            checked={settings.changesRenames}
+            onCheckedChange={(changesRenames) =>
+              update.mutate({ changesRenames })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-submodules"
+          label="Submodule changes"
+          description="All shows a submodule's new commit and edits inside it. Commits only leaves out edits inside. Hide leaves submodules out of Changes."
+        >
+          <Segmented
+            label="Submodule changes"
+            value={settings.changesSubmodules}
+            options={SUBMODULES}
+            onChange={(changesSubmodules) =>
+              update.mutate({ changesSubmodules })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-partial"
+          label="Stage parts of a file"
+          description="Shows a select box on each changed line and Stage change on each change in a diff. Whole files can always be staged."
+        >
+          <Switch
+            aria-label="Stage parts of a file"
+            checked={settings.changesPartial}
+            onCheckedChange={(changesPartial) =>
+              update.mutate({ changesPartial })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-keep-discarded"
+          label="Keep a copy of discarded changes"
+          description="Saves what each discard removes as a patch file in Discarded changes, in gitdesk's app data folder, before Git runs."
+        >
+          <div className="flex items-center gap-3">
+            <Button
+              size="sm"
+              pending={showDiscarded.isPending}
+              onClick={() => showDiscarded.mutate(null)}
+            >
+              Show folder
+            </Button>
+            <Switch
+              aria-label="Keep a copy of discarded changes"
+              checked={settings.changesKeepDiscarded}
+              onCheckedChange={(changesKeepDiscarded) =>
+                update.mutate({ changesKeepDiscarded })
+              }
+            />
+          </div>
+        </SettingRow>
+        <SettingRow
+          id="changes-resolved"
+          label="Mark resolved"
+          description="Stages the whole working file, the way git add does. It stays unavailable while conflict markers remain."
+        >
+          <span className="text-xs text-muted">Always</span>
+        </SettingRow>
+      </SettingGroup>
+      {showDiscarded.isError && (
+        <InlineStatus tone="danger" className="mt-3">
+          {ipcErrorMessage(
+            showDiscarded.error,
+            "Couldn't open the Discarded changes folder.",
+          )}
+        </InlineStatus>
+      )}
+      <SettingGroup title="Branches">
+        <SettingRow
+          id="branch-auto-mergeability"
+          label="Check mergeability automatically"
+          description="Git merges the two commits in memory, never in your files. It runs when you open a comparison and again whenever either branch moves. In the list, up to 20 unmerged branches are checked against the compare-against branch, one at a time. Git checks again right before every merge, whatever this says."
+          stacked
+        >
+          <Segmented
+            label="Check mergeability automatically"
+            value={settings.branchAutoMergeability}
+            options={[
+              { value: 'off', label: 'Off' },
+              { value: 'compare', label: 'When comparing' },
+              { value: 'list', label: 'Also in the branch list' },
+            ]}
+            onChange={(branchAutoMergeability) =>
+              update.mutate({ branchAutoMergeability })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-merge-method"
+          label="Merge method"
+          description="For merging one branch into another on the Branches tab. Fast-forward only refuses when Git would need a merge commit. Pull requests keep their own method."
+          stacked
+        >
+          <Segmented
+            label="Merge method"
+            value={settings.branchMergeMethod}
+            options={[
+              { value: 'default', label: "Git's default" },
+              { value: 'no-ff', label: 'Always a merge commit' },
+              { value: 'ff-only', label: 'Fast-forward only' },
+            ]}
+            onChange={(branchMergeMethod) =>
+              update.mutate({ branchMergeMethod })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-push-after-merge"
+          label="Push after merging"
+          description="Pushes the branch you merged into once the merge succeeds. Off keeps the merge on this computer until you push."
+        >
+          <Switch
+            aria-label="Push after merging"
+            checked={settings.branchPushAfterMerge}
+            onCheckedChange={(branchPushAfterMerge) =>
+              update.mutate({ branchPushAfterMerge })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-offer-delete"
+          label="Offer to delete a merged branch"
+          description="After a merge, the result offers Delete for the source branch. Protected branches are never offered."
+        >
+          <Switch
+            aria-label="Offer to delete a merged branch"
+            checked={settings.branchOfferDelete}
+            onCheckedChange={(branchOfferDelete) =>
+              update.mutate({ branchOfferDelete })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-switch-new"
+          label="Switch to a new branch"
+          description="Ticks Switch to it now in New branch. Uncommitted changes come along."
+        >
+          <Switch
+            aria-label="Switch to a new branch"
+            checked={settings.branchSwitchNew}
+            onCheckedChange={(branchSwitchNew) =>
+              update.mutate({ branchSwitchNew })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-track"
+          label="Track the remote branch you start from"
+          description="Follow Git uses your branch.autoSetupMerge, which tracks a remote-tracking start point by default."
+          stacked
+        >
+          <Segmented
+            label="Track the remote branch you start from"
+            value={settings.branchTrack}
+            options={[
+              { value: 'git', label: 'Follow Git' },
+              { value: 'always', label: 'Always' },
+              { value: 'never', label: 'Never' },
+            ]}
+            onChange={(branchTrack) => update.mutate({ branchTrack })}
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-sort"
+          label="Sort branches by"
+          description="The current branch stays first either way."
+        >
+          <Segmented
+            label="Sort branches by"
+            value={settings.branchSort}
+            options={[
+              { value: 'recent', label: 'Most recent commit' },
+              { value: 'name', label: 'Name' },
+            ]}
+            onChange={(branchSort) => update.mutate({ branchSort })}
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-show-remote"
+          label="Show remote-tracking branches"
+          description="Lists the remote's branches under your own. The Remote-tracking filter still shows them when this is off."
+        >
+          <Switch
+            aria-label="Show remote-tracking branches"
+            checked={settings.branchShowRemote}
+            onCheckedChange={(branchShowRemote) =>
+              update.mutate({ branchShowRemote })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="branch-stale"
+          label="Call a branch stale after"
+          description="No commits for this long adds a Stale filter and a Stale count on Overview. Nothing is deleted."
+        >
+          <Segmented
+            label="Call a branch stale after"
+            value={String(settings.branchStaleDays) as '0' | '30' | '90'}
+            options={[
+              { value: '30', label: '30 days' },
+              { value: '90', label: '90 days' },
+              { value: '0', label: 'Never' },
+            ]}
+            onChange={(next) =>
+              update.mutate({
+                branchStaleDays: Number(next) as Settings['branchStaleDays'],
+              })
+            }
+          />
         </SettingRow>
       </SettingGroup>
       <SettingGroup title="Fetching">

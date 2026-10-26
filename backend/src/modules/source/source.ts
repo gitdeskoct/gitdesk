@@ -1,6 +1,6 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, isNull } from 'drizzle-orm';
 import type { Db } from '../../db/client';
-import { repositories, syncEvents } from '../../db/schema';
+import { repositories, repositoryBranches } from '../../db/schema';
 import type { GitHost, HostTreeEntry } from '../../lib/git-host';
 
 // Browsing a hosted repository's files: one folder or one file at a time, always from one
@@ -64,16 +64,17 @@ export async function branches(
   git: GitHost,
   repo: { id: string; defaultBranch: string },
 ): Promise<{ name: string; oid: string }[]> {
-  // Artifacts can't list refs, so the branches are the default one plus those pushes reported.
-  const pushed = await db
-    .selectDistinct({ ref: syncEvents.ref })
-    .from(syncEvents)
-    .where(eq(syncEvents.repositoryId, repo.id))
-    .orderBy(desc(syncEvents.ref))
-    .limit(MAX_BRANCHES * 2);
+  // Artifacts can't list refs, so the branches are the default one plus the confirmed branch index,
+  // most recently updated first, and each name is still checked against its real tip.
+  const known = await db
+    .select({ name: repositoryBranches.name })
+    .from(repositoryBranches)
+    .where(and(eq(repositoryBranches.repositoryId, repo.id), isNull(repositoryBranches.deletedAt)))
+    .orderBy(desc(repositoryBranches.updatedAt))
+    .limit(MAX_BRANCHES);
   const names = [
     repo.defaultBranch,
-    ...pushed.map((p) => p.ref.replace(/^refs\/heads\//, '')).filter((n) => n !== repo.defaultBranch),
+    ...known.map((b) => b.name).filter((n) => n !== repo.defaultBranch),
   ].slice(0, MAX_BRANCHES);
   const tips = await Promise.all(names.map((name) => git.tip(repo.id, `refs/heads/${name}`)));
   return names

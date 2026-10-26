@@ -1,4 +1,4 @@
-import type { ChangedFile, RepoStatus } from '../../shared/repos';
+import type { ChangedFile, ConflictKind, RepoStatus } from '../../shared/repos';
 
 export type ParsedStatus = Omit<
   RepoStatus,
@@ -14,6 +14,51 @@ const clip = (text: string) => text.slice(0, MAX_TEXT);
 
 // Space-separated fields before the path in each porcelain v2 record type.
 const FIELDS_BEFORE_PATH = { '1': 8, '2': 9, u: 10, '?': 1 } as const;
+
+const CONFLICT_KINDS: Record<string, ConflictKind> = {
+  UU: 'both-modified',
+  AA: 'both-added',
+  DD: 'both-deleted',
+  AU: 'added-by-us',
+  UA: 'added-by-them',
+  DU: 'deleted-by-us',
+  UD: 'deleted-by-them',
+};
+
+// 000000 means the path is absent on that side: an add or delete, not a mode change.
+function modeChange(from: string, to: string): string | null {
+  if (!/^[0-7]{6}$/.test(from) || !/^[0-7]{6}$/.test(to)) return null;
+  if (from === to || from === '000000' || to === '000000') return null;
+  return `${from} → ${to}`;
+}
+
+// `git diff --numstat -z`, per path: "added\tremoved\tpath\0", or "added\tremoved\t\0old\0new\0" for
+// a rename. Binary files report "-" for both counts.
+export function parseNumstatAll(
+  output: string,
+): Map<string, { added: number; removed: number; binary: boolean }> {
+  const counts = new Map<
+    string,
+    { added: number; removed: number; binary: boolean }
+  >();
+  const fields = output.split('\0');
+  for (let i = 0; i < fields.length; i++) {
+    const match = /^\n?(\d+|-)\t(\d+|-)\t(.*)$/s.exec(fields[i]!);
+    if (!match) continue;
+    let path = match[3]!;
+    if (!path) {
+      i += 2;
+      path = fields[i] ?? '';
+    }
+    if (!path) continue;
+    counts.set(path, {
+      added: match[1] === '-' ? 0 : Number(match[1]),
+      removed: match[2] === '-' ? 0 : Number(match[2]),
+      binary: match[1] === '-',
+    });
+  }
+  return counts;
+}
 
 function pathOf(record: string, fields: number): string {
   let index = 0;
@@ -41,22 +86,28 @@ export function parseStatus(output: string): ParsedStatus {
     files: [],
     truncated: false,
   };
+  const seen = new Set<string>();
   const add = (
     path: string,
     kind: ChangedFile['kind'],
     code: string,
-    extra: { origPath?: string | null; submodule?: boolean } = {},
+    extra: Partial<ChangedFile> = {},
   ) => {
     if (path.length > MAX_PATH) return;
-    if (status.files.length < MAX_FILES)
-      status.files.push({
-        path,
-        kind,
-        code,
-        origPath: extra.origPath ?? null,
-        submodule: extra.submodule ?? false,
-      });
-    else status.truncated = true;
+    // The cap counts paths, so a file with staged and unstaged edits keeps both of its rows.
+    if (!seen.has(path) && seen.size >= MAX_FILES) {
+      status.truncated = true;
+      return;
+    }
+    seen.add(path);
+    status.files.push({
+      origPath: null,
+      submodule: false,
+      ...extra,
+      path,
+      kind,
+      code,
+    });
   };
 
   const records = output.split('\0');
@@ -93,22 +144,45 @@ export function parseStatus(output: string): ParsedStatus {
     }
     if (type === 'u') {
       status.conflicts++;
-      add(pathOf(record, FIELDS_BEFORE_PATH.u), 'conflict', 'U');
+      add(pathOf(record, FIELDS_BEFORE_PATH.u), 'conflict', 'U', {
+        conflict: CONFLICT_KINDS[record.slice(2, 4)] ?? 'both-modified',
+        submodule: record[5] === 'S',
+      });
       continue;
     }
     if (type === '1' || type === '2') {
       const [x, y] = [record[2], record[3]];
+      // "1 XY sub mH mI mW hH hI path": the modes are the 4th to 6th fields.
+      const [, , sub = 'N...', mH = '', mI = '', mW = ''] = record.split(' ');
       const path = pathOf(record, FIELDS_BEFORE_PATH[type]);
       // The original path of a rename or copy is the next NUL-terminated field.
       const origPath = type === '2' ? (records[++i] ?? null) : null;
-      const submodule = record.slice(5, 6) === 'S';
+      const submodule = sub[0] === 'S';
+      const submoduleState = submodule
+        ? {
+            commit: sub[1] === 'C',
+            tracked: sub[2] === 'M',
+            untracked: sub[3] === 'U',
+          }
+        : undefined;
       if (x && x !== '.') {
         status.staged++;
-        add(path, 'staged', x, { origPath, submodule });
+        add(path, 'staged', x, {
+          origPath,
+          submodule,
+          submoduleState,
+          modeChange: modeChange(mH, mI),
+        });
       }
       if (y && y !== '.') {
         status.unstaged++;
-        add(path, 'modified', y, { submodule });
+        // A worktree-side rename (after `git add -N`) also names its old path.
+        add(path, 'modified', y, {
+          origPath: x === 'R' || x === 'C' ? null : origPath,
+          submodule,
+          submoduleState,
+          modeChange: modeChange(mI, mW),
+        });
       }
     }
   }

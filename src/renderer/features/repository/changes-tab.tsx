@@ -1,7 +1,10 @@
 import {
   ArrowLeft,
+  Code2,
   Copy,
+  File as PlainFile,
   FileText,
+  FolderGit2,
   FolderOpen,
   Minus,
   Plus,
@@ -17,7 +20,12 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import type { ChangedFile, RepositorySummary } from '../../../shared/repos';
+import { fileType } from '../../../shared/file-types';
+import type {
+  ChangedFile,
+  ConflictKind,
+  RepositorySummary,
+} from '../../../shared/repos';
 import type { DiffSide } from '../../../shared/workspace';
 import {
   DiffArt,
@@ -45,7 +53,10 @@ import { useWidth as useWidthOf } from '../../lib/use-width';
 import {
   useCopyFilePath,
   useDiscard,
+  useDiscardAll,
   useOpenInEditor,
+  useRevealDiscarded,
+  useSettings,
   useRefreshRepositories,
   useRepositoryChanges,
   useRevealFile,
@@ -54,8 +65,11 @@ import {
   useUnstage,
 } from '../../lib/queries';
 import { fileManagerLabel } from '../repos/repo-actions';
+import { ConflictsView } from '../pulls/merge-tab';
+import { FILE_ICONS } from '../source/file-icons';
 import { CommitForm } from './commit-form';
 import { DiffView } from './diff-view';
+import { EditorLogo, hasEditorLogo, useEditorName } from './editor-button';
 import { SummaryStrip } from './history';
 
 type Group = {
@@ -83,6 +97,37 @@ const CODE_LABEL: Record<string, string> = {
   '?': 'Untracked',
 };
 
+const CONFLICT_WORDS: Record<ConflictKind, string> = {
+  'both-modified': 'Both sides changed it',
+  'both-added': 'Both sides added it',
+  'both-deleted': 'Both sides deleted it',
+  'added-by-us': 'Added on your side only',
+  'added-by-them': 'Added on the incoming side only',
+  'deleted-by-us': 'Deleted on your side, changed on the incoming one',
+  'deleted-by-them': 'Changed on your side, deleted on the incoming one',
+};
+
+// What Git reports about a row beyond its letter, in words, so nothing rests on the letter alone.
+function detailOf(file: ChangedFile): string | null {
+  if (file.conflict) return CONFLICT_WORDS[file.conflict];
+  if (file.submodule && file.submoduleState) {
+    const { commit, tracked, untracked } = file.submoduleState;
+    const parts = [
+      commit && 'new commit',
+      tracked && 'edits inside',
+      untracked && 'new files inside',
+    ].filter(Boolean);
+    return `Submodule${parts.length ? ` · ${parts.join(', ')}` : ''}`;
+  }
+  if (file.submodule) return 'Submodule';
+  if (file.origPath)
+    return `${file.code === 'C' ? 'Copied' : 'Renamed'} from ${file.origPath}`;
+  if (file.code === 'T') return 'Type changed (file, link or submodule)';
+  if (file.modeChange) return `Mode ${file.modeChange}`;
+  if (file.kind === 'untracked' && file.path.endsWith('/')) return 'New folder';
+  return null;
+}
+
 const keyOf = (file: ChangedFile) => `${SIDE[file.kind]}:${file.path}`;
 const plural = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -99,16 +144,40 @@ function DiscardBand({
   repoId,
   files,
   onDone,
+  everything = false,
 }: {
   repoId: string;
   files: ChangedFile[];
   onDone: () => void;
+  // Discard staged and working changes: back to HEAD, not just to the staged version.
+  everything?: boolean;
 }) {
-  const discard = useDiscard(repoId);
+  const unstaged = useDiscard(repoId);
+  const all = useDiscardAll(repoId);
+  const discard = everything ? all : unstaged;
+  const reveal = useRevealDiscarded();
+  const toast = useToast();
+  const { data: settings } = useSettings();
+  const keepCopy = settings?.changesKeepDiscarded ?? true;
   const tracked = files.filter((f) => f.kind === 'modified');
   const untracked = files.filter((f) => f.kind === 'untracked');
   const names =
     files.length === 1 ? files[0]!.path : plural(files.length, 'file');
+  const done = (result: { saved: boolean }) => {
+    toast({
+      tone: 'success',
+      title: `Discarded changes in ${names}`,
+      description: result.saved ? 'A copy is in Discarded changes.' : undefined,
+      action: result.saved
+        ? {
+            label: 'Reveal',
+            altText: 'Show the saved copy',
+            onClick: () => reveal.mutate(repoId),
+          }
+        : undefined,
+    });
+    onDone();
+  };
   return (
     <div
       role="group"
@@ -116,13 +185,29 @@ function DiscardBand({
       className="grid gap-2.5 bg-danger-soft px-3 py-2.5 text-[0.8125rem] text-ink"
     >
       <p className="leading-relaxed">
-        Discard your changes to{' '}
-        <b className="font-mono font-semibold">{names}</b>?{' '}
-        {tracked.length > 0 &&
-          `${tracked.length === files.length ? 'They go' : `${plural(tracked.length, 'edited file')} go`} back to the staged version. `}
-        {untracked.length > 0 &&
-          `${plural(untracked.length, 'new file')} ${untracked.length === 1 ? 'moves' : 'move'} to the trash. `}
-        gitdesk can't undo this.
+        {everything ? (
+          <>
+            Discard everything in{' '}
+            <b className="font-mono font-semibold">{names}</b> since the last
+            commit? The staged changes and the edits after them both go, and{' '}
+            {files.length === 1 ? 'the file returns' : 'the files return'} to
+            how {files.length === 1 ? 'it is' : 'they are'} in HEAD.{' '}
+          </>
+        ) : (
+          <>
+            Discard your unstaged changes to{' '}
+            <b className="font-mono font-semibold">{names}</b>?{' '}
+            {tracked.length > 0 &&
+              `${tracked.length === files.length ? 'They go' : `${plural(tracked.length, 'edited file')} go`} back to the staged version. `}
+            {untracked.length > 0 &&
+              `${plural(untracked.length, 'new file')} ${untracked.length === 1 ? 'moves' : 'move'} to the trash. `}
+          </>
+        )}
+        {tracked.length > 0 || everything
+          ? keepCopy
+            ? 'gitdesk saves a copy of the changes first.'
+            : "Keeping a copy is off in Settings, so this can't be undone."
+          : ''}
       </p>
       {files.length > 1 && (
         <ul className="max-h-28 overflow-auto font-mono text-[0.78125rem]">
@@ -145,11 +230,11 @@ function DiscardBand({
           onClick={() =>
             discard.mutate(
               files.map((f) => f.path),
-              { onSuccess: onDone },
+              { onSuccess: done },
             )
           }
         >
-          Discard
+          {everything ? 'Discard staged and working changes' : 'Discard'}
         </Button>
         <Button size="sm" variant="ghost" onClick={onDone} autoFocus>
           Cancel
@@ -181,6 +266,7 @@ function StageButton({ repoId, file }: { repoId: string; file: ChangedFile }) {
         size="icon"
         variant="ghost"
         aria-label={label}
+        data-stage
         pending={action.isPending}
         onClick={(event) => {
           event.stopPropagation();
@@ -208,6 +294,7 @@ function FileRow({
   onCheck,
   onSelect,
   onDiscard,
+  onDiscardAll,
   focusable,
   expanded,
 }: {
@@ -218,10 +305,20 @@ function FileRow({
   onCheck: (checked: boolean) => void;
   onSelect: () => void;
   onDiscard: () => void;
+  onDiscardAll: () => void;
   focusable: boolean;
   expanded?: boolean;
 }) {
   const [dir, name] = splitPath(file.path);
+  const { data: settings } = useSettings();
+  // The same glyphs as the Files tab, so a file looks the same in both places.
+  const Icon = file.submodule
+    ? FolderGit2
+    : (settings?.sourceFileIcons ?? true)
+      ? FILE_ICONS[fileType(file.path).icon]
+      : PlainFile;
+  const detail = detailOf(file);
+  const editor = useEditorName(repoId);
   const { navigate } = useNavigation();
   const reveal = useRevealFile(repoId);
   const copy = useCopyFilePath(repoId);
@@ -247,7 +344,8 @@ function FileRow({
           data-key={keyOf(file)}
           onClick={onSelect}
           className={cn(
-            'grid min-h-9 cursor-default grid-cols-[1rem_1.5rem_minmax(0,1fr)_2rem] items-center gap-2 border-b border-line py-1 pr-1.5 pl-3 outline-offset-[-2px] transition-colors',
+            // shortcut: content-visibility skips painting off-screen rows; a list past Git's 500-path cap would need TanStack Virtual.
+            'grid min-h-9 cursor-default grid-cols-[1rem_1rem_1.5rem_minmax(0,1fr)_auto_2rem] items-center gap-2 border-b border-line py-1 pr-1.5 pl-3 outline-offset-[-2px] transition-colors [contain-intrinsic-size:auto_2.25rem] [content-visibility:auto]',
             selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
           )}
         >
@@ -258,6 +356,7 @@ function FileRow({
             aria-label={`Select ${file.path}`}
             tabIndex={-1}
           />
+          <Icon aria-hidden className="size-4 text-muted" />
           <span
             className={cn(
               'grid h-5 place-items-center rounded-[4px] font-mono text-[0.71875rem] font-semibold text-ink',
@@ -270,18 +369,33 @@ function FileRow({
               {CODE_LABEL[file.code] ?? file.code}
             </span>
           </span>
-          <span
-            className="min-w-0 truncate font-mono text-[0.78125rem] text-ink"
-            title={file.path}
-          >
-            <span className="text-muted">{dir}</span>
-            {name}
-            {file.origPath && (
-              <span className="text-muted"> from {file.origPath}</span>
+          <span className="min-w-0" title={file.path}>
+            <span className="block truncate font-mono text-[0.78125rem] text-ink">
+              <span className="text-muted">{dir}</span>
+              {name}
+            </span>
+            {detail && (
+              <span className="block truncate text-xs text-muted">
+                {detail}
+              </span>
             )}
-            {file.submodule && (
-              <span className="font-sans text-xs text-muted"> · submodule</span>
-            )}
+          </span>
+          <span className="text-xs whitespace-nowrap text-muted tabular-nums">
+            {file.binary ? (
+              'Binary'
+            ) : file.added !== undefined ? (
+              <>
+                {file.added > 0 && (
+                  <b className="font-semibold text-success">+{file.added}</b>
+                )}{' '}
+                {(file.removed ?? 0) > 0 && (
+                  <b className="font-semibold text-danger">−{file.removed}</b>
+                )}
+                <span className="sr-only">
+                  {` ${file.added} added, ${file.removed ?? 0} removed`}
+                </span>
+              </>
+            ) : null}
           </span>
           <StageButton repoId={repoId} file={file} />
         </li>
@@ -309,7 +423,15 @@ function FileRow({
             onSelect={onDiscard}
             className="text-danger [&_svg]:text-danger"
           >
-            <Trash2 /> Discard changes…
+            <Trash2 /> Discard unstaged changes…
+          </ContextMenuItem>
+        )}
+        {(file.kind === 'staged' || file.kind === 'modified') && (
+          <ContextMenuItem
+            onSelect={onDiscardAll}
+            className="text-danger [&_svg]:text-danger"
+          >
+            <Trash2 /> Discard staged and working changes…
           </ContextMenuItem>
         )}
         <ContextMenuSeparator />
@@ -335,7 +457,12 @@ function FileRow({
             )
           }
         >
-          <FolderOpen /> Open in editor
+          {hasEditorLogo(editor.id, editor.icon) ? (
+            <EditorLogo id={editor.id} icon={editor.icon} />
+          ) : (
+            <Code2 />
+          )}{' '}
+          {editor.id === 'system' ? 'Open' : `Open in ${editor.name}`}
         </ContextMenuItem>
         <ContextMenuItem
           onSelect={() =>
@@ -459,6 +586,8 @@ export function ChangesTab({
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const [checked, setChecked] = useState<Set<string>>(new Set());
   const [discarding, setDiscarding] = useState<string[] | null>(null);
+  // Discard staged and working changes, for one file, named by its row key.
+  const [discardingAll, setDiscardingAll] = useState<string | null>(null);
   const [showDiff, setShowDiff] = useState(false);
 
   const files = changes.data?.files ?? [];
@@ -539,7 +668,7 @@ export function ChangesTab({
       event.preventDefault();
       document
         .querySelector<HTMLElement>(
-          `[data-key="${CSS.escape(keyOf(selected))}"] button`,
+          `[data-key="${CSS.escape(keyOf(selected))}"] [data-stage]`,
         )
         ?.click();
     } else if (event.key === 'Enter' && layout === 'narrow' && selected)
@@ -736,6 +865,7 @@ export function ChangesTab({
                           if (layout === 'narrow') setShowDiff(true);
                         }}
                         onDiscard={() => setDiscarding([key])}
+                        onDiscardAll={() => setDiscardingAll(key)}
                         focusable={
                           isSelected || (!selectedKey && file === ordered[0])
                         }
@@ -749,16 +879,35 @@ export function ChangesTab({
                           />
                         </li>
                       )}
+                      {discardingAll === key && (
+                        <li role="none">
+                          <DiscardBand
+                            everything
+                            repoId={repo.id}
+                            files={[file]}
+                            onDone={() => setDiscardingAll(null)}
+                          />
+                        </li>
+                      )}
                       {inlineDiffs && isSelected && (
                         <li role="none" className="border-b border-line py-3">
-                          <DiffView
-                            repoId={repo.id}
-                            path={file.path}
-                            side={SIDE[file.kind]}
-                            statusAt={repo.statusAt}
-                            width={900}
-                            inline
-                          />
+                          {file.kind === 'conflict' ? (
+                            <ConflictsView
+                              repo={repo}
+                              pullSource=""
+                              pullTarget=""
+                              external
+                            />
+                          ) : (
+                            <DiffView
+                              repoId={repo.id}
+                              path={file.path}
+                              side={SIDE[file.kind]}
+                              statusAt={repo.statusAt}
+                              width={900}
+                              inline
+                            />
+                          )}
                         </li>
                       )}
                     </Fragment>
@@ -772,7 +921,7 @@ export function ChangesTab({
       {changes.data.truncated && (
         <p className="px-3 py-2 text-xs text-muted">
           Showing the first {files.length} changes. Stage all still includes the
-          rest.
+          rest, and the filter only searches the ones shown.
         </p>
       )}
     </>
@@ -787,7 +936,35 @@ export function ChangesTab({
       >
         Discard…
       </Button>
+    ) : file.kind === 'staged' ? (
+      <Button
+        size="sm"
+        variant="danger"
+        onClick={() => setDiscardingAll(keyOf(file))}
+      >
+        Discard…
+      </Button>
     ) : null;
+  // Alt+Up/Down and the toolbar arrows walk the list in its on-screen order.
+  const step = (delta: -1 | 1) => {
+    if (!selected) return;
+    const index = ordered.findIndex((f) => keyOf(f) === keyOf(selected));
+    const next = ordered[index + delta];
+    if (next) setSelectedKey(keyOf(next));
+  };
+  const conflictView = (
+    <div className="min-h-0 flex-1 overflow-auto px-4 pb-6 @container">
+      <ConflictsView repo={repo} pullSource="" pullTarget="" external />
+    </div>
+  );
+
+  // Lines from each comparison on its own; staged and unstaged lines are never added together.
+  function lineCounts(kind: 'staged' | 'modified', comparison: string) {
+    const rows = files.filter((f) => f.kind === kind && !f.binary);
+    const added = rows.reduce((n, f) => n + (f.added ?? 0), 0);
+    const removed = rows.reduce((n, f) => n + (f.removed ?? 0), 0);
+    return rows.length ? `+${added} −${removed} · ${comparison}` : comparison;
+  }
 
   if (layout === 'centered')
     return (
@@ -797,14 +974,23 @@ export function ChangesTab({
             <SummaryStrip
               cells={[
                 {
+                  label: 'Changed files',
+                  value: String(new Set(files.map((f) => f.path)).size),
+                  context: status.branch
+                    ? `On ${status.branch}`
+                    : status.headOid
+                      ? `Detached at ${status.headOid.slice(0, 7)}`
+                      : 'No commits yet',
+                },
+                {
                   label: 'Staged',
                   value: String(status.staged),
-                  context: 'In the next commit',
+                  context: lineCounts('staged', 'HEAD → Index'),
                 },
                 {
                   label: 'Not staged',
                   value: String(status.unstaged),
-                  context: 'Edited since the last stage',
+                  context: lineCounts('modified', 'Index → Working tree'),
                 },
                 {
                   label: 'Untracked',
@@ -870,14 +1056,27 @@ export function ChangesTab({
             onDone={() => setDiscarding(null)}
           />
         )}
-        <DiffView
-          repoId={repo.id}
-          path={selected.path}
-          side={SIDE[selected.kind]}
-          statusAt={repo.statusAt}
-          width={600}
-          actions={diffActions(selected)}
-        />
+        {discardingAll === keyOf(selected) && (
+          <DiscardBand
+            everything
+            repoId={repo.id}
+            files={[selected]}
+            onDone={() => setDiscardingAll(null)}
+          />
+        )}
+        {selected.kind === 'conflict' ? (
+          conflictView
+        ) : (
+          <DiffView
+            repoId={repo.id}
+            path={selected.path}
+            side={SIDE[selected.kind]}
+            statusAt={repo.statusAt}
+            width={600}
+            actions={diffActions(selected)}
+            onStep={step}
+          />
+        )}
       </div>
     );
 
@@ -910,7 +1109,9 @@ export function ChangesTab({
       {pane}
       <WidthPane>
         {(width) =>
-          selected ? (
+          selected?.kind === 'conflict' ? (
+            conflictView
+          ) : selected ? (
             <div className="flex min-h-0 flex-1 flex-col">
               {discarding?.length === 1 &&
                 discarding[0] === keyOf(selected) && (
@@ -920,6 +1121,14 @@ export function ChangesTab({
                     onDone={() => setDiscarding(null)}
                   />
                 )}
+              {discardingAll === keyOf(selected) && (
+                <DiscardBand
+                  everything
+                  repoId={repo.id}
+                  files={[selected]}
+                  onDone={() => setDiscardingAll(null)}
+                />
+              )}
               <DiffView
                 repoId={repo.id}
                 path={selected.path}
@@ -927,6 +1136,7 @@ export function ChangesTab({
                 statusAt={repo.statusAt}
                 width={width}
                 actions={diffActions(selected)}
+                onStep={step}
               />
             </div>
           ) : (

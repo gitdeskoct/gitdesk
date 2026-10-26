@@ -10,6 +10,7 @@ import {
   type ProgressEvent,
   type RepositorySummary,
 } from '../shared/repos';
+import { BRANCHES_IPC as B } from '../shared/branches';
 import { PULLS_IPC as P } from '../shared/pulls';
 import { SOURCE_IPC as F, type SourceChange } from '../shared/source';
 import { SYNC_IPC as S } from '../shared/sync';
@@ -129,6 +130,11 @@ const api: DesktopApi = {
     stageAll: (id) => ipcRenderer.invoke(W.stageAll, id),
     unstage: (input) => ipcRenderer.invoke(W.unstage, input),
     discard: (input) => ipcRenderer.invoke(W.discard, input),
+    discardAll: (input) => ipcRenderer.invoke(W.discardAll, input),
+    applySelection: (input) => ipcRenderer.invoke(W.applySelection, input),
+    copyPatch: (input) => ipcRenderer.invoke(W.copyPatch, input),
+    revealDiscarded: (id) => ipcRenderer.invoke(W.revealDiscarded, id),
+    commitIdentity: (id) => ipcRenderer.invoke(W.commitIdentity, id),
     commit: (input) => ipcRenderer.invoke(W.commit, input),
     branches: (id) => ipcRenderer.invoke(W.branches, id),
     switchBranch: (input) => ipcRenderer.invoke(W.switchBranch, input),
@@ -220,6 +226,21 @@ const api: DesktopApi = {
       ipcRenderer.on(F.changed, listener);
       return () => ipcRenderer.removeListener(F.changed, listener);
     },
+  },
+  branches: {
+    overview: (id) => ipcRenderer.invoke(B.overview, id),
+    create: (input) => ipcRenderer.invoke(B.create, input),
+    rename: (input) => ipcRenderer.invoke(B.rename, input),
+    remove: (input) => ipcRenderer.invoke(B.remove, input),
+    setUpstream: (input) => ipcRenderer.invoke(B.setUpstream, input),
+    push: (input) => ipcRenderer.invoke(B.push, input),
+    deleteRemote: (input) => ipcRenderer.invoke(B.deleteRemote, input),
+    checkRemote: (input) => ipcRenderer.invoke(B.checkRemote, input),
+    compare: (input) => ipcRenderer.invoke(B.compare, input),
+    fileDiff: (input) => ipcRenderer.invoke(B.fileDiff, input),
+    mergeability: (input) => ipcRenderer.invoke(B.mergeability, input),
+    listMergeability: (input) => ipcRenderer.invoke(B.listMergeability, input),
+    merge: (input) => ipcRenderer.invoke(B.merge, input),
   },
 };
 

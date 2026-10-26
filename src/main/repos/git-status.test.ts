@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseLastCommit, parseStatus } from './git-status';
+import { parseLastCommit, parseNumstatAll, parseStatus } from './git-status';
 
 const z = (...records: string[]) => records.join('\0') + '\0';
 const OID = 'a'.repeat(40);
@@ -112,6 +112,75 @@ describe('parseStatus', () => {
     expect(status.untracked).toBe(600);
     expect(status.files).toHaveLength(500);
     expect(status.truncated).toBe(true);
+  });
+});
+
+describe('status details for the Changes list', () => {
+  const H = 'b'.repeat(40);
+  it('names conflict kinds, submodule state and mode changes per side', () => {
+    const status = parseStatus(
+      z(
+        `u AU N... 000000 100644 100644 100644 ${H} ${H} ${H} added.txt`,
+        `u UD N... 100644 100644 000000 100644 ${H} ${H} ${H} gone.txt`,
+        `1 .M SCMU 160000 160000 160000 ${H} ${H} vendor/lib`,
+        `1 M. N... 100644 100755 100755 ${H} ${H} run.sh`,
+        `1 .M N... 100644 100644 100755 ${H} ${H} tool.sh`,
+      ),
+    );
+    expect(status.files).toEqual([
+      expect.objectContaining({
+        path: 'added.txt',
+        kind: 'conflict',
+        conflict: 'added-by-us',
+      }),
+      expect.objectContaining({
+        path: 'gone.txt',
+        conflict: 'deleted-by-them',
+      }),
+      expect.objectContaining({
+        path: 'vendor/lib',
+        kind: 'modified',
+        submodule: true,
+        submoduleState: { commit: true, tracked: true, untracked: true },
+      }),
+      expect.objectContaining({
+        path: 'run.sh',
+        kind: 'staged',
+        modeChange: '100644 → 100755',
+      }),
+      expect.objectContaining({
+        path: 'tool.sh',
+        kind: 'modified',
+        modeChange: '100644 → 100755',
+      }),
+    ]);
+  });
+
+  it('caps by path, so both sides of one file stay', () => {
+    const records = Array.from(
+      { length: 501 },
+      (_, i) => `1 MM N... 100644 100644 100644 ${H} ${H} f${i}.txt`,
+    );
+    const status = parseStatus(z(...records));
+    expect(status.files).toHaveLength(1000);
+    expect(status.truncated).toBe(true);
+  });
+
+  it('reads numstat counts, renames and binary files by path', () => {
+    const counts = parseNumstatAll(
+      '3\t1\ta.ts\u0000-\t-\tlogo.png\u00002\t0\t\u0000old.ts\u0000new.ts\u0000',
+    );
+    expect(counts.get('a.ts')).toEqual({ added: 3, removed: 1, binary: false });
+    expect(counts.get('logo.png')).toEqual({
+      added: 0,
+      removed: 0,
+      binary: true,
+    });
+    expect(counts.get('new.ts')).toEqual({
+      added: 2,
+      removed: 0,
+      binary: false,
+    });
   });
 });
 

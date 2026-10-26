@@ -1,6 +1,29 @@
+import * as Toolbar from '@radix-ui/react-toolbar';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { ArrowDown, ArrowUp, FolderOpen, UnfoldVertical } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import {
+  ArrowDown,
+  ArrowUp,
+  Check,
+  Copy,
+  FolderOpen,
+  Lock,
+  MoreHorizontal,
+  Pilcrow,
+  RefreshCw,
+  TriangleAlert,
+  UnfoldVertical,
+  WrapText,
+} from 'lucide-react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type MutableRefObject,
+  type ReactNode,
+} from 'react';
+import { fileType } from '../../../shared/file-types';
 import type { Settings } from '../../../shared/settings';
 import type {
   DiffHunk,
@@ -10,14 +33,25 @@ import type {
 } from '../../../shared/workspace';
 import { DiffArt, OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '../../components/ui/dropdown-menu';
 import { EmptyState } from '../../components/ui/empty-state';
-import { Segmented } from '../../components/ui/segmented';
-import { Loading } from '../../components/ui/status';
+import { InlineStatus, Loading } from '../../components/ui/status';
+import { useToast } from '../../components/ui/toast';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
+import { formatBytes } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
+  useApplySelection,
+  useCopyFilePath,
+  useCopyPatch,
   useDiff,
+  useRevealDiscarded,
   useRevealFile,
   useSettings,
   useUpdateSettings,
@@ -131,10 +165,11 @@ function useHighlighted(
   diff: DiffResult | undefined,
   path: string,
   settings: Settings | undefined,
-): (CodeToken[] | null)[][] | null {
+): { tokens: (CodeToken[] | null)[][]; skipped: boolean } | null {
   const [result, setResult] = useState<{
     diff: DiffResult;
     tokens: (CodeToken[] | null)[][];
+    skipped: boolean;
   } | null>(null);
   const theme = settings?.codeTheme ?? 'github';
   const enabled = settings?.diffSyntax ?? true;
@@ -145,6 +180,7 @@ function useHighlighted(
     let cancelled = false;
     void (async () => {
       const tokens: (CodeToken[] | null)[][] = [];
+      let skipped = false;
       for (const hunk of diff.hunks) {
         const oldIdx: number[] = [];
         const newIdx: number[] = [];
@@ -164,6 +200,9 @@ function useHighlighted(
             theme,
           ),
         ]);
+        // Shiki skips a side past its size limit; the diff says so instead of going quiet.
+        if ((oldIdx.length && !oldTokens) || (newIdx.length && !newTokens))
+          skipped = true;
         const byLine: (CodeToken[] | null)[] = Array.from(
           { length: hunk.lines.length },
           () => null,
@@ -175,13 +214,15 @@ function useHighlighted(
         });
         tokens.push(byLine);
       }
-      if (!cancelled) setResult({ diff, tokens });
+      if (!cancelled) setResult({ diff, tokens, skipped });
     })().catch(() => undefined);
     return () => {
       cancelled = true;
     };
   }, [diff, path, theme, enabled]);
-  return enabled && result && result.diff === diff ? result.tokens : null;
+  return enabled && result && result.diff === diff
+    ? { tokens: result.tokens, skipped: result.skipped }
+    : null;
 }
 
 // One line's text: syntax tokens split again at changed-word boundaries.
@@ -292,6 +333,50 @@ function Sign({ kind }: { kind: DiffLine['kind'] }) {
   );
 }
 
+export type StagingControls = {
+  // Selected line indexes per hunk.
+  selected: Map<number, Set<number>>;
+  onToggle: (hunk: number, index: number, extend: boolean) => void;
+  hunkActions: (hunk: number) => ReactNode;
+};
+
+function NoEol() {
+  return (
+    <span className="ml-3 font-sans text-[0.71875rem] text-muted">
+      No newline at end of file
+    </span>
+  );
+}
+
+// One changed line's select box. Shift+click extends from the last line picked.
+function PickCell({
+  on,
+  label,
+  onToggle,
+}: {
+  on: boolean;
+  label: string;
+  onToggle: (extend: boolean) => void;
+}) {
+  return (
+    <span role="cell" className="grid place-items-center select-none">
+      <button
+        type="button"
+        aria-pressed={on}
+        aria-label={`Select ${label} for staging`}
+        title={`Select ${label}`}
+        onClick={(event) => onToggle(event.shiftKey)}
+        className={cn(
+          'grid size-3.5 place-items-center rounded-[3px] text-on-accent focus-visible:outline-offset-1',
+          on ? 'bg-accent' : 'shadow-[inset_0_0_0_1.5px_var(--field-line)]',
+        )}
+      >
+        {on && <Check aria-hidden className="size-2.5 stroke-[3.5]" />}
+      </button>
+    </span>
+  );
+}
+
 // The text diff itself. Reviews pass lineSlot to show threads under lines and onLineComment to
 // make line numbers start a comment; Changes passes neither.
 export function DiffBody({
@@ -303,6 +388,8 @@ export function DiffBody({
   maxHeight,
   lineSlot,
   onLineComment,
+  staging,
+  navRef,
 }: {
   diff: Extract<DiffResult, { status: 'text' }>;
   path: string;
@@ -312,10 +399,15 @@ export function DiffBody({
   maxHeight?: string;
   lineSlot?: (line: DiffLine) => ReactNode;
   onLineComment?: (line: DiffLine, side: 'old' | 'new') => void;
+  // Changes: a select box on each changed line and actions on each change (hunk).
+  staging?: StagingControls;
+  // Lets the toolbar and the [ and ] keys move between changes.
+  navRef?: MutableRefObject<((delta: number) => void) | null>;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const rows = useMemo(() => buildRows(diff.hunks, split), [diff, split]);
-  const tokens = useHighlighted(diff, path, settings);
+  const highlighted = useHighlighted(diff, path, settings);
+  const tokens = highlighted?.tokens ?? null;
   const words = useMemo(
     () =>
       settings?.diffWordHighlight === false
@@ -347,6 +439,23 @@ export function DiffBody({
         ?.querySelector(`[data-index="${hunkRows[next]}"]`)
         ?.scrollIntoView({ block: 'start' });
   };
+  useEffect(() => {
+    if (!navRef) return;
+    navRef.current = hunkRows.length ? jump : null;
+    return () => {
+      navRef.current = null;
+    };
+  });
+  const pick = (hunk: number, side: { index: number; line: DiffLine }) =>
+    staging && (side.line.kind === 'add' || side.line.kind === 'del') ? (
+      <PickCell
+        on={staging.selected.get(hunk)?.has(side.index) ?? false}
+        label={`${side.line.kind === 'add' ? 'added' : 'removed'} line ${side.line.new ?? side.line.old}`}
+        onToggle={(extend) => staging.onToggle(hunk, side.index, extend)}
+      />
+    ) : staging ? (
+      <span role="cell" />
+    ) : null;
 
   const textCell = (
     side: { index: number; line: DiffLine } | null,
@@ -355,6 +464,7 @@ export function DiffBody({
   ) =>
     side ? (
       <>
+        {pick(hunk, side)}
         <Gutter
           // Left is the file before (old numbers), right the file after (new numbers).
           value={
@@ -394,13 +504,18 @@ export function DiffBody({
               {markerLabel(side.line.text)}
             </span>
           )}
+          {side.line.noEol && <NoEol />}
         </span>
       </>
     ) : (
       <span
         role="cell"
         aria-label="No line"
-        className={cn('col-span-3 bg-sunken', !first && 'border-l border-line')}
+        className={cn(
+          staging ? 'col-span-4' : 'col-span-3',
+          'bg-sunken',
+          !first && 'border-l border-line',
+        )}
       />
     );
 
@@ -434,14 +549,25 @@ export function DiffBody({
       );
     if (row.type === 'hunk')
       return (
-        <div
-          key={index}
-          {...common}
-          className="bg-diff-hunk px-4 py-0.5 text-muted"
-        >
-          <span role="cell" className="whitespace-pre">
-            {row.header}
-          </span>
+        <div key={index} {...common} className="bg-diff-hunk text-muted">
+          {staging ? (
+            // Pinned to the visible width, so the actions stay in view while long code scrolls.
+            <div
+              role="cell"
+              className="sticky left-0 flex w-[100cqw] flex-wrap items-center gap-x-3 gap-y-1 py-1 pr-3 pl-4"
+            >
+              <span className="min-w-0 truncate whitespace-pre">
+                {row.header}
+              </span>
+              <span className="ml-auto flex gap-1 font-sans">
+                {staging.hunkActions(row.hunk)}
+              </span>
+            </div>
+          ) : (
+            <span role="cell" className="block px-4 py-0.5 whitespace-pre">
+              {row.header}
+            </span>
+          )}
         </div>
       );
     if (row.type === 'line') {
@@ -451,10 +577,14 @@ export function DiffBody({
           key={index}
           {...(slot ? { role: 'row' } : common)}
           className={cn(
-            'grid grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)]',
+            'grid',
+            staging
+              ? 'grid-cols-[1.5rem_3rem_3rem_1.25rem_minmax(0,1fr)]'
+              : 'grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)]',
             ROW_TINT[row.line.kind],
           )}
         >
+          {pick(row.hunk, row)}
           <Gutter
             value={row.line.old}
             onComment={
@@ -489,6 +619,7 @@ export function DiffBody({
                 {markerLabel(row.line.text)}
               </span>
             )}
+            {row.line.noEol && <NoEol />}
           </span>
         </div>
       );
@@ -510,11 +641,17 @@ export function DiffBody({
       <div
         key={index}
         {...(slots.length ? { role: 'row' } : common)}
-        className="grid grid-cols-[3rem_1.25rem_minmax(0,1fr)_3rem_1.25rem_minmax(0,1fr)]"
+        className={cn(
+          'grid',
+          staging
+            ? 'grid-cols-[1.5rem_3rem_1.25rem_minmax(0,1fr)_1.5rem_3rem_1.25rem_minmax(0,1fr)]'
+            : 'grid-cols-[3rem_1.25rem_minmax(0,1fr)_3rem_1.25rem_minmax(0,1fr)]',
+        )}
       >
         <div
           className={cn(
-            'col-span-3 grid grid-cols-subgrid',
+            staging ? 'col-span-4' : 'col-span-3',
+            'grid grid-cols-subgrid',
             row.left && ROW_TINT[row.left.line.kind],
           )}
         >
@@ -522,7 +659,8 @@ export function DiffBody({
         </div>
         <div
           className={cn(
-            'col-span-3 grid grid-cols-subgrid border-l border-line',
+            staging ? 'col-span-4' : 'col-span-3',
+            'grid grid-cols-subgrid border-l border-line',
             row.right && ROW_TINT[row.right.line.kind],
           )}
         >
@@ -616,6 +754,12 @@ export function DiffBody({
           Showing the first lines of this diff. Your editor shows the rest.
         </p>
       )}
+      {highlighted?.skipped && (
+        <p className="flex-none border-t border-line px-4 py-2 text-xs text-muted">
+          Syntax colors are off for parts of this diff that are too long to
+          color quickly.
+        </p>
+      )}
     </div>
   );
 }
@@ -627,6 +771,53 @@ const SIDE_LABEL: Record<DiffSide, string> = {
   conflict: 'Conflict',
 };
 
+// The comparison Git made, in its own terms, so a staged diff never reads as the working file.
+const COMPARISON: Record<DiffSide, readonly string[]> = {
+  staged: ['HEAD', 'Index'],
+  unstaged: ['Index', 'Working tree'],
+  untracked: ['New file', 'Working tree'],
+  conflict: ['Base', 'Yours', 'Incoming'],
+};
+
+function Comparison({ side }: { side: DiffSide }) {
+  const parts = COMPARISON[side];
+  return (
+    <span className="inline-flex items-center gap-1 rounded-[4px] bg-sunken px-1.5 py-px text-xs text-ink ring-1 ring-line">
+      {parts.map((part, i) => (
+        <span key={part} className="inline-flex items-center gap-1">
+          {i > 0 && (
+            <span aria-hidden className="text-muted">
+              {side === 'conflict' ? '·' : '→'}
+            </span>
+          )}
+          <b className="font-semibold">{part}</b>
+        </span>
+      ))}
+      {side !== 'conflict' && (
+        <span className="sr-only">
+          {` compared: ${parts[0]} to ${parts[1]}`}
+        </span>
+      )}
+    </span>
+  );
+}
+
+const GENERATED = /\.min\.(js|css|mjs)$|\.map$/i;
+const isGenerated = (path: string) =>
+  fileType(path).icon === 'lock' || GENERATED.test(path);
+
+type Pick = { index: number; lines?: number[] }[];
+
+// The partial-staging problem that needs words: a stale diff, a held lock, or a selection Git
+// refused. Each says what happened and that nothing changed.
+type Problem =
+  | { kind: 'stale' }
+  | { kind: 'busy'; message: string }
+  | { kind: 'refused'; message: string };
+
+const TOOL_TOGGLE =
+  'h-7 rounded-[4px] px-2.5 text-[0.8125rem] whitespace-nowrap text-muted transition-colors hover:text-ink focus-visible:outline-offset-0 data-[state=on]:bg-thumb data-[state=on]:font-medium data-[state=on]:text-ink data-[state=on]:shadow-[0_1px_2px_rgb(20_22_26/0.12)]';
+
 // Everything the diff of one file can be: loading, an error, binary, too large, nothing to show,
 // or text. The header's actions come from the caller, so the same view works in both layouts.
 export function DiffView({
@@ -637,6 +828,7 @@ export function DiffView({
   actions,
   width,
   inline = false,
+  onStep,
 }: {
   repoId: string;
   path: string;
@@ -645,16 +837,39 @@ export function DiffView({
   actions?: ReactNode;
   // The pane's width, for Auto: side by side needs room for two columns of code.
   width: number;
+  // The centered layout's inline diff: whole-file actions only, so reading stays light.
   inline?: boolean;
+  // Moves to the previous or next changed file in the list.
+  onStep?: (delta: -1 | 1) => void;
 }) {
   const { data: settings } = useSettings();
   const update = useUpdateSettings();
   const reveal = useRevealFile(repoId);
+  const copyPath = useCopyFilePath(repoId);
+  const copyPatch = useCopyPatch(repoId);
+  const apply = useApplySelection(repoId);
+  const revealDiscarded = useRevealDiscarded();
+  const toast = useToast();
+  const navRef = useRef<((delta: number) => void) | null>(null);
   const [full, setFull] = useState(false);
   const [expanded, setExpanded] = useState(false);
+  const [showGenerated, setShowGenerated] = useState(false);
+  const [selected, setSelected] = useState<Map<number, Set<number>>>(
+    () => new Map(),
+  );
+  const [anchor, setAnchor] = useState<{ hunk: number; index: number } | null>(
+    null,
+  );
+  const [problem, setProblem] = useState<Problem | null>(null);
+  const [confirming, setConfirming] = useState<{
+    hunks: Pick;
+    label: string;
+  } | null>(null);
   useEffect(() => {
     setFull(false);
     setExpanded(false);
+    setShowGenerated(false);
+    setProblem(null);
   }, [path, side]);
 
   const context = expanded ? WHOLE_FILE : (settings?.diffContext ?? 3);
@@ -668,83 +883,534 @@ export function DiffView({
   const split = layout === 'split' || (layout === 'auto' && width >= 1100);
   const diff = query.data;
   const current = diff && diff.path === path ? diff : undefined;
+  const token = current?.status === 'text' ? current.token : null;
+  // A new diff means new line indexes: an old selection would point at other lines.
+  useEffect(() => {
+    setSelected(new Map());
+    setAnchor(null);
+    setConfirming(null);
+  }, [token, path, side]);
 
-  const toolbar = (
-    <div
-      role="toolbar"
-      aria-label="Diff view"
-      className="flex flex-wrap items-center gap-2"
-    >
-      <Segmented
-        label="Diff layout"
-        value={split ? 'split' : 'unified'}
-        options={[
-          { value: 'unified', label: 'Unified' },
-          { value: 'split', label: 'Split' },
-        ]}
-        onChange={(diffLayout) => update.mutate({ diffLayout })}
-      />
-      <Button
-        size="sm"
-        variant={ignoreWhitespace ? 'secondary' : 'ghost'}
-        aria-pressed={ignoreWhitespace}
-        className={cn(ignoreWhitespace && 'bg-accent-soft')}
-        onClick={() =>
-          update.mutate({ diffIgnoreWhitespace: !ignoreWhitespace })
-        }
-      >
-        Hide whitespace
-      </Button>
-      <Button
-        size="sm"
-        variant={settings?.diffWrap ? 'secondary' : 'ghost'}
-        aria-pressed={settings?.diffWrap ?? false}
-        className={cn(settings?.diffWrap && 'bg-accent-soft')}
-        onClick={() => update.mutate({ diffWrap: !settings?.diffWrap })}
-      >
-        Wrap lines
-      </Button>
-      <OpenInEditorButton
-        repoId={repoId}
-        // A deleted file has nothing to open, so the repository opens instead.
-        path={current?.status === 'text' && current.deleted ? null : path}
-        line={
-          current?.status === 'text'
-            ? (current.hunks[0]?.lines.find((l) => l.kind === 'add')?.new ??
-              current.hunks[0]?.newStart ??
-              null)
-            : null
-        }
-      />
-      {actions}
-    </div>
+  const partial =
+    !inline &&
+    side !== 'conflict' &&
+    (settings?.changesPartial ?? true) &&
+    current?.status === 'text';
+  const canPick = partial && !!token;
+  const keepCopy = settings?.changesKeepDiscarded ?? true;
+
+  const run = (action: 'stage' | 'unstage' | 'discard', hunks: Pick) => {
+    if (!token || side === 'conflict') return;
+    setProblem(null);
+    apply.mutate(
+      { path, side, action, token, context, hunks },
+      {
+        onSuccess: (result) => {
+          if (result.status === 'applied') {
+            setSelected(new Map());
+            setConfirming(null);
+            if (action === 'discard')
+              toast({
+                tone: 'success',
+                title: 'Discarded the selected changes',
+                description: result.saved
+                  ? 'A copy is in Discarded changes.'
+                  : undefined,
+                action: result.saved
+                  ? {
+                      label: 'Reveal',
+                      altText: 'Show the saved copy',
+                      onClick: () => revealDiscarded.mutate(repoId),
+                    }
+                  : undefined,
+              });
+          } else if (result.status === 'stale') setProblem({ kind: 'stale' });
+          else
+            setProblem({
+              kind: result.reason === 'busy' ? 'busy' : 'refused',
+              message: result.message,
+            });
+        },
+        onError: (err) =>
+          setProblem({
+            kind: 'refused',
+            message: ipcErrorMessage(err, "That change didn't run."),
+          }),
+      },
+    );
+  };
+
+  const selection: Pick = [...selected]
+    .filter(([, lines]) => lines.size)
+    .map(([index, lines]) => ({
+      index,
+      lines: [...lines].sort((a, b) => a - b),
+    }));
+  const selectedCount = selection.reduce((n, h) => n + h.lines!.length, 0);
+  const pendingAction =
+    apply.isPending && apply.variables ? apply.variables : null;
+  const isPending = (action: string, hunk: number | null) =>
+    !!pendingAction &&
+    pendingAction.action === action &&
+    (hunk === null
+      ? pendingAction.hunks.some((h) => h.lines)
+      : pendingAction.hunks.length === 1 &&
+        pendingAction.hunks[0]!.index === hunk &&
+        !pendingAction.hunks[0]!.lines);
+
+  const toggle = (hunk: number, index: number, extend: boolean) => {
+    if (current?.status !== 'text') return;
+    setSelected((previous) => {
+      const next = new Map(previous);
+      const lines = new Set(next.get(hunk) ?? []);
+      const on = !lines.has(index);
+      const from =
+        extend && anchor?.hunk === hunk ? Math.min(anchor.index, index) : index;
+      const to =
+        extend && anchor?.hunk === hunk ? Math.max(anchor.index, index) : index;
+      current.hunks[hunk]!.lines.forEach((line, i) => {
+        if (i < from || i > to) return;
+        if (line.kind !== 'add' && line.kind !== 'del') return;
+        if (on) lines.add(i);
+        else lines.delete(i);
+      });
+      next.set(hunk, lines);
+      return next;
+    });
+    setAnchor({ hunk, index });
+  };
+
+  const hunkActions = (hunk: number) => (
+    <>
+      {side === 'staged' ? (
+        <Button
+          size="sm"
+          className="h-6 px-2 text-xs"
+          pending={isPending('unstage', hunk)}
+          onClick={() => run('unstage', [{ index: hunk }])}
+        >
+          Unstage change
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          className="h-6 px-2 text-xs"
+          pending={isPending('stage', hunk)}
+          onClick={() => run('stage', [{ index: hunk }])}
+        >
+          Stage change
+        </Button>
+      )}
+      {side === 'unstaged' && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="h-6 px-2 text-xs"
+          onClick={() =>
+            setConfirming({
+              hunks: [{ index: hunk }],
+              label: `change ${hunk + 1}`,
+            })
+          }
+        >
+          Discard change…
+        </Button>
+      )}
+    </>
   );
 
+  const onKeyDown = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const target = event.target as HTMLElement;
+    if (target.closest('input, textarea, [contenteditable="true"]')) return;
+    if (event.key === ']' || event.key === '[') {
+      event.preventDefault();
+      navRef.current?.(event.key === ']' ? 1 : -1);
+    } else if (
+      event.altKey &&
+      onStep &&
+      (event.key === 'ArrowDown' || event.key === 'ArrowUp')
+    ) {
+      event.preventDefault();
+      onStep(event.key === 'ArrowDown' ? 1 : -1);
+    }
+  };
+
+  const iconButton = (
+    label: string,
+    icon: ReactNode,
+    onClick: () => void,
+    keys?: string,
+  ) => (
+    <Tooltip label={keys ? `${label} (${keys})` : label} side="bottom">
+      <Toolbar.Button asChild>
+        <Button
+          size="icon"
+          variant="ghost"
+          aria-label={label}
+          onClick={onClick}
+        >
+          {icon}
+        </Button>
+      </Toolbar.Button>
+    </Tooltip>
+  );
+
+  const toolbar = (
+    <Toolbar.Root
+      aria-label="Diff"
+      className="flex flex-wrap items-center gap-1"
+    >
+      {onStep && (
+        <>
+          {iconButton('Previous file', <ArrowUp />, () => onStep(-1), 'Alt+↑')}
+          {iconButton('Next file', <ArrowDown />, () => onStep(1), 'Alt+↓')}
+          <Toolbar.Separator className="mx-1 h-5 w-px bg-line" />
+        </>
+      )}
+      <Toolbar.ToggleGroup
+        type="single"
+        aria-label="Diff layout"
+        value={split ? 'split' : 'unified'}
+        onValueChange={(value) =>
+          value && update.mutate({ diffLayout: value as 'unified' | 'split' })
+        }
+        className="inline-flex gap-0.5 rounded-sm bg-control p-0.5"
+      >
+        <Toolbar.ToggleItem value="unified" className={TOOL_TOGGLE}>
+          Unified
+        </Toolbar.ToggleItem>
+        <Toolbar.ToggleItem value="split" className={TOOL_TOGGLE}>
+          Split
+        </Toolbar.ToggleItem>
+      </Toolbar.ToggleGroup>
+      <Toolbar.Button asChild>
+        <Button
+          size="sm"
+          variant={ignoreWhitespace ? 'secondary' : 'ghost'}
+          aria-pressed={ignoreWhitespace}
+          className={cn(ignoreWhitespace && 'bg-accent-soft')}
+          onClick={() =>
+            update.mutate({ diffIgnoreWhitespace: !ignoreWhitespace })
+          }
+        >
+          <Pilcrow />
+          Hide whitespace
+        </Button>
+      </Toolbar.Button>
+      <Toolbar.Button asChild>
+        <Button
+          size="sm"
+          variant={settings?.diffWrap ? 'secondary' : 'ghost'}
+          aria-pressed={settings?.diffWrap ?? false}
+          className={cn(settings?.diffWrap && 'bg-accent-soft')}
+          onClick={() => update.mutate({ diffWrap: !settings?.diffWrap })}
+        >
+          <WrapText />
+          Wrap lines
+        </Button>
+      </Toolbar.Button>
+      {(side === 'staged' || side === 'unstaged') && (
+        <Toolbar.Button asChild>
+          <Button
+            size="sm"
+            variant="ghost"
+            pending={copyPatch.isPending}
+            onClick={() =>
+              copyPatch.mutate(
+                { path, side },
+                {
+                  onSuccess: () =>
+                    toast({ tone: 'success', title: 'Copied the patch' }),
+                  onError: (err) =>
+                    toast({
+                      tone: 'danger',
+                      title: "Couldn't copy the patch",
+                      description: ipcErrorMessage(err, 'Try again.'),
+                    }),
+                },
+              )
+            }
+          >
+            {!copyPatch.isPending && <Copy />}
+            Copy patch
+          </Button>
+        </Toolbar.Button>
+      )}
+      <Toolbar.Button asChild>
+        <OpenInEditorButton
+          repoId={repoId}
+          // A deleted file has nothing to open, so the repository opens instead.
+          path={current?.status === 'text' && current.deleted ? null : path}
+          line={
+            current?.status === 'text'
+              ? (current.hunks[0]?.lines.find(
+                  (l) => l.kind === 'add' || l.kind === 'conflict',
+                )?.new ??
+                current.hunks[0]?.newStart ??
+                null)
+              : null
+          }
+        />
+      </Toolbar.Button>
+      {actions}
+      <DropdownMenu>
+        <Tooltip label="More file actions" side="bottom">
+          <Toolbar.Button asChild>
+            <DropdownMenuTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="More file actions"
+              >
+                <MoreHorizontal />
+              </Button>
+            </DropdownMenuTrigger>
+          </Toolbar.Button>
+        </Tooltip>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem
+            onSelect={() =>
+              copyPath.mutate(path, {
+                onSuccess: () =>
+                  toast({ tone: 'success', title: 'Copied the path' }),
+                onError: (err) =>
+                  toast({
+                    tone: 'danger',
+                    title: "Couldn't copy the path",
+                    description: ipcErrorMessage(err, 'Try again.'),
+                  }),
+              })
+            }
+          >
+            <Copy /> Copy path
+          </DropdownMenuItem>
+          {!(current?.status === 'text' && current.deleted) && (
+            <DropdownMenuItem
+              onSelect={() =>
+                reveal.mutate(path, {
+                  onError: (err) =>
+                    toast({
+                      tone: 'danger',
+                      title: "Couldn't show the file",
+                      description: ipcErrorMessage(err, 'Try again.'),
+                    }),
+                })
+              }
+            >
+              <FolderOpen /> {fileManagerLabel()}
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </Toolbar.Root>
+  );
+
+  const oldPath =
+    current && current.status !== 'too-large' && current.status !== 'empty'
+      ? current.oldPath
+      : null;
   const header = (
     <div className="flex flex-none flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-line px-4 py-2.5">
       <div className="min-w-0">
         <h2
           className="truncate font-mono text-[0.8125rem] font-semibold text-ink"
-          title={path}
+          title={oldPath ? `${oldPath} → ${path}` : path}
         >
-          {path}
-        </h2>
-        <p className="mt-0.5 text-xs text-muted">
-          {SIDE_LABEL[side]}
-          {current?.status === 'text' && (
+          {oldPath ? (
             <>
-              {' · '}
-              <b className="font-semibold text-ink">+{current.added}</b>{' '}
-              <b className="font-semibold text-ink">−{current.removed}</b>
-              {current.oldPath ? ` · renamed from ${current.oldPath}` : ''}
-              {current.modeChange ? ` · mode ${current.modeChange}` : ''}
+              <span className="font-normal text-muted">{oldPath}</span>
+              <span aria-label=" renamed to "> → </span>
+              {path}
             </>
+          ) : (
+            path
+          )}
+        </h2>
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+          <Comparison side={side} />
+          <span>{SIDE_LABEL[side]}</span>
+          {current?.status === 'text' && (
+            <span>
+              <b className="font-semibold text-success">+{current.added}</b>{' '}
+              <b className="font-semibold text-danger">−{current.removed}</b>
+            </span>
+          )}
+          {current?.status === 'text' && current.modeChange && (
+            <span>Mode {current.modeChange}</span>
           )}
         </p>
       </div>
       {toolbar}
     </div>
   );
+
+  const discardBand = confirming && (
+    <div
+      role="alert"
+      className="grid flex-none gap-2.5 bg-danger-soft px-4 py-2.5 text-[0.8125rem] text-ink"
+    >
+      <p>
+        <b className="font-semibold">
+          Discard {confirming.label} in {path.split('/').pop()}?
+        </b>{' '}
+        Your working copy loses those lines and goes back to the staged version.{' '}
+        {keepCopy
+          ? 'A copy is saved in Discarded changes first.'
+          : "Keeping a copy is off in Settings, so this can't be undone."}
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant="danger"
+          className="bg-surface"
+          pending={isPending(
+            'discard',
+            confirming.hunks[0]?.lines ? null : confirming.hunks[0]!.index,
+          )}
+          onClick={() => run('discard', confirming.hunks)}
+        >
+          Discard {confirming.label}
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          autoFocus
+          onClick={() => setConfirming(null)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+
+  const problemBand =
+    problem &&
+    (problem.kind === 'stale' ? (
+      <div
+        role="alert"
+        className="flex flex-none flex-wrap items-center gap-3 bg-warning-soft px-4 py-2.5 text-[0.8125rem] text-ink"
+      >
+        <TriangleAlert aria-hidden className="size-4 text-warning" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">
+            {path.split('/').pop()} changed while you were reviewing it.
+          </b>{' '}
+          Nothing was staged. The diff now shows the file as it is; choose the
+          lines again.
+        </span>
+        <Button
+          size="sm"
+          className="bg-surface"
+          pending={query.isFetching}
+          onClick={() => {
+            setProblem(null);
+            void query.refetch();
+          }}
+        >
+          {!query.isFetching && <RefreshCw />}
+          Refresh diff
+        </Button>
+      </div>
+    ) : problem.kind === 'busy' ? (
+      <div
+        role="alert"
+        className="flex flex-none flex-wrap items-center gap-3 bg-warning-soft px-4 py-2.5 text-[0.8125rem] text-ink"
+      >
+        <Lock aria-hidden className="size-4 text-warning" />
+        <span className="min-w-0 flex-1">{problem.message}</span>
+        <Button
+          size="sm"
+          className="bg-surface"
+          pending={apply.isPending}
+          onClick={() =>
+            apply.variables &&
+            run(apply.variables.action, apply.variables.hunks)
+          }
+        >
+          Try again
+        </Button>
+      </div>
+    ) : (
+      <InlineStatus tone="warning" className="mx-4 my-2 flex-none">
+        {problem.message}
+      </InlineStatus>
+    ));
+
+  const selectionBar = canPick && selectedCount > 0 && (
+    <div
+      role="toolbar"
+      aria-label="Selected lines"
+      className="flex flex-none flex-wrap items-center gap-2 bg-accent-soft px-4 py-2 text-[0.8125rem] text-ink"
+    >
+      <span className="min-w-0 flex-1">
+        <b className="font-semibold tabular-nums">{selectedCount}</b>{' '}
+        {selectedCount === 1 ? 'changed line' : 'changed lines'} selected. The
+        rest stay {side === 'staged' ? 'staged' : 'as they are'}.
+      </span>
+      {side === 'staged' ? (
+        <Button
+          size="sm"
+          variant="primary"
+          pending={isPending('unstage', null)}
+          onClick={() => run('unstage', selection)}
+        >
+          Unstage lines
+        </Button>
+      ) : (
+        <Button
+          size="sm"
+          variant="primary"
+          pending={isPending('stage', null)}
+          onClick={() => run('stage', selection)}
+        >
+          Stage lines
+        </Button>
+      )}
+      {side === 'unstaged' && (
+        <Button
+          size="sm"
+          variant="danger"
+          className="bg-surface"
+          onClick={() =>
+            setConfirming({
+              hunks: selection,
+              label: `${selectedCount} ${selectedCount === 1 ? 'line' : 'lines'}`,
+            })
+          }
+        >
+          Discard lines…
+        </Button>
+      )}
+      <Button size="sm" variant="ghost" onClick={() => setSelected(new Map())}>
+        Clear
+      </Button>
+    </div>
+  );
+
+  // Why parts of this diff can't be staged, when the reason is something the user can change.
+  const partialNote =
+    partial && !token && current?.status === 'text' ? (
+      ignoreWhitespace ? (
+        <div className="flex flex-none flex-wrap items-center gap-3 border-b border-line px-4 py-2 text-xs text-muted">
+          <span className="min-w-0 flex-1">
+            Whitespace changes are hidden, so parts of this file can't be
+            staged: the patch has to match Git's own diff. Whole-file staging
+            still works.
+          </span>
+          <Button
+            size="sm"
+            onClick={() => update.mutate({ diffIgnoreWhitespace: false })}
+          >
+            Show whitespace changes
+          </Button>
+        </div>
+      ) : current.truncated ? (
+        <p className="flex-none border-b border-line px-4 py-2 text-xs text-muted">
+          This diff is cut short, so parts of it can't be staged. Load the full
+          diff, or stage the whole file.
+        </p>
+      ) : null
+    ) : null;
 
   let body: ReactNode;
   if (!settings || (query.isPending && !current))
@@ -800,7 +1466,14 @@ export function DiffView({
           </Button>
         }
       >
-        Git can't show it as lines. Open it from its folder to compare.
+        {current.oldSize !== null && current.newSize !== null
+          ? `${formatBytes(current.oldSize)} → ${formatBytes(current.newSize)}. `
+          : current.newSize !== null
+            ? `${formatBytes(current.newSize)}, new. `
+            : current.oldSize !== null
+              ? `${formatBytes(current.oldSize)}, removed. `
+              : ''}
+        Git can't show it as lines, so there are no line counts.
       </EmptyState>
     );
   else if (current.status === 'too-large')
@@ -862,21 +1535,52 @@ export function DiffView({
             : 'Git reports the file as changed, with no lines to compare.'}
       </EmptyState>
     );
+  else if (
+    (settings.diffCollapseGenerated ?? true) &&
+    isGenerated(path) &&
+    !showGenerated
+  )
+    body = (
+      <EmptyState
+        compact
+        className="px-4"
+        art={<DiffArt />}
+        title={`${path.split('/').pop()} is folded`}
+        action={
+          <Button size="sm" onClick={() => setShowGenerated(true)}>
+            Show diff
+          </Button>
+        }
+      >
+        {`It's a generated file with ${(current.added + current.removed).toLocaleString()} changed lines. It is still staged and committed like any other file; folding only hides the lines.`}
+      </EmptyState>
+    );
   else
     body = (
-      <DiffBody
-        diff={current}
-        path={path}
-        settings={settings}
-        split={split}
-        onExpand={expanded ? null : () => setExpanded(true)}
-        maxHeight={inline ? 'max-h-[32rem]' : undefined}
-      />
+      <>
+        {partialNote}
+        {problemBand}
+        {discardBand}
+        {selectionBar}
+        <DiffBody
+          diff={current}
+          path={path}
+          settings={settings}
+          split={split}
+          onExpand={expanded ? null : () => setExpanded(true)}
+          maxHeight={inline ? 'max-h-[32rem]' : undefined}
+          navRef={navRef}
+          staging={
+            canPick ? { selected, onToggle: toggle, hunkActions } : undefined
+          }
+        />
+      </>
     );
 
   return (
     <section
       aria-label={`Diff of ${path}`}
+      onKeyDown={onKeyDown}
       className={cn(
         'flex min-h-0 min-w-0 flex-col',
         inline ? 'rounded-sm border border-line' : 'flex-1',

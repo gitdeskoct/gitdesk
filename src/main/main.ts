@@ -53,6 +53,7 @@ import {
 import { createGitAuth, type GitAuth } from './remote/git-auth';
 import { createAccountRecords } from './pulls/account-records';
 import { createLocalRecords, createViewedStore } from './pulls/local-records';
+import { createBranchService } from './branches/branch-service';
 import { createPullService } from './pulls/pull-service';
 import { createMoveService } from './sync/move-service';
 import { createJournal } from './sync/journal';
@@ -331,6 +332,7 @@ async function start() {
   let source: SourceService | null = null;
   const ws = createWorkspaceService({
     journal,
+    discardDir: path.join(userData, 'Discarded changes'),
     forgetAuth: (remoteId) => tokens.forget(remoteId),
     onPushed: (op) => sync?.pushed(op),
     store,
@@ -357,6 +359,11 @@ async function start() {
       openPath: (target) => shell.openPath(target),
       copyText: (text) => clipboard.writeText(text),
       isOnline: () => net.isOnline(),
+      // The path is one main found itself while detecting editors, never a renderer value.
+      fileIcon: async (target) => {
+        const icon = await app.getFileIcon(target, { size: 'normal' });
+        return icon.isEmpty() ? null : icon.toDataURL();
+      },
     },
   });
   workspace = ws;
@@ -508,6 +515,15 @@ async function start() {
     log,
   });
 
+  const branches = createBranchService({
+    store,
+    workspace: ws,
+    pulls,
+    addActivity: (id, type, detail) =>
+      store.addActivity(id, type, detail, Date.now()),
+    refresh: (id) => repos.refresh(id),
+  });
+
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
     {
@@ -525,6 +541,7 @@ async function start() {
       sync: syncService,
       source: localSource,
       remoteSource,
+      branches,
     },
   );
 

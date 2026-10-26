@@ -18,6 +18,7 @@ const VERB: Record<SyncOperation['kind'], [done: string, failed: string]> = {
   pull: ['Pulled', "Didn't pull"],
   push: ['Pushed', 'Push failed'],
   move: ['Moved to gitdesk', "Move didn't finish"],
+  'remote-delete': ['Deleted on the remote', "Didn't delete on the remote"],
 };
 
 // What the record says, in words: the kind, its target and how it ended.

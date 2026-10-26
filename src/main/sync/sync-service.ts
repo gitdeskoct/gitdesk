@@ -26,6 +26,7 @@ import {
 } from '../pulls/pull-git';
 import { sameUrl } from '../remote/git-auth';
 import { describeGitError, gitAt } from '../repos/git-inspector';
+import { parseStatusPaths } from '../repos/git-status';
 import type { RepositoryStore } from '../repos/repository-store';
 import {
   classifyFetchError,
@@ -83,13 +84,21 @@ export function createSyncService(deps: {
   // Tells the account about a push to its Git URL; resolves with what the server found.
   report?: (
     remoteId: string,
-    body: {
-      operationId: string;
-      kind: 'push';
-      ref: string;
-      oldOid: string | null;
-      newOid: string;
-    },
+    body:
+      | {
+          operationId: string;
+          kind: 'push';
+          ref: string;
+          oldOid: string | null;
+          newOid: string;
+        }
+      | {
+          operationId: string;
+          kind: 'delete';
+          ref: string;
+          oldOid: string | null;
+          newOid: null;
+        },
   ) => Promise<'confirmed' | 'unverified' | 'rejected' | 'failed'>;
   // The account's push records from every device; absent or throwing when there's no account.
   account?: {
@@ -158,23 +167,22 @@ export function createSyncService(deps: {
   }
 
   async function trackedChanges(root: string): Promise<string[]> {
+    // v2 with -z: a rename's old path is its own field, never mistaken for a changed file.
     const output = await git(root, [
       'status',
-      '--porcelain=v1',
+      '--porcelain=v2',
       '-z',
       '--untracked-files=no',
     ]);
-    return output
-      .split('\0')
-      .map((entry) => entry.slice(3))
-      .filter(Boolean)
-      .slice(0, 20);
+    return parseStatusPaths(output, 20).map((entry) => entry.path);
   }
 
   // Pushes to the account's Git URL are reported once, by operation id; a failed report waits for
   // the next push or the next start.
   async function report(op: SyncOperation): Promise<void> {
-    if (op.kind !== 'push' || !op.remote || !op.branch || !op.newOid) return;
+    const deleted = op.kind === 'remote-delete';
+    if ((op.kind !== 'push' && !deleted) || !op.remote || !op.branch) return;
+    if (!deleted && !op.newOid) return;
     const row = deps.store.get(op.repositoryId);
     if (!row?.remoteId || !deps.report || !deps.hostedUrl) return;
     const hosted = await deps.hostedUrl(row.remoteId).catch(() => null);
@@ -189,13 +197,25 @@ export function createSyncService(deps: {
       .catch(() => '');
     if (!hosted || !sameUrl(url, hosted)) return;
     try {
-      const result = await deps.report(row.remoteId, {
-        operationId: op.id,
-        kind: 'push',
-        ref: `refs/heads/${op.branch}`,
-        oldOid: op.oldOid,
-        newOid: op.newOid,
-      });
+      const ref = `refs/heads/${op.branch}`;
+      const result = await deps.report(
+        row.remoteId,
+        deleted
+          ? {
+              operationId: op.id,
+              kind: 'delete',
+              ref,
+              oldOid: op.oldOid,
+              newOid: null,
+            }
+          : {
+              operationId: op.id,
+              kind: 'push',
+              ref,
+              oldOid: op.oldOid,
+              newOid: op.newOid!,
+            },
+      );
       journal.update(op.id, {
         state: 'completed',
         server: result === 'confirmed' ? 'confirmed' : 'unverified',
@@ -647,7 +667,7 @@ export function createSyncService(deps: {
     // that was merging is either waiting on conflicts or never got going.
     async recover(): Promise<void> {
       for (const op of journal.interrupted()) {
-        if (op.kind === 'push') {
+        if (op.kind === 'push' || op.kind === 'remote-delete') {
           journal.update(op.id, {
             state: 'unknown',
             code: 'OPERATION_RESULT_UNKNOWN',

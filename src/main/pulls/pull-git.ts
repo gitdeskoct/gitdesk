@@ -10,7 +10,12 @@ import type {
 import type { DiffResult } from '../../shared/workspace';
 import { UserError } from '../errors';
 import { parseDiff } from '../repos/git-diff';
-import { describeGitError, gitAt } from '../repos/git-inspector';
+import {
+  describeGitError,
+  gitAt,
+  gitBytes,
+  GitError,
+} from '../repos/git-inspector';
 import { parseCommitRows } from '../repos/workspace-service';
 
 // Read-only Git for pull requests. Every ref is passed fully qualified after validation, and
@@ -211,7 +216,12 @@ export async function fileDiff(
     await raw(root, [...args, '--numstat', '-z', ...range, ...paths]),
   ).get(input.path);
   if (counts?.binary)
-    return { status: 'binary', path: input.path, oldPath: input.oldPath };
+    return {
+      status: 'binary',
+      path: input.path,
+      oldPath: input.oldPath,
+      ...(await blobSizes(root, input)),
+    };
   const changes = (counts?.added ?? 0) + (counts?.removed ?? 0);
   if (!input.full && changes > MAX_DIFF_CHANGES)
     return {
@@ -225,7 +235,12 @@ export async function fileDiff(
     input.full ? MAX_FULL_LINES : MAX_LINES,
   );
   if (parsed.binary)
-    return { status: 'binary', path: input.path, oldPath: parsed.oldPath };
+    return {
+      status: 'binary',
+      path: input.path,
+      oldPath: parsed.oldPath,
+      ...(await blobSizes(root, input)),
+    };
   if (!parsed.hunks.length)
     return { status: 'empty', path: input.path, modeChange: parsed.modeChange };
   return {
@@ -239,6 +254,25 @@ export async function fileDiff(
     newFile: parsed.newFile,
     deleted: parsed.deleted,
     modeChange: parsed.modeChange,
+    // Comparisons are between commits: nothing in them can be staged.
+    token: null,
+  };
+}
+
+// A binary file's size at the base and at the source; null where that side has no file.
+async function blobSizes(
+  root: string,
+  input: { base: string; source: string; path: string; oldPath: string | null },
+): Promise<{ oldSize: number | null; newSize: number | null }> {
+  const size = async (spec: string) => {
+    const text = (
+      await raw(root, ['cat-file', '-s', spec]).catch(() => '')
+    ).trim();
+    return /^[0-9]+$/.test(text) ? Number(text) : null;
+  };
+  return {
+    oldSize: await size(`${input.base}:${input.oldPath ?? input.path}`),
+    newSize: await size(`${input.source}:${input.path}`),
   };
 }
 
@@ -381,15 +415,21 @@ export async function stageText(
   stage: 1 | 2 | 3,
   path: string,
 ): Promise<{ text: string | null; binary: boolean; tooLarge: boolean }> {
-  const buffer = await gitAt(root)
-    .raw(['cat-file', 'blob', `:${stage}:${path}`])
-    .then(
-      (text) => Buffer.from(text, 'utf8'),
-      () => null,
-    );
-  if (!buffer) return { text: null, binary: false, tooLarge: false };
-  if (buffer.length > MAX_SIDE_BYTES)
+  // Bytes, not text: a binary side must be measured and sniffed as Git stored it.
+  const result = await gitBytes(
+    root,
+    ['cat-file', 'blob', `:${stage}:${path}`],
+    { maxBytes: MAX_SIDE_BYTES },
+  ).catch((err: unknown) =>
+    err instanceof GitError && /more than/.test(err.message)
+      ? ('too-large' as const)
+      : null,
+  );
+  if (result === 'too-large')
     return { text: null, binary: false, tooLarge: true };
+  if (!result || result.code !== 0)
+    return { text: null, binary: false, tooLarge: false };
+  const buffer = result.stdout;
   if (buffer.subarray(0, 8000).includes(0))
     return { text: null, binary: true, tooLarge: false };
   return { text: buffer.toString('utf8'), binary: false, tooLarge: false };

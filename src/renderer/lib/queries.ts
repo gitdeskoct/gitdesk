@@ -29,6 +29,7 @@ import {
 import type {
   AnalyticsRange,
   CommitInput,
+  ApplySelectionInput,
   DiffInput,
   GitInstall,
   RepoConfigInput,
@@ -225,6 +226,10 @@ export const useRepositoryChanges = (
     queryFn: () => repos().changes(id),
     enabled,
     staleTime: Infinity,
+    // A new status keeps the last list on screen while it loads, so an open diff, its selection
+    // and its warnings stay put; another repository's list is never shown in its place.
+    placeholderData: (previous, query) =>
+      query?.queryKey[1] === id ? previous : undefined,
   });
 
 // Asking is cheap: main answers from its cache unless a refresh is due, so this can run on mount.
@@ -521,6 +526,38 @@ export const useDiscard = (id: string) =>
     (paths: string[]) => workspace().discard({ id, paths }),
     ['changes', 'diff'],
   );
+export const useDiscardAll = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (paths: string[]) => workspace().discardAll({ id, paths }),
+    ['changes', 'diff'],
+  );
+// Never optimistic: the result says whether Git applied it, and the refetch shows what it did.
+export const useApplySelection = (id: string) =>
+  useWorkspaceMutation(
+    id,
+    (input: Omit<ApplySelectionInput, 'id'>) =>
+      workspace().applySelection({ id, ...input }),
+    ['changes', 'diff'],
+  );
+export const useCopyPatch = (id: string) =>
+  useMutation({
+    mutationFn: (input: { path: string; side: 'staged' | 'unstaged' }) =>
+      workspace().copyPatch({ id, ...input }),
+  });
+export const useRevealDiscarded = () =>
+  useMutation({
+    mutationFn: (id: string | null) => workspace().revealDiscarded(id),
+  });
+// Read again whenever the status moves, since a terminal can change user.email at any time.
+export const useCommitIdentity = (id: string, statusAt: number | null) =>
+  useQuery({
+    queryKey: ['ws-identity', id, statusAt],
+    queryFn: () => workspace().commitIdentity(id),
+    staleTime: Infinity,
+    placeholderData: (previous, query) =>
+      query?.queryKey[1] === id ? previous : undefined,
+  });
 export const useCommit = (id: string) =>
   useWorkspaceMutation(
     id,
@@ -716,7 +753,12 @@ export function useSetRepoPreferences(id: string) {
   return useMutation({
     mutationFn: (input: Omit<RepoPreferencesInput, 'id'>) =>
       workspace().setPreferences({ id, ...input }),
-    onSuccess: (prefs) => qc.setQueryData(workspaceKeys.preferences(id), prefs),
+    onSuccess: (prefs, input) => {
+      qc.setQueryData(workspaceKeys.preferences(id), prefs);
+      // Compare against and protected branches change what main reports about each branch.
+      if (input.compareAgainst !== undefined || input.protectedBranches)
+        void qc.invalidateQueries({ queryKey: ['ws-branches', id] });
+    },
   });
 }
 

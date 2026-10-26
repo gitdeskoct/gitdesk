@@ -309,8 +309,9 @@ export const pullRequestMergeResults = sqliteTable('pull_request_merge_results',
   createdAt: integer('created_at').notNull(),
 });
 
-// One row per push the desktop reported to its account Git URL, keyed by the desktop's operation
-// id so a retried report is a no-op. result is what the server found in Artifacts when told.
+// One row per push or branch deletion the desktop reported to its account Git URL, keyed by the
+// desktop's operation id so a retried report is a no-op. result is what the server found in
+// Artifacts when told; a deletion has no new commit.
 export const syncEvents = sqliteTable(
   'sync_events',
   {
@@ -321,10 +322,10 @@ export const syncEvents = sqliteTable(
     accountId: text('account_id')
       .notNull()
       .references(() => accounts.id, { onDelete: 'cascade' }),
-    kind: text('kind', { enum: ['push'] }).notNull(),
+    kind: text('kind', { enum: ['push', 'delete'] }).notNull(),
     ref: text('ref').notNull(),
     oldOid: text('old_oid'),
-    newOid: text('new_oid').notNull(),
+    newOid: text('new_oid'),
     result: text('result', { enum: ['confirmed', 'unverified'] }).notNull(),
     // The branch tip Artifacts reported when the event was recorded; null when it had none.
     tip: text('tip'),
@@ -334,7 +335,29 @@ export const syncEvents = sqliteTable(
     index('sync_events_repository').on(t.repositoryId, t.createdAt, t.operationId),
     index('sync_events_account').on(t.accountId, t.createdAt, t.operationId),
     index('sync_events_time').on(t.createdAt),
-    check('sync_events_kind', sql`${t.kind} IN ('push')`),
+    check('sync_events_kind', sql`${t.kind} IN ('push', 'delete')`),
     check('sync_events_result', sql`${t.result} IN ('confirmed', 'unverified')`),
+    // A push names its commit; only a deletion may leave it empty.
+    check('sync_events_new_oid', sql`${t.newOid} IS NOT NULL OR ${t.kind} = 'delete'`),
+  ],
+);
+
+// The hosted branches gitdesk knows about. Artifacts can't list refs, so this index is kept from
+// what the desktop reported and the server confirmed; Git's refs stay the source of truth.
+export const repositoryBranches = sqliteTable(
+  'repository_branches',
+  {
+    repositoryId: text('repository_id')
+      .notNull()
+      .references(() => repositories.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    oid: text('oid'),
+    updatedAt: integer('updated_at').notNull(),
+    // Set when a confirmed deletion was reported; a later push clears it.
+    deletedAt: integer('deleted_at'),
+  },
+  (t) => [
+    uniqueIndex('repository_branches_name').on(t.repositoryId, t.name),
+    index('repository_branches_recent').on(t.repositoryId, t.deletedAt, t.updatedAt),
   ],
 );

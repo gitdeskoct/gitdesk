@@ -70,7 +70,13 @@ export function parseDiff(output: string, maxLines: number): ParsedDiff {
       diff.hunks.push(hunk);
       continue;
     }
-    if (!hunk || line.startsWith('\\')) continue;
+    if (!hunk) continue;
+    if (line.startsWith('\\')) {
+      // "\ No newline at end of file" belongs to the line before it.
+      const last = hunk.lines.at(-1);
+      if (last && !diff.truncated) last.noEol = true;
+      continue;
+    }
     if (line.startsWith('diff --git') || line.startsWith('diff --cc')) {
       hunk = null;
       continue;
