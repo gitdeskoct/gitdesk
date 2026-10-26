@@ -19,7 +19,7 @@ import {
   useSetRepoPreferences,
   useSettings,
 } from '../../lib/queries';
-import { OpenInEditorButton } from './editor-button';
+import { EditorLogo, hasEditorLogo, OpenInEditorButton } from './editor-button';
 import { RepoSizeSection } from './repo-size';
 
 const CRLF_LABEL = {
@@ -356,24 +356,37 @@ export function RepoSettingsTab({ repo }: { repo: RepositorySummary }) {
             label="Code editor"
             description="Where Open in editor sends this repository's files."
           >
-            <select
-              aria-label="Code editor for this repository"
-              value={own.editor ?? ''}
-              onChange={(e) =>
-                patch({
-                  editor: (e.target.value || null) as RepoPreferences['editor'],
-                })
-              }
-              className="field h-9 px-2.5 text-[0.8125rem]"
-            >
-              <option value="">Follow global</option>
-              <option value="system">System default app</option>
-              {(editors ?? []).map((editor) => (
-                <option key={editor.id} value={editor.id}>
-                  {editor.name}
-                </option>
-              ))}
-            </select>
+            <div className="flex shrink-0 items-center">
+              {(() => {
+                const chosen = own.editor ?? settings?.editor ?? 'system';
+                const found = editors?.find((e) => e.id === chosen);
+                // The editor in use, by its own logo; the select keeps native keyboard behavior.
+                return hasEditorLogo(chosen, found?.icon) ? (
+                  <span className="mr-2 grid size-7 place-items-center rounded-sm bg-control">
+                    <EditorLogo id={chosen} icon={found?.icon} />
+                  </span>
+                ) : null;
+              })()}
+              <select
+                aria-label="Code editor for this repository"
+                value={own.editor ?? ''}
+                onChange={(e) =>
+                  patch({
+                    editor: (e.target.value ||
+                      null) as RepoPreferences['editor'],
+                  })
+                }
+                className="field h-9 px-2.5 text-[0.8125rem]"
+              >
+                <option value="">Follow global</option>
+                <option value="system">System default app</option>
+                {(editors ?? []).map((editor) => (
+                  <option key={editor.id} value={editor.id}>
+                    {editor.name}
+                  </option>
+                ))}
+              </select>
+            </div>
           </SettingRow>
         </SettingGroup>
       </div>

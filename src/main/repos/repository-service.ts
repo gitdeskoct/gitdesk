@@ -36,6 +36,7 @@ import {
   GitError,
   history,
   inspect,
+  changesOptions,
   listChanges,
   pathKey,
   resolveRoot,
@@ -94,7 +95,7 @@ const SHELL_SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 
 // Changes inside .git that mean the status may differ: staging, commits, checkouts, fetches.
 const WATCHED =
-  /^(index|HEAD|ORIG_HEAD|FETCH_HEAD|MERGE_HEAD|packed-refs|refs)/;
+  /^(index|HEAD|ORIG_HEAD|FETCH_HEAD|MERGE_HEAD|CHERRY_PICK_HEAD|REVERT_HEAD|rebase-merge|rebase-apply|sequencer|packed-refs|refs)/;
 
 export class RepoError extends UserError {}
 
@@ -741,7 +742,7 @@ export function createRepositoryService(deps: {
     async changes(id: string): Promise<RepositoryChanges> {
       const row = rowOrThrow(id);
       try {
-        return await listChanges(row.rootPath);
+        return await listChanges(row.rootPath, changesOptions(deps.settings()));
       } catch (err) {
         throw new RepoError(err instanceof Error ? err.message : String(err));
       }

@@ -8,8 +8,10 @@ import type {
   Comparison,
   CompareProblem,
   ConflictFile,
+  ConflictOperation,
   ConflictSides,
   ConflictState,
+  ContinueResult,
   CreatePullInput,
   MergeInput,
   MergeOperation,
@@ -36,7 +38,8 @@ import type {
 import type { DiffResult, PushResult } from '../../shared/workspace';
 import type { AppDatabase } from '../db/database';
 import { UserError } from '../errors';
-import { describeGitError, gitAt } from '../repos/git-inspector';
+import { describeGitError, gitAt, gitBytes } from '../repos/git-inspector';
+import { parseStatusPaths } from '../repos/git-status';
 import { resolveInside } from '../repos/paths';
 import type { RepositoryStore } from '../repos/repository-store';
 import { sanitizeOutput } from '../repos/workspace-service';
@@ -154,11 +157,8 @@ export function createPullService(deps: {
       if (err instanceof PullNotFound)
         throw new PullError('That pull request no longer exists.');
       log.warn('pull request step failed', err);
-      throw new PullError(
-        err instanceof Error && err.message.length < 200
-          ? err.message
-          : 'That step failed. Check the logs for details.',
-      );
+      // Raw Git text can carry paths and config; only UserError messages reach the renderer.
+      throw new PullError('That step failed. Check the logs for details.');
     }
   }
 
@@ -216,27 +216,120 @@ export function createPullService(deps: {
   // Yours and Incoming by swapping them here.
   async function swappedSides(repoId: string, root: string): Promise<boolean> {
     const op = ops.activeFor(repoId);
+    // A rebase started outside gitdesk has the same sides as gitdesk's own rebase pull.
     return (
-      op?.kind === 'pull' &&
-      String(op.strategy) === 'rebase' &&
+      (!op || (op.kind === 'pull' && String(op.strategy) === 'rebase')) &&
       (await rebasing(root))
     );
+  }
+
+  // Git's state file for an operation started outside gitdesk, read as text and capped.
+  async function stateFile(root: string, name: string): Promise<string> {
+    const target = path.resolve(root, await gitPath(root, name));
+    const text = await readFile(target, 'utf8').catch(() => '');
+    return text.trim().slice(0, 255);
+  }
+
+  // A ref or commit in words: its branch or tag name when one points at it, else a short id.
+  async function nameOf(root: string, rev: string): Promise<string> {
+    const name = (
+      await git(root, ['name-rev', '--name-only', '--no-undefined', rev]).catch(
+        () => '',
+      )
+    ).trim();
+    if (name && !/[~^]/.test(name)) return name.replace(/^tags\//, '');
+    return (await git(root, ['rev-parse', '--short', rev]).catch(() => rev))
+      .trim()
+      .slice(0, 64);
+  }
+
+  async function externalSides(
+    root: string,
+    operation: ConflictOperation,
+    files: ConflictFile[],
+  ): Promise<NonNullable<ConflictState['external']>> {
+    const branch = (await currentBranch(root)) ?? 'HEAD';
+    const subjectOf = (rev: string) =>
+      git(root, ['log', '-1', '--format=%s', rev])
+        .then((text) => text.trim().slice(0, 200) || null)
+        .catch(() => null);
+    // Staged paths belong to the operation itself; working-tree edits outside the conflict are yours.
+    const conflicted = new Set(files.map((file) => file.path));
+    const otherChanges = parseStatusPaths(
+      await git(root, [
+        'status',
+        '--porcelain=v2',
+        '-z',
+        '--untracked-files=no',
+      ]).catch(() => ''),
+    )
+      .filter((entry) => entry.y !== '.' && !conflicted.has(entry.path))
+      .map((entry) => entry.path)
+      .slice(0, 20);
+    if (operation === 'rebase') {
+      const head = await stateFile(
+        root,
+        (await exists(root, 'rebase-merge'))
+          ? 'rebase-merge/head-name'
+          : 'rebase-apply/head-name',
+      );
+      const onto = await stateFile(
+        root,
+        (await exists(root, 'rebase-merge'))
+          ? 'rebase-merge/onto'
+          : 'rebase-apply/onto',
+      );
+      return {
+        ours: head.replace(/^refs\/heads\//, '') || 'your branch',
+        theirs: /^[0-9a-f]{7,64}$/.test(onto)
+          ? await nameOf(root, onto)
+          : 'upstream',
+        subject: await subjectOf('REBASE_HEAD'),
+        otherChanges,
+      };
+    }
+    const head =
+      operation === 'merge'
+        ? 'MERGE_HEAD'
+        : operation === 'cherry-pick'
+          ? 'CHERRY_PICK_HEAD'
+          : 'REVERT_HEAD';
+    return {
+      ours: branch,
+      theirs: await nameOf(root, head),
+      subject: operation === 'merge' ? null : await subjectOf(head),
+      otherChanges,
+    };
+  }
+
+  // Runs a step that may want an editor or fail quietly: exit codes are checked, and the commit
+  // message Git prepared is accepted as it is.
+  async function finishStep(root: string, args: string[]): Promise<void> {
+    const result = await gitBytes(root, args, {
+      maxBytes: 1_000_000,
+      timeoutMs: MERGE_TIMEOUT_MS,
+      noEditor: true,
+    });
+    if (result.code !== 0)
+      throw new PullError(
+        sanitizeOutput(
+          `${result.stderr}\n${result.stdout.toString('utf8')}`,
+          root,
+        ) ?? 'Git stopped this step.',
+      );
   }
 
   // Tracked files with uncommitted changes. Untracked files don't block a merge; Git refuses on
   // its own if one would be overwritten.
   async function trackedChanges(root: string): Promise<string[]> {
+    // v2 with -z: a rename's old path is its own field, never mistaken for a changed file.
     const output = await git(root, [
       'status',
-      '--porcelain=v1',
+      '--porcelain=v2',
       '-z',
       '--untracked-files=no',
     ]);
-    return output
-      .split('\0')
-      .map((entry) => entry.slice(3))
-      .filter(Boolean)
-      .slice(0, 20);
+    return parseStatusPaths(output, 20).map((entry) => entry.path);
   }
 
   // Validates a branch pair and computes what a pull request between them would hold.
@@ -520,27 +613,36 @@ export function createPullService(deps: {
 
   async function conflictState(repoId: string): Promise<ConflictState> {
     const root = deps.workspace.rootOf(repoId);
-    const [files, merging, reverting, rebase] = await Promise.all([
-      unmergedFiles(root),
-      exists(root, 'MERGE_HEAD'),
-      exists(root, 'REVERT_HEAD'),
-      swappedSides(repoId, root),
-    ]);
+    const [files, merging, reverting, picking, inRebase, rebase] =
+      await Promise.all([
+        unmergedFiles(root),
+        exists(root, 'MERGE_HEAD'),
+        exists(root, 'REVERT_HEAD'),
+        exists(root, 'CHERRY_PICK_HEAD'),
+        rebasing(root),
+        swappedSides(repoId, root),
+      ]);
     const op = ops.activeFor(repoId);
-    const operation = merging
-      ? 'merge'
-      : reverting || op?.kind === 'revert'
-        ? 'revert'
-        : op
-          ? 'merge'
-          : null;
+    // gitdesk's own pulls, merges and reverts read as before; a rebase pull is shown as a pull.
+    const operation: ConflictOperation | null = op
+      ? merging
+        ? 'merge'
+        : reverting || op.kind === 'revert'
+          ? 'revert'
+          : 'merge'
+      : inRebase
+        ? 'rebase'
+        : picking
+          ? 'cherry-pick'
+          : merging
+            ? 'merge'
+            : reverting
+              ? 'revert'
+              : null;
     const conflicted = op ? (JSON.parse(op.conflicts_json) as string[]) : [];
     const open = new Set(files.map((file) => file.path));
     return {
-      operation:
-        operation && (files.length || merging || reverting || op)
-          ? operation
-          : null,
+      operation,
       pullId: op?.pull_id ?? null,
       upstream:
         op?.kind === 'pull' && op.branch && op.remote
@@ -548,6 +650,8 @@ export function createPullService(deps: {
           : null,
       files,
       resolved: conflicted.filter((p) => !open.has(p)),
+      external:
+        !op && operation ? await externalSides(root, operation, files) : null,
     };
   }
 
@@ -1268,17 +1372,29 @@ export function createPullService(deps: {
       wrap(() =>
         deps.workspace.serial(
           repoId,
-          async (): Promise<MergeResult | RevertResult> => {
+          async (): Promise<MergeResult | RevertResult | ContinueResult> => {
             const root = deps.workspace.rootOf(repoId);
             const op = ops.activeFor(repoId);
-            if (!op)
-              throw new PullError(
-                'gitdesk did not start this operation. Finish it in your terminal or editor.',
-              );
             if ((await unmergedFiles(root)).length)
               throw new PullError(
                 'Some files are still in conflict. Resolve each one first.',
               );
+            if (!op) {
+              const { operation } = await conflictState(repoId);
+              if (!operation)
+                throw new PullError(
+                  'No merge, pick, revert or rebase is in progress.',
+                );
+              await finishStep(
+                root,
+                operation === 'merge'
+                  ? ['commit', '--no-edit']
+                  : [operation, '--continue'],
+              );
+              const remaining = (await unmergedFiles(root)).length;
+              await deps.refresh(repoId).catch(() => undefined);
+              return { status: 'continued', operation, remaining };
+            }
             if (op.kind === 'pull') return finishPull(root, repoId, op);
             const records = deps.recordsFor(repoId);
             const pull = await pullOf(records, op.pull_id!);
@@ -1342,12 +1458,15 @@ export function createPullService(deps: {
         deps.workspace.serial(repoId, async () => {
           const root = deps.workspace.rootOf(repoId);
           const op = ops.activeFor(repoId);
+          // Git's own abort for each operation; edits outside the conflict are left as they are.
           if (await exists(root, 'MERGE_HEAD'))
-            await git(root, ['merge', '--abort']);
-          else if (op?.kind === 'pull' && (await rebasing(root)))
-            await git(root, ['rebase', '--abort']);
+            await finishStep(root, ['merge', '--abort']);
+          else if ((!op || op.kind === 'pull') && (await rebasing(root)))
+            await finishStep(root, ['rebase', '--abort']);
+          else if (await exists(root, 'CHERRY_PICK_HEAD'))
+            await finishStep(root, ['cherry-pick', '--abort']);
           else if (await exists(root, 'REVERT_HEAD'))
-            await git(root, ['revert', '--abort']);
+            await finishStep(root, ['revert', '--abort']);
           else if (op) await git(root, ['reset', '--merge']);
           if (op) {
             ops.update(op.id, { state: 'failed', message: 'Aborted.' });

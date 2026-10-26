@@ -399,18 +399,20 @@ function CodeBox({
   );
 }
 
-// A pull request merge or revert, or a pull of the upstream (`upstream` set), which reads in its
-// own words: yours and incoming rather than target and source.
+// A pull request merge or revert, a pull of the upstream (`upstream` set), or an operation started
+// outside gitdesk (`external`, from Changes): the last two read as yours and incoming.
 export function ConflictsView({
   repo,
   pullSource,
   pullTarget,
   upstream = false,
+  external = false,
 }: {
   repo: RepositorySummary;
   pullSource: string;
   pullTarget: string;
   upstream?: boolean;
+  external?: boolean;
 }) {
   const conflicts = useConflicts(repo.id, repo.statusAt);
   const [picked, setPicked] = useState<string | null>(null);
@@ -423,18 +425,31 @@ export function ConflictsView({
   const file = files.find((f) => f.path === picked) ?? files[0] ?? null;
   const sides = useConflictSides(repo.id, file?.path ?? null, repo.statusAt);
   const reverting = conflicts.data?.operation === 'revert';
-  const what = upstream ? 'pull' : reverting ? 'revert' : 'merge';
-  const sideNames = upstream
-    ? { target: `Yours, ${pullTarget}`, source: `Incoming, ${pullSource}` }
+  const outside = external ? (conflicts.data?.external ?? null) : null;
+  // Changes shows a pull or a pull request merge in its own words when gitdesk started it.
+  const theirs = outside ? outside.theirs : pullSource;
+  const ours = outside ? outside.ours : pullTarget;
+  const yoursAndIncoming = upstream || external;
+  const what = external
+    ? (conflicts.data?.operation ?? 'merge')
+    : upstream
+      ? 'pull'
+      : reverting
+        ? 'revert'
+        : 'merge';
+  const sideNames = yoursAndIncoming
+    ? { target: `Yours, ${ours}`, source: `Incoming, ${theirs}` }
     : { target: `Target, ${pullTarget}`, source: `Source, ${pullSource}` };
   // A rebase replays your commit onto the upstream, so the upstream's lines come first.
-  const markerWords = !upstream
+  const rebase =
+    conflicts.data?.upstream?.rebase || conflicts.data?.operation === 'rebase';
+  const markerWords = !yoursAndIncoming
     ? ([
         'Target side starts',
         'Source side starts',
         'Source side ends',
       ] as const)
-    : conflicts.data?.upstream?.rebase
+    : rebase
       ? ([
           'Incoming side starts',
           'Your side starts',
@@ -480,15 +495,17 @@ export function ConflictsView({
             id="conflicts-title"
             className="text-[1.0625rem] font-semibold text-ink"
           >
-            {upstream
-              ? 'Resolve conflicts to finish the pull'
+            {yoursAndIncoming
+              ? `Resolve conflicts to finish the ${what}`
               : reverting
                 ? 'Resolve revert conflicts'
                 : 'Resolve merge conflicts'}
           </h2>
           <p className="text-xs text-muted">
-            <span className="font-mono">{pullSource}</span> into{' '}
-            <span className="font-mono">{pullTarget}</span> ·{' '}
+            <span className="font-mono">{theirs}</span>{' '}
+            {what === 'rebase' ? 'under' : 'into'}{' '}
+            <span className="font-mono">{ours}</span>
+            {outside?.subject ? ` · "${outside.subject}"` : ''} ·{' '}
             {done
               ? 'every file is resolved'
               : `${plural(files.length, 'file')} left`}
@@ -515,6 +532,14 @@ export function ConflictsView({
                   });
                 if (result.status === 'reverted')
                   toast({ tone: 'success', title: 'Reverted' });
+                if (result.status === 'continued')
+                  toast({
+                    tone: 'success',
+                    title: `Continued the ${result.operation}`,
+                    description: result.remaining
+                      ? `The next step stopped on ${plural(result.remaining, 'conflicted file')}.`
+                      : undefined,
+                  });
               },
             })
           }
@@ -532,9 +557,13 @@ export function ConflictsView({
         >
           <span className="min-w-0 flex-1">
             <b className="font-semibold">Abort this {what}?</b> Git puts{' '}
-            <span className="font-mono text-[0.78125rem]">{pullTarget}</span>{' '}
-            back where it was and drops the resolutions made here. gitdesk
-            started on a clean tree, so nothing of yours is lost.
+            <span className="font-mono text-[0.78125rem]">{ours}</span> back
+            where it was and drops the resolutions made here.{' '}
+            {!outside
+              ? 'gitdesk started on a clean tree, so nothing of yours is lost.'
+              : outside.otherChanges.length
+                ? `Your edits outside the conflict stay as they are: ${outside.otherChanges.join(', ')}.`
+                : 'You have no other uncommitted edits.'}
           </span>
           <Button
             variant="danger"
@@ -632,13 +661,15 @@ export function ConflictsView({
                           'target',
                           sideNames.target,
                           sides.data.target,
-                          upstream ? 'Use yours' : 'Use target version',
+                          yoursAndIncoming ? 'Use yours' : 'Use target version',
                         ],
                         [
                           'source',
                           sideNames.source,
                           sides.data.source,
-                          upstream ? 'Use incoming' : 'Use source version',
+                          yoursAndIncoming
+                            ? 'Use incoming'
+                            : 'Use source version',
                         ],
                       ] as const
                     ).map(([take, title, text, action]) => (
@@ -695,6 +726,13 @@ export function ConflictsView({
                           <OpenInEditorButton
                             repoId={repo.id}
                             path={file.path}
+                            // The first conflict marker, so the editor opens where the work is.
+                            line={
+                              (sides.data.merged
+                                ?.split('\n')
+                                .findIndex((l) => /^<{7}(\s|$)/.test(l)) ??
+                                -1) + 1 || null
+                            }
                           />
                         </span>
                       </div>
@@ -720,8 +758,8 @@ export function ConflictsView({
                           Mark resolved
                         </Button>
                         <span id="mark-why" className="text-xs text-muted">
-                          Edit the file until no markers are left; gitdesk then
-                          stages it and asks Git again.
+                          Edit the file until no markers are left. Mark resolved
+                          stages the whole file, then asks Git again.
                         </span>
                       </div>
                     </>

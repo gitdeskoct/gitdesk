@@ -434,8 +434,11 @@ export type ConflictFile = {
   kind: ConflictKind;
   binary: boolean;
 };
+// An operation that stopped on conflicts. cherry-pick and rebase are only ever ones started outside
+// gitdesk (a terminal, an editor); gitdesk finishes them with Git's own --continue and --abort.
+export type ConflictOperation = 'merge' | 'revert' | 'cherry-pick' | 'rebase';
 export type ConflictState = {
-  operation: 'merge' | 'revert' | null;
+  operation: ConflictOperation | null;
   // The pull request gitdesk started this operation for, when it did.
   pullId: string | null;
   // A pull of the upstream: the two sides' names for the screen ("main", "origin/main"). In a
@@ -444,6 +447,21 @@ export type ConflictState = {
   files: ConflictFile[];
   // Paths that were conflicted in this operation and are now staged.
   resolved: string[];
+  // An operation gitdesk didn't start: the two sides named from Git's own refs, the commit being
+  // picked or reverted, and tracked edits outside the conflict that an abort leaves as they are.
+  external: {
+    ours: string;
+    theirs: string;
+    subject: string | null;
+    otherChanges: string[];
+  } | null;
+};
+// Git's own --continue for an operation gitdesk didn't start. `remaining` is the next step's
+// conflicts when a rebase or a multi-commit pick stops again.
+export type ContinueResult = {
+  status: 'continued';
+  operation: ConflictOperation;
+  remaining: number;
 };
 
 export const conflictPathInputSchema = z
@@ -599,7 +617,9 @@ export interface PullsApi {
   resolveConflict(
     input: z.infer<typeof resolveConflictInputSchema>,
   ): Promise<ConflictState>;
-  continueMerge(repoId: string): Promise<MergeResult | RevertResult>;
+  continueMerge(
+    repoId: string,
+  ): Promise<MergeResult | RevertResult | ContinueResult>;
   abortMerge(repoId: string): Promise<ConflictState>;
   revertInfo(input: PullRef): Promise<RevertInfo>;
   revert(input: z.infer<typeof revertInputSchema>): Promise<RevertResult>;

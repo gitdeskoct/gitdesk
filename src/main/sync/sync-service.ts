@@ -26,6 +26,7 @@ import {
 } from '../pulls/pull-git';
 import { sameUrl } from '../remote/git-auth';
 import { describeGitError, gitAt } from '../repos/git-inspector';
+import { parseStatusPaths } from '../repos/git-status';
 import type { RepositoryStore } from '../repos/repository-store';
 import {
   classifyFetchError,
@@ -158,17 +159,14 @@ export function createSyncService(deps: {
   }
 
   async function trackedChanges(root: string): Promise<string[]> {
+    // v2 with -z: a rename's old path is its own field, never mistaken for a changed file.
     const output = await git(root, [
       'status',
-      '--porcelain=v1',
+      '--porcelain=v2',
       '-z',
       '--untracked-files=no',
     ]);
-    return output
-      .split('\0')
-      .map((entry) => entry.slice(3))
-      .filter(Boolean)
-      .slice(0, 20);
+    return parseStatusPaths(output, 20).map((entry) => entry.path);
   }
 
   // Pushes to the account's Git URL are reported once, by operation id; a failed report waits for

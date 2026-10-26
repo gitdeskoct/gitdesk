@@ -519,6 +519,50 @@ describe('mergeability and merging', () => {
     expect((await pulls.get({ repoId, id: pull.id })).pull.status).toBe('open');
   });
 
+  it('finishes and aborts a cherry-pick started in a terminal, naming both sides', async () => {
+    const root = makeRepo();
+    write(root, 'src/search.ts', 'main version\n');
+    write(root, 'notes.txt', 'mine\n');
+    commit(root, 'Main rewrites search');
+    const picked = git(root, 'rev-parse', 'feature').trim();
+    // The pick stops on a conflict; an unrelated edit of yours sits beside it.
+    expect(() => git(root, 'cherry-pick', picked)).toThrow();
+    write(root, 'notes.txt', 'mine, edited\n');
+    const { repoId, pulls } = await setup(root);
+
+    const state = await pulls.conflicts(repoId);
+    expect(state.operation).toBe('cherry-pick');
+    expect(state.files.map((f) => f.path)).toEqual(['src/search.ts']);
+    expect(state.external).toMatchObject({
+      ours: 'main',
+      theirs: 'feature',
+      subject: 'Improve search',
+      otherChanges: ['notes.txt'],
+    });
+
+    // Abort puts main back and leaves the unrelated edit alone.
+    const before = git(root, 'rev-parse', 'HEAD');
+    expect(await pulls.abortMerge(repoId)).toMatchObject({ operation: null });
+    expect(git(root, 'rev-parse', 'HEAD')).toBe(before);
+    expect(readFileSync(path.join(root, 'notes.txt'), 'utf8')).toBe(
+      'mine, edited\n',
+    );
+
+    // Pick again, resolve with the incoming side, and continue without an editor.
+    expect(() => git(root, 'cherry-pick', picked)).toThrow();
+    await pulls.resolveConflict({
+      repoId,
+      path: 'src/search.ts',
+      take: 'source',
+    });
+    expect(await pulls.continueMerge(repoId)).toEqual({
+      status: 'continued',
+      operation: 'cherry-pick',
+      remaining: 0,
+    });
+    expect(git(root, 'log', '-1', '--format=%s').trim()).toBe('Improve search');
+  });
+
   it('resolves a delete/modify conflict by taking the side that deleted the file', async () => {
     const root = makeRepo();
     git(root, 'rm', '-q', 'src/search.ts');

@@ -53,6 +53,8 @@ export type DiffLine = {
   old: number | null;
   new: number | null;
   text: string;
+  // The file ends on this line without a newline.
+  noEol?: boolean;
 };
 export type DiffHunk = {
   header: string;
@@ -73,11 +75,86 @@ export type DiffResult =
       newFile: boolean;
       deleted: boolean;
       modeChange: string | null;
+      // A fingerprint of the exact patch Git produced. Staging part of the file sends it back,
+      // and main refuses when the file has changed since. null when parts can't be staged here.
+      token: string | null;
     }
-  | { status: 'binary'; path: string; oldPath: string | null }
+  | {
+      status: 'binary';
+      path: string;
+      oldPath: string | null;
+      // Bytes on each side of the comparison; null where that side has no file.
+      oldSize: number | null;
+      newSize: number | null;
+    }
   | { status: 'too-large'; path: string; added: number; removed: number }
   // No text change to show: only a mode change, or whitespace hidden by the setting.
   | { status: 'empty'; path: string; modeChange: string | null };
+
+// Part of one file's diff: whole hunks, or chosen changed lines within a hunk. Indexes are
+// positions in DiffHunk.lines of the diff the token came from.
+export const applySelectionInputSchema = z
+  .object({
+    id: repoIdSchema,
+    path: repoPathSchema,
+    side: z.enum(['unstaged', 'staged', 'untracked']),
+    action: z.enum(['stage', 'unstage', 'discard']),
+    token: z.string().regex(/^[0-9a-f]{40}$/),
+    context: z.number().int().min(0).max(1_000_000),
+    hunks: z
+      .array(
+        z
+          .object({
+            index: z.number().int().min(0).max(100_000),
+            lines: z
+              .array(z.number().int().min(0).max(1_000_000))
+              .min(1)
+              .max(100_000)
+              .optional(),
+          })
+          .strict(),
+      )
+      .min(1)
+      .max(500),
+  })
+  .strict()
+  .refine(
+    (input) =>
+      input.action === 'unstage'
+        ? input.side === 'staged'
+        : input.action === 'stage'
+          ? input.side !== 'staged'
+          : input.side === 'unstaged',
+    { message: 'That action does not apply to this side.' },
+  );
+export type ApplySelectionInput = z.infer<typeof applySelectionInputSchema>;
+export type SelectionResult =
+  | { status: 'applied'; saved: boolean }
+  // The file changed after the diff was read; nothing was applied.
+  | { status: 'stale' }
+  | {
+      status: 'rejected';
+      reason: 'busy' | 'does-not-apply' | 'unsupported';
+      message: string;
+    };
+
+// A discard can keep a copy of what it threw away (Settings › Git › Keep a copy).
+export type DiscardResult = { saved: boolean };
+
+export const copyPatchInputSchema = z
+  .object({
+    id: repoIdSchema,
+    path: repoPathSchema,
+    side: z.enum(['unstaged', 'staged']),
+  })
+  .strict();
+
+// The identity Git will write into the next commit, and which config level set it.
+export type CommitIdentity = {
+  name: string | null;
+  email: string | null;
+  scope: 'local' | 'global' | 'system' | 'environment' | null;
+};
 
 export const commitInputSchema = z
   .object({
@@ -105,6 +182,8 @@ export type CommitResult =
         | 'nothing-staged'
         | 'conflicts'
         | 'busy'
+        // A rebase or a multi-commit pick is mid-way; its own Continue makes the commit.
+        | 'operation'
         | 'failed';
       // Sanitized Git or hook output, shown inline under the form.
       output: string | null;
@@ -299,6 +378,8 @@ export type DetectedEditor = {
   name: string;
   // Where it was found, for display; the launch always uses main's own copy of the path.
   location: string;
+  // The installed program's own icon as a PNG data URL, for editors with no published logo file.
+  icon: string | null;
 };
 
 export const openInEditorInputSchema = z
@@ -418,6 +499,11 @@ export const WORKSPACE_IPC = {
   stageAll: 'workspace:stage-all',
   unstage: 'workspace:unstage',
   discard: 'workspace:discard',
+  discardAll: 'workspace:discard-all',
+  applySelection: 'workspace:apply-selection',
+  copyPatch: 'workspace:copy-patch',
+  revealDiscarded: 'workspace:reveal-discarded',
+  commitIdentity: 'workspace:commit-identity',
   commit: 'workspace:commit',
   branches: 'workspace:branches',
   switchBranch: 'workspace:switch',
@@ -454,7 +540,16 @@ export interface WorkspaceApi {
   stageAll(id: string): Promise<void>;
   unstage(input: PathsInput): Promise<void>;
   // Unstaged edits go back to the staged version; untracked files go to the system trash.
-  discard(input: PathsInput): Promise<void>;
+  discard(input: PathsInput): Promise<DiscardResult>;
+  // Staged and unstaged changes both go: the files return to HEAD.
+  discardAll(input: PathsInput): Promise<DiscardResult>;
+  // Stages, unstages or discards part of one file through `git apply`.
+  applySelection(input: ApplySelectionInput): Promise<SelectionResult>;
+  // Copies Git's patch for one file to the clipboard; the text never passes through the page.
+  copyPatch(input: z.infer<typeof copyPatchInputSchema>): Promise<void>;
+  // Shows the newest saved discard for this repository, or the whole folder for null.
+  revealDiscarded(id: string | null): Promise<void>;
+  commitIdentity(id: string): Promise<CommitIdentity>;
   // A local commit only. Nothing is pushed.
   commit(input: CommitInput): Promise<CommitResult>;
   branches(id: string): Promise<BranchList>;

@@ -58,6 +58,16 @@ export type AutoLinkState =
   | { state: 'name-taken'; name: string }
   | { state: 'failed'; message: string };
 
+// Git's unmerged XY pair in words: which side added, changed or deleted the path.
+export type ConflictKind =
+  | 'both-modified'
+  | 'both-added'
+  | 'both-deleted'
+  | 'added-by-us'
+  | 'added-by-them'
+  | 'deleted-by-us'
+  | 'deleted-by-them';
+
 export type ChangedFile = {
   path: string;
   kind: 'staged' | 'modified' | 'untracked' | 'conflict';
@@ -66,6 +76,15 @@ export type ChangedFile = {
   // The path before a rename or copy.
   origPath?: string | null;
   submodule?: boolean;
+  // What changed in a submodule: its recorded commit, tracked files inside, untracked files inside.
+  submoduleState?: { commit: boolean; tracked: boolean; untracked: boolean };
+  conflict?: ConflictKind;
+  // File mode change on this side, such as "100644 → 100755".
+  modeChange?: string | null;
+  // Line counts from this side's own diff; binary files have none.
+  added?: number;
+  removed?: number;
+  binary?: boolean;
 };
 
 export type RepositoryChanges = { files: ChangedFile[]; truncated: boolean };

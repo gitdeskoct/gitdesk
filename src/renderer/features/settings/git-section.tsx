@@ -21,6 +21,7 @@ import {
   useGitIdentity,
   useGitInstall,
   useOpenGitInstallPage,
+  useRevealDiscarded,
   useSetGitIdentity,
   useSetGlobalPrune,
   useSettings,
@@ -300,9 +301,20 @@ const FETCH_INTERVALS = [
   { value: '30', label: '30 min' },
 ] as const;
 
+const UNTRACKED = [
+  { value: 'all', label: 'Each file' },
+  { value: 'normal', label: 'Folders only' },
+] as const;
+const SUBMODULES = [
+  { value: 'none', label: 'All' },
+  { value: 'dirty', label: 'Commits only' },
+  { value: 'all', label: 'Hide' },
+] as const;
+
 function CommitFetchGroups() {
   const { data: settings } = useSettings();
   const update = useUpdateSettings();
+  const showDiscarded = useRevealDiscarded();
   const install = useGitInstall();
   const prune = useSetGlobalPrune();
   if (!settings) return null;
@@ -360,6 +372,97 @@ function CommitFetchGroups() {
           <span className="text-xs text-muted">Always</span>
         </SettingRow>
       </SettingGroup>
+      <SettingGroup title="Changes and staging">
+        <SettingRow
+          id="changes-untracked"
+          label="Untracked files"
+          description="Each file lists every new file on its own, so each can be staged alone. Folders only shows a new folder as one row."
+        >
+          <Segmented
+            label="Untracked files"
+            value={settings.changesUntracked}
+            options={UNTRACKED}
+            onChange={(changesUntracked) => update.mutate({ changesUntracked })}
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-renames"
+          label="Detect renames"
+          description="Git pairs a deleted and an added file as one rename when their contents are mostly the same."
+        >
+          <Switch
+            aria-label="Detect renames"
+            checked={settings.changesRenames}
+            onCheckedChange={(changesRenames) =>
+              update.mutate({ changesRenames })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-submodules"
+          label="Submodule changes"
+          description="All shows a submodule's new commit and edits inside it. Commits only leaves out edits inside. Hide leaves submodules out of Changes."
+        >
+          <Segmented
+            label="Submodule changes"
+            value={settings.changesSubmodules}
+            options={SUBMODULES}
+            onChange={(changesSubmodules) =>
+              update.mutate({ changesSubmodules })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-partial"
+          label="Stage parts of a file"
+          description="Shows a select box on each changed line and Stage change on each change in a diff. Whole files can always be staged."
+        >
+          <Switch
+            aria-label="Stage parts of a file"
+            checked={settings.changesPartial}
+            onCheckedChange={(changesPartial) =>
+              update.mutate({ changesPartial })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="changes-keep-discarded"
+          label="Keep a copy of discarded changes"
+          description="Saves what each discard removes as a patch file in Discarded changes, in gitdesk's app data folder, before Git runs."
+        >
+          <div className="flex items-center gap-3">
+            <Button
+              size="sm"
+              pending={showDiscarded.isPending}
+              onClick={() => showDiscarded.mutate(null)}
+            >
+              Show folder
+            </Button>
+            <Switch
+              aria-label="Keep a copy of discarded changes"
+              checked={settings.changesKeepDiscarded}
+              onCheckedChange={(changesKeepDiscarded) =>
+                update.mutate({ changesKeepDiscarded })
+              }
+            />
+          </div>
+        </SettingRow>
+        <SettingRow
+          id="changes-resolved"
+          label="Mark resolved"
+          description="Stages the whole working file, the way git add does. It stays unavailable while conflict markers remain."
+        >
+          <span className="text-xs text-muted">Always</span>
+        </SettingRow>
+      </SettingGroup>
+      {showDiscarded.isError && (
+        <InlineStatus tone="danger" className="mt-3">
+          {ipcErrorMessage(
+            showDiscarded.error,
+            "Couldn't open the Discarded changes folder.",
+          )}
+        </InlineStatus>
+      )}
       <SettingGroup title="Fetching">
         <SettingRow
           id="auto-fetch"

@@ -1,11 +1,23 @@
-import { randomUUID } from 'node:crypto';
-import { lstat, readFile, readdir, readlink, stat } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import {
+  lstat,
+  mkdir,
+  readFile,
+  readdir,
+  readlink,
+  stat,
+  writeFile,
+} from 'node:fs/promises';
 import path from 'node:path';
 import type { ChangedFile, ProgressEvent } from '../../shared/repos';
 import type { Settings } from '../../shared/settings';
 import {
   HISTORY_PAGE,
+  type ApplySelectionInput,
   type BranchList,
+  type CommitIdentity,
+  type DiscardResult,
+  type SelectionResult,
   type CommitDetail,
   type CommitInput,
   type CommitResult,
@@ -42,13 +54,16 @@ import { parseDiff, parseNumstat, untrackedDiff } from './git-diff';
 import { aggregate, parseLogNumstat, rangeStart } from './git-analytics';
 import {
   canonicalPath,
+  changesOptions,
   describeGitError,
   gitAt,
+  gitBytes,
   pathKey,
   STATUS_ARGS,
-  WORKSPACE_STATUS_ARGS,
+  workspaceStatusArgs,
 } from './git-inspector';
 import { parseStatus } from './git-status';
+import { buildPatch, newFilePatch, parsePatch } from './patch-builder';
 import { resolveInside } from './paths';
 import type { RepositoryStore } from './repository-store';
 import { measureRepository } from './repo-size';
@@ -67,7 +82,12 @@ export type WorkspaceDesktop = {
   openPath(target: string): Promise<string>;
   copyText(text: string): void;
   isOnline(): boolean;
+  // The icon the OS shows for a program, as a PNG data URL.
+  fileIcon?(target: string): Promise<string | null>;
 };
+
+// Editors that publish no logo file: their installed program's icon stands in.
+const ICON_FROM_APP = new Set(['sublime', 'windsurf', 'notepadpp']);
 
 // The size guard: past these a diff asks before it loads, so one generated file can't stall the UI.
 const MAX_DIFF_CHANGES = 5000;
@@ -75,7 +95,21 @@ const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_LINES = 10_000;
 const MAX_FULL_LINES = 50_000;
 const BATCH = 100;
-const COMMIT_TIMEOUT_MS = 120_000;
+// Commits run hooks, so they get a long limit; output past the cap stops nothing but is cut.
+const COMMIT_TIMEOUT_MS = 300_000;
+const MAX_COMMIT_OUTPUT = 16 * 1024 * 1024;
+const WRITE_TIMEOUT_MS = 60_000;
+const MAX_WRITE_OUTPUT = 1024 * 1024;
+const MAX_DIFF_BYTES = 64 * 1024 * 1024;
+const BUSY =
+  'Another Git process is using this repository, so nothing changed. gitdesk leaves its lock alone; try again when it finishes.';
+const REFUSED = {
+  empty: 'Pick at least one added or removed line.',
+  'new-file': 'This file is new in the index. Unstage the whole file instead.',
+  deleted:
+    'The file is deleted in your working tree. Discard the whole file to bring it back.',
+  renamed: 'A rename is staged, unstaged or discarded as a whole file.',
+} as const;
 const FETCH_TIMEOUT_MS = 60_000;
 // Inactivity limit for a push; Git reports progress while it sends, so only a stall trips it.
 const PUSH_TIMEOUT_MS = 120_000;
@@ -306,6 +340,8 @@ export function createWorkspaceService(deps: {
     scope: 'read' | 'write',
   ) => Promise<Record<string, string> | null>;
   desktop: WorkspaceDesktop;
+  // Where Keep a copy of discarded changes writes its patches; off when unset.
+  discardDir?: string;
   settings: () => Settings;
   watcher: TreeWatcher;
   emitProgress?: (event: ProgressEvent) => void;
@@ -352,6 +388,153 @@ export function createWorkspaceService(deps: {
     return run;
   }
 
+  const statusArgs = () => workspaceStatusArgs(changesOptions(deps.settings()));
+
+  // Another program's index.lock is never touched: writes wait for it to go away.
+  async function lockHeld(root: string): Promise<boolean> {
+    const lock = (
+      await gitAt(root)
+        .raw(['rev-parse', '--git-path', 'index.lock'])
+        .catch(() => '')
+    ).trim();
+    return (
+      !!lock &&
+      (await stat(path.resolve(root, lock)).then(
+        () => true,
+        () => false,
+      ))
+    );
+  }
+  async function assertUnlocked(root: string): Promise<void> {
+    if (await lockHeld(root)) throw new WorkspaceError(BUSY);
+  }
+
+  // Writes read Git's exit code: simple-git reports a failure with empty stderr as success.
+  async function gitWrite(
+    root: string,
+    args: string[],
+    input?: Buffer,
+  ): Promise<void> {
+    const result = await gitBytes(root, args, {
+      maxBytes: MAX_WRITE_OUTPUT,
+      input,
+      timeoutMs: WRITE_TIMEOUT_MS,
+    }).catch((err: unknown) => {
+      throw new WorkspaceError(describeGitError(err));
+    });
+    if (result.code === 0) return;
+    if (/index\.lock|Another git process/i.test(result.stderr))
+      throw new WorkspaceError(BUSY);
+    throw new WorkspaceError(
+      sanitizeOutput(result.stderr, root)?.split('\n')[0] ??
+        "Git didn't make that change.",
+    );
+  }
+
+  // Git's patch for one file, as the exact bytes it wrote: the diff view, the staleness token,
+  // partial staging and Copy patch all start from this.
+  async function diffBytes(
+    root: string,
+    side: 'staged' | 'unstaged' | 'conflict',
+    file: ChangedFile,
+    options: { context: number; ignoreWhitespace?: boolean; binary?: boolean },
+  ): Promise<Buffer> {
+    const args = [
+      'diff',
+      '--no-ext-diff',
+      '--no-textconv',
+      '--no-color',
+      deps.settings().changesRenames ? '-M' : '--no-renames',
+      ...(side === 'staged' ? ['--cached'] : []),
+      ...(options.ignoreWhitespace ? ['-w'] : []),
+      ...(options.binary ? ['--binary'] : []),
+      `-U${options.context}`,
+      '--',
+      file.path,
+      ...(file.origPath ? [file.origPath] : []),
+    ];
+    const result = await gitBytes(root, args, {
+      maxBytes: MAX_DIFF_BYTES,
+    }).catch((err: unknown) => {
+      throw new WorkspaceError(describeGitError(err));
+    });
+    if (result.code !== 0)
+      throw new WorkspaceError("Git couldn't compare this file.");
+    return result.stdout;
+  }
+
+  const tokenOf = (side: string, context: number, bytes: Buffer) =>
+    createHash('sha1')
+      .update(`${side}\0${context}\0`)
+      .update(bytes)
+      .digest('hex');
+
+  async function blobSize(root: string, spec: string): Promise<number | null> {
+    const text = (
+      await gitAt(root)
+        .raw(['cat-file', '-s', spec])
+        .catch(() => '')
+    ).trim();
+    return /^\d+$/.test(text) ? Number(text) : null;
+  }
+
+  // The exact changes a discard would remove, binary files included, for its saved copy.
+  async function patchOf(
+    root: string,
+    command: string[],
+    paths: string[],
+  ): Promise<Buffer> {
+    const result = await gitBytes(
+      root,
+      [
+        ...command,
+        '--binary',
+        '--no-ext-diff',
+        '--no-textconv',
+        '--no-color',
+        '--',
+        ...paths,
+      ],
+      { maxBytes: MAX_DIFF_BYTES },
+    ).catch(() => null);
+    if (!result || result.code !== 0)
+      throw new WorkspaceError(
+        "Couldn't read the changes to keep a copy, so nothing was discarded.",
+      );
+    return result.stdout;
+  }
+
+  // Keeps what a discard throws away as a patch in the app data folder, before Git runs. When
+  // the copy can't be written, nothing is discarded.
+  async function saveDiscard(
+    id: string,
+    label: string,
+    patch: Buffer,
+  ): Promise<boolean> {
+    if (!deps.settings().changesKeepDiscarded || !deps.discardDir) return false;
+    if (!patch.length) return false;
+    const safe = (text: string) =>
+      text.replace(/[^\w.-]+/g, '_').slice(0, 80) || 'file';
+    const folder = path.join(
+      deps.discardDir,
+      safe(deps.store.get(id)?.name ?? id),
+    );
+    const stamp = new Date(now()).toISOString().replace(/[:.]/g, '-');
+    try {
+      await mkdir(folder, { recursive: true });
+      await writeFile(
+        path.join(folder, `${stamp}-${safe(path.basename(label))}.patch`),
+        patch,
+        { flag: 'wx' },
+      );
+    } catch {
+      throw new WorkspaceError(
+        "Couldn't save a copy of the changes, so nothing was discarded.",
+      );
+    }
+    return true;
+  }
+
   async function gitRaw(root: string, args: string[]): Promise<string> {
     try {
       return await gitAt(root).raw(args);
@@ -370,14 +553,14 @@ export function createWorkspaceService(deps: {
     root: string,
     paths: string[],
   ): Promise<ChangedFile[]> {
-    const whole = parseStatus(await gitRaw(root, WORKSPACE_STATUS_ARGS));
+    const whole = parseStatus(await gitRaw(root, statusArgs()));
     if (!whole.truncated) return whole.files;
     const seen = new Set(whole.files.map((file) => file.path));
     const rest = paths.filter((p) => !seen.has(p));
     const files = [...whole.files];
     for (let i = 0; i < rest.length; i += BATCH) {
       const output = await gitRaw(root, [
-        ...WORKSPACE_STATUS_ARGS,
+        ...statusArgs(),
         '--',
         ...rest.slice(i, i + BATCH),
       ]);
@@ -434,8 +617,10 @@ export function createWorkspaceService(deps: {
       const info = await lstat(target);
       if (info.isSymbolicLink()) {
         const link = await readlink(target);
+        // A symlink is staged whole: its target, not lines of a file.
         return {
           status: 'text',
+          token: null,
           path: input.path,
           oldPath: null,
           newFile: true,
@@ -451,7 +636,14 @@ export function createWorkspaceService(deps: {
         return { status: 'too-large', path: input.path, added: 0, removed: 0 };
       const buffer = await readFile(target);
       if (buffer.subarray(0, 8000).includes(0))
-        return { status: 'binary', path: input.path, oldPath: null };
+        return {
+          status: 'binary',
+          path: input.path,
+          oldPath: null,
+          oldSize: null,
+          newSize: info.size,
+        };
+      const lines = untrackedDiff(buffer.toString('utf8'), maxLines);
       return {
         status: 'text',
         path: input.path,
@@ -460,31 +652,56 @@ export function createWorkspaceService(deps: {
         deleted: false,
         modeChange: null,
         removed: 0,
-        ...untrackedDiff(buffer.toString('utf8'), maxLines),
+        ...lines,
+        token:
+          lines.truncated || input.ignoreWhitespace
+            ? null
+            : tokenOf('untracked', input.context, buffer),
       };
     }
 
-    const base = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '-M'];
-    if (input.side === 'staged') base.push('--cached');
-    if (input.ignoreWhitespace) base.push('-w');
-    const paths = [
-      '--',
-      input.path,
-      ...(file!.origPath ? [file!.origPath] : []),
-    ];
+    const side = input.side;
+    const binarySizes = async () => {
+      const old = file!.origPath ?? input.path;
+      if (side === 'staged')
+        return {
+          oldSize: await blobSize(root, `HEAD:${old}`),
+          newSize: await blobSize(root, `:${input.path}`),
+        };
+      return {
+        oldSize: await blobSize(root, `:${input.path}`),
+        newSize: await stat(path.resolve(root, input.path))
+          .then((info) => info.size)
+          .catch(() => null),
+      };
+    };
 
-    if (input.side !== 'conflict') {
+    if (side !== 'conflict') {
       const counts = parseNumstat(
-        await gitRaw(root, [...base, '--numstat', '-z', ...paths]),
+        await gitRaw(root, [
+          'diff',
+          '--no-ext-diff',
+          '--no-textconv',
+          '--no-color',
+          deps.settings().changesRenames ? '-M' : '--no-renames',
+          ...(side === 'staged' ? ['--cached'] : []),
+          ...(input.ignoreWhitespace ? ['-w'] : []),
+          '--numstat',
+          '-z',
+          '--',
+          input.path,
+          ...(file!.origPath ? [file!.origPath] : []),
+        ]),
       );
       if (counts.binary)
         return {
           status: 'binary',
           path: input.path,
           oldPath: file!.origPath ?? null,
+          ...(await binarySizes()),
         };
       const bytes =
-        input.side === 'unstaged'
+        side === 'unstaged'
           ? await stat(path.resolve(root, input.path))
               .then((info) => info.size)
               .catch(() => 0)
@@ -495,13 +712,26 @@ export function createWorkspaceService(deps: {
           bytes > MAX_FILE_BYTES)
       )
         return { status: 'too-large', path: input.path, ...counts };
+    } else {
+      // Conflicted files get the same size guard, measured on the working file.
+      const bytes = await stat(path.resolve(root, input.path))
+        .then((info) => info.size)
+        .catch(() => 0);
+      if (!input.full && bytes > MAX_FILE_BYTES)
+        return { status: 'too-large', path: input.path, added: 0, removed: 0 };
     }
-    const parsed = parseDiff(
-      await gitRaw(root, [...base, `-U${input.context}`, ...paths]),
-      maxLines,
-    );
+    const raw = await diffBytes(root, side, file!, {
+      context: input.context,
+      ignoreWhitespace: input.ignoreWhitespace,
+    });
+    const parsed = parseDiff(raw.toString('utf8'), maxLines);
     if (parsed.binary)
-      return { status: 'binary', path: input.path, oldPath: parsed.oldPath };
+      return {
+        status: 'binary',
+        path: input.path,
+        oldPath: parsed.oldPath,
+        ...(await binarySizes()),
+      };
     if (!parsed.hunks.length)
       return {
         status: 'empty',
@@ -519,12 +749,20 @@ export function createWorkspaceService(deps: {
       newFile: parsed.newFile,
       deleted: parsed.deleted,
       modeChange: parsed.modeChange,
+      // Hidden whitespace or a cut-off view can't be mapped back onto Git's own patch.
+      token:
+        side === 'conflict' ||
+        input.ignoreWhitespace ||
+        parsed.truncated ||
+        file!.submodule
+          ? null
+          : tokenOf(side, input.context, raw),
     };
   }
 
   async function inBatches(root: string, command: string[], paths: string[]) {
     for (let i = 0; i < paths.length; i += BATCH)
-      await gitRaw(root, [...command, '--', ...paths.slice(i, i + BATCH)]);
+      await gitWrite(root, [...command, '--', ...paths.slice(i, i + BATCH)]);
   }
 
   // Staging a conflicted file marks it resolved, so it must not still hold conflict markers.
@@ -638,6 +876,21 @@ export function createWorkspaceService(deps: {
       remote,
       truncated: lines.length >= 1000,
     };
+  }
+
+  async function gitStateExists(root: string, name: string): Promise<boolean> {
+    const target = (
+      await gitAt(root)
+        .raw(['rev-parse', '--git-path', name])
+        .catch(() => '')
+    ).trim();
+    return (
+      !!target &&
+      stat(path.resolve(root, target)).then(
+        () => true,
+        () => false,
+      )
+    );
   }
 
   async function operationInProgress(root: string): Promise<boolean> {
@@ -1172,6 +1425,7 @@ export function createWorkspaceService(deps: {
     stage: (input: PathsInput) =>
       serial(input.id, async () => {
         const root = rootOf(input.id);
+        await assertUnlocked(root);
         const files = await requireChanged(input.id, root, input.paths, [
           'modified',
           'untracked',
@@ -1190,18 +1444,20 @@ export function createWorkspaceService(deps: {
     stageAll: (id: string) =>
       serial(id, async () => {
         const root = rootOf(id);
+        await assertUnlocked(root);
         const status = parseStatus(await gitRaw(root, STATUS_ARGS));
         if (status.conflicts > 0)
           throw new WorkspaceError(
             'Resolve the conflicted files first. Stage all would mark them resolved.',
           );
-        await gitRaw(root, ['add', '--all']);
+        await gitWrite(root, ['add', '--all']);
         await deps.refresh(id);
       }),
 
     unstage: (input: PathsInput) =>
       serial(input.id, async () => {
         const root = rootOf(input.id);
+        await assertUnlocked(root);
         const files = await requireChanged(input.id, root, input.paths, [
           'staged',
         ]);
@@ -1218,8 +1474,9 @@ export function createWorkspaceService(deps: {
 
     // Unstaged edits go back to the staged version; untracked files go to the system trash.
     discard: (input: PathsInput) =>
-      serial(input.id, async () => {
+      serial(input.id, async (): Promise<DiscardResult> => {
         const root = rootOf(input.id);
+        await assertUnlocked(root);
         const files = await requireChanged(input.id, root, input.paths, [
           'modified',
           'untracked',
@@ -1227,28 +1484,260 @@ export function createWorkspaceService(deps: {
         const tracked = files
           .filter((f) => f.kind === 'modified')
           .map((f) => f.path);
-        if (tracked.length)
+        let saved = false;
+        if (tracked.length) {
+          saved = await saveDiscard(
+            input.id,
+            tracked.length === 1 ? tracked[0]! : `${tracked.length}-files`,
+            await patchOf(root, ['diff'], tracked),
+          );
           await inBatches(root, ['restore', '--worktree'], tracked);
+        }
         for (const file of files.filter((f) => f.kind === 'untracked')) {
           const target = await insideRoot(root, file.path);
           try {
             await deps.desktop.trashItem(target);
           } catch {
+            await deps.refresh(input.id).catch(() => undefined);
             throw new WorkspaceError(
-              `Couldn't move ${file.path} to the trash. Nothing else was changed.`,
+              tracked.length
+                ? `Couldn't move ${file.path} to the trash. The tracked files were already discarded.`
+                : `Couldn't move ${file.path} to the trash. Nothing else was changed.`,
             );
           }
         }
         await deps.refresh(input.id);
+        return { saved };
       }),
+
+    // Back to HEAD for both the index and the working tree, a copy saved first.
+    discardAll: (input: PathsInput) =>
+      serial(input.id, async (): Promise<DiscardResult> => {
+        const root = rootOf(input.id);
+        await assertUnlocked(root);
+        if (!(await headOid(root)))
+          throw new WorkspaceError(
+            "There's no commit to go back to yet. Unstage the files, then discard them.",
+          );
+        const files = await requireChanged(input.id, root, input.paths, [
+          'staged',
+          'modified',
+        ]);
+        const paths = [
+          ...new Set(
+            files.flatMap((f) =>
+              f.origPath ? [f.path, f.origPath] : [f.path],
+            ),
+          ),
+        ];
+        const saved = await saveDiscard(
+          input.id,
+          paths.length === 1 ? paths[0]! : `${paths.length}-files`,
+          await patchOf(root, ['diff', 'HEAD'], paths),
+        );
+        await inBatches(
+          root,
+          ['restore', '--source=HEAD', '--staged', '--worktree'],
+          paths,
+        );
+        await deps.refresh(input.id);
+        return { saved };
+      }),
+
+    applySelection: (input: ApplySelectionInput) =>
+      serial(input.id, async (): Promise<SelectionResult> => {
+        const root = rootOf(input.id);
+        const refuse = (message: string): SelectionResult => ({
+          status: 'rejected',
+          reason: 'unsupported',
+          message,
+        });
+        if (await lockHeld(root))
+          return { status: 'rejected', reason: 'busy', message: BUSY };
+        const kind: ChangedFile['kind'] =
+          input.side === 'staged'
+            ? 'staged'
+            : input.side === 'unstaged'
+              ? 'modified'
+              : 'untracked';
+        const [file] = await requireChanged(
+          input.id,
+          root,
+          [input.path],
+          [kind],
+        );
+        if (file!.submodule)
+          return refuse(
+            'A submodule is staged as a whole: its new commit, not lines.',
+          );
+
+        let text: string;
+        if (input.side === 'untracked') {
+          const target = await insideRoot(root, input.path);
+          const info = await lstat(target);
+          if (!info.isFile() || info.size > MAX_FILE_BYTES)
+            return refuse('Only a regular text file can be staged in parts.');
+          const bytes = await readFile(target);
+          if (tokenOf('untracked', input.context, bytes) !== input.token)
+            return { status: 'stale' };
+          if (bytes.subarray(0, 8000).includes(0))
+            return refuse('A binary file is staged as a whole.');
+          const executable =
+            process.platform !== 'win32' && (info.mode & 0o111) !== 0;
+          // The patch is bytes held as latin1, so the name goes in as its UTF-8 bytes.
+          text = newFilePatch(
+            Buffer.from(input.path, 'utf8').toString('latin1'),
+            bytes.toString('latin1'),
+            executable ? '100755' : '100644',
+          );
+        } else {
+          const bytes = await diffBytes(root, input.side, file!, {
+            context: input.context,
+          });
+          if (tokenOf(input.side, input.context, bytes) !== input.token)
+            return { status: 'stale' };
+          text = bytes.toString('latin1');
+        }
+
+        const parsed = parsePatch(text);
+        if (!parsed)
+          return refuse('Git returned no text changes for this file.');
+        const reverse = input.action !== 'stage';
+        const built = buildPatch(parsed, input.hunks, reverse);
+        if ('refused' in built) return refuse(REFUSED[built.refused]);
+        const patch = Buffer.from(built.patch, 'latin1');
+        const args = [
+          'apply',
+          ...(input.action === 'discard' ? [] : ['--cached']),
+          ...(reverse ? ['-R'] : []),
+          '--whitespace=nowarn',
+          '--recount',
+          ...(input.context === 0 ? ['--unidiff-zero'] : []),
+        ];
+        // --check first, so a selection Git can't apply changes nothing at all.
+        const check = await gitBytes(root, [...args, '--check', '-'], {
+          maxBytes: MAX_WRITE_OUTPUT,
+          input: patch,
+        });
+        if (check.code !== 0)
+          return /index\.lock/.test(check.stderr)
+            ? { status: 'rejected', reason: 'busy', message: BUSY }
+            : {
+                status: 'rejected',
+                reason: 'does-not-apply',
+                message:
+                  "Git can't apply that selection on its own, so nothing changed. Take the whole change, or edit the file in your editor.",
+              };
+        const saved =
+          input.action === 'discard'
+            ? await saveDiscard(input.id, input.path, patch)
+            : false;
+        await gitWrite(root, [...args, '-'], patch);
+        await deps.refresh(input.id).catch(() => undefined);
+        return { status: 'applied', saved };
+      }),
+
+    copyPatch: async (input: {
+      id: string;
+      path: string;
+      side: 'staged' | 'unstaged';
+    }) => {
+      const root = rootOf(input.id);
+      const [file] = await requireChanged(
+        input.id,
+        root,
+        [input.path],
+        [input.side === 'staged' ? 'staged' : 'modified'],
+      );
+      const bytes = await diffBytes(root, input.side, file!, {
+        context: deps.settings().diffContext,
+        binary: true,
+      });
+      if (!bytes.length)
+        throw new WorkspaceError('There are no changes in this file to copy.');
+      deps.desktop.copyText(bytes.toString('utf8'));
+    },
+
+    revealDiscarded: async (id: string | null) => {
+      if (!deps.discardDir)
+        throw new WorkspaceError('Discarded changes are not kept here.');
+      const folder =
+        id === null
+          ? deps.discardDir
+          : path.join(
+              deps.discardDir,
+              (deps.store.get(id)?.name ?? id)
+                .replace(/[^\w.-]+/g, '_')
+                .slice(0, 80) || 'file',
+            );
+      await mkdir(folder, { recursive: true });
+      const newest = (await readdir(folder).catch(() => [] as string[]))
+        .filter((name) => name.endsWith('.patch'))
+        .sort()
+        .at(-1);
+      if (newest) deps.desktop.showItemInFolder(path.join(folder, newest));
+      else await deps.desktop.openPath(folder);
+    },
+
+    commitIdentity: async (id: string): Promise<CommitIdentity> => {
+      const root = rootOf(id);
+      const read = async (key: string) => {
+        const line = (
+          await gitAt(root)
+            .raw(['config', '--show-scope', '--get', key])
+            .catch(() => '')
+        ).trim();
+        const tab = line.indexOf('\t');
+        return tab < 0
+          ? null
+          : {
+              scope: line.slice(0, tab),
+              value: line.slice(tab + 1).slice(0, 254),
+            };
+      };
+      const [name, email] = await Promise.all([
+        read('user.name'),
+        read('user.email'),
+      ]);
+      // Git's own environment overrides win over config, as they do when Git commits.
+      const envName = process.env.GIT_AUTHOR_NAME;
+      const envEmail = process.env.GIT_AUTHOR_EMAIL;
+      const scope =
+        envName || envEmail ? 'environment' : (email ?? name)?.scope;
+      return {
+        name: envName || name?.value || null,
+        email: envEmail || email?.value || null,
+        scope:
+          scope === 'local' ||
+          scope === 'global' ||
+          scope === 'system' ||
+          scope === 'environment'
+            ? scope
+            : null,
+      };
+    },
 
     commit: (input: CommitInput) =>
       serial(input.id, async (): Promise<CommitResult> => {
         const root = rootOf(input.id);
+        if (await lockHeld(root))
+          return { status: 'rejected', reason: 'busy', output: null };
         const status = parseStatus(await gitRaw(root, STATUS_ARGS));
         if (status.conflicts > 0)
           return { status: 'rejected', reason: 'conflicts', output: null };
-        if (status.staged === 0)
+        // A rebase or a pick of several commits makes its own commits on Continue.
+        const [merging, stepping] = await Promise.all([
+          gitStateExists(root, 'MERGE_HEAD'),
+          Promise.all(
+            ['rebase-merge', 'rebase-apply', 'sequencer'].map((name) =>
+              gitStateExists(root, name),
+            ),
+          ).then((found) => found.some(Boolean)),
+        ]);
+        if (stepping)
+          return { status: 'rejected', reason: 'operation', output: null };
+        // A merge whose resolution matches HEAD stages nothing and still needs its commit.
+        if (status.staged === 0 && !merging)
           return { status: 'rejected', reason: 'nothing-staged', output: null };
         const description = input.description.trim();
         const message = description
@@ -1256,48 +1745,54 @@ export function createWorkspaceService(deps: {
           : input.summary;
         const args = ['commit', '--quiet', '-m', message];
         if (deps.settings().commitSignoff) args.push('--signoff');
-        try {
-          await gitAt(root, { timeoutMs: COMMIT_TIMEOUT_MS }).raw(args);
-        } catch (err) {
-          const text = errorText(err);
-          const output = sanitizeOutput(text, root);
-          if (
-            /Please tell me who you are|unable to auto-detect email|empty ident|no email was given/i.test(
-              text,
-            )
-          )
-            return { status: 'rejected', reason: 'identity', output: null };
-          if (/index\.lock|Another git process/i.test(text))
-            return { status: 'rejected', reason: 'busy', output: null };
-          if (/nothing (added )?to commit|no changes added/i.test(text))
-            return {
-              status: 'rejected',
-              reason: 'nothing-staged',
-              output: null,
-            };
-          const hooksDir = (
-            await gitAt(root)
-              .raw(['rev-parse', '--git-path', 'hooks'])
-              .catch(() => '')
-          ).trim();
-          const hooks = hooksDir
-            ? await readdir(path.resolve(root, hooksDir)).catch(
-                () => [] as string[],
-              )
-            : [];
-          const hook = hooks.some((name) =>
-            ['pre-commit', 'commit-msg', 'prepare-commit-msg'].includes(name),
-          );
+        const before = await headOid(root);
+        const result = await gitBytes(root, args, {
+          maxBytes: MAX_COMMIT_OUTPUT,
+          timeoutMs: COMMIT_TIMEOUT_MS,
+        }).catch((err: unknown) => ({
+          code: -1,
+          stdout: Buffer.alloc(0),
+          stderr: errorText(err),
+        }));
+        const after = await headOid(root);
+        await deps.refresh(input.id).catch(() => undefined);
+        // Success is a new HEAD, not just exit 0: a hook can fail without a word.
+        if (result.code === 0 && after && after !== before)
           return {
-            status: 'rejected',
-            reason: hook ? 'hook' : 'failed',
-            output,
+            status: 'committed',
+            oid: after,
+            branch: await currentBranch(root),
           };
-        } finally {
-          await deps.refresh(input.id).catch(() => undefined);
-        }
-        const oid = (await headOid(root)) ?? '';
-        return { status: 'committed', oid, branch: await currentBranch(root) };
+        const text = `${result.stderr}\n${result.stdout.toString('utf8')}`;
+        const output = sanitizeOutput(text, root);
+        if (
+          /Please tell me who you are|unable to auto-detect email|empty ident|no email was given/i.test(
+            text,
+          )
+        )
+          return { status: 'rejected', reason: 'identity', output: null };
+        if (/index\.lock|Another git process/i.test(text))
+          return { status: 'rejected', reason: 'busy', output: null };
+        if (/nothing (added )?to commit|no changes added/i.test(text))
+          return { status: 'rejected', reason: 'nothing-staged', output: null };
+        const hooksDir = (
+          await gitAt(root)
+            .raw(['rev-parse', '--git-path', 'hooks'])
+            .catch(() => '')
+        ).trim();
+        const hooks = hooksDir
+          ? await readdir(path.resolve(root, hooksDir)).catch(
+              () => [] as string[],
+            )
+          : [];
+        const hook = hooks.some((name) =>
+          ['pre-commit', 'commit-msg', 'prepare-commit-msg'].includes(name),
+        );
+        return {
+          status: 'rejected',
+          reason: hook ? 'hook' : 'failed',
+          output,
+        };
       }),
 
     branches,
@@ -1648,11 +2143,18 @@ export function createWorkspaceService(deps: {
     },
 
     async editors(refresh: boolean): Promise<DetectedEditor[]> {
-      return (await editors(refresh)).map(({ id, name, location }) => ({
-        id,
-        name,
-        location,
-      }));
+      return Promise.all(
+        (await editors(refresh)).map(async ({ id, name, location, exe }) => ({
+          id,
+          name,
+          location,
+          // Only editors without a published logo need the installed program's icon.
+          icon:
+            ICON_FROM_APP.has(id) && deps.desktop.fileIcon
+              ? await deps.desktop.fileIcon(exe).catch(() => null)
+              : null,
+        })),
+      );
     },
 
     async openInEditor(input: {

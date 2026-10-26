@@ -175,6 +175,7 @@ Hierarchy is **Page → Section → Component**. A page has one title. Sections 
 
 - **Lucide** (the owner's choice, `lucide-react`). Line icons only, at the size the component sets (16px in buttons). _Why Lucide: its consistent stroke style matches the line logo and line empty states, and it is tree-shaken per icon._
 - Icons inherit `currentColor`. A decorative icon is `aria-hidden`. An icon-only button has an accessible label and a tooltip.
+- **Editor logos are the one exception.** Settings › Code editor, the repository's editor choice and every Open in editor button show the editor's own logo, unmodified, beside its name. Recorded against R-37: the owner asked for real logos, and VS Code's brand rules forbid redrawing or recoloring. Sources are in `src/renderer/assets/editors/SOURCES.md`; an editor with no published logo shows its installed program's icon, then initials.
 
 ## Motion
 
@@ -255,6 +256,13 @@ A folder path, remote URL or Git URL that doesn't fit loses its middle, never it
 - **Git's states stay apart.** Conflicts, Staged, Not staged and Untracked are separate groups, and a file with staged and unstaged edits appears in both. Ignored files never appear and Stage all never stages them.
 - **Local means local.** The commit button names the branch and says the commit stays on this computer until you push. Fetch updates remote-tracking branches only and says so.
 - **Git decides what is safe.** A switch that would overwrite edits is refused by Git; gitdesk lists the files in a warning band and never forces or stashes. Discard confirms inline in a `danger-soft` band that names the files; untracked files go to the system trash.
+- **Every diff names its comparison.** HEAD → Index for staged, Index → Working tree for not staged, New file → Working tree for untracked, Base · Yours · Incoming for conflicts. The summary strip counts each comparison's lines on its own and never adds them together.
+- **Parts of a file stage through Git.** Each changed line has a select box and each change has Stage, Unstage or Discard. gitdesk builds the patch, Git checks it (`git apply --check`) before anything changes, and a diff that moved since it was read is refused with a warning band ("changed while you were reviewing it. Nothing was staged."). Hidden whitespace pauses partial staging and says why. Nothing is optimistic: the list changes when Git's refreshed status says so.
+- **Locks belong to their owner.** When another program holds `index.lock`, writes stop with a warning band and Try again; gitdesk never removes the lock.
+- **Discards keep a copy.** Before Git discards anything tracked, the exact patch is saved in Discarded changes in the app data folder (Settings › Git › Keep a copy), and the result toast offers Reveal. Discard staged and working changes is its own action with its own band.
+- **Any operation can finish here.** A merge, cherry-pick, revert or rebase started in a terminal shows in Changes with both sides named from Git's refs; Continue and Abort run Git's own commands with no editor, and Abort lists the edits outside the conflict that it leaves alone.
+- **Commits say who.** The composer shows the name and email Git will write and which config set them; the account picture appears only when that email is yours.
+- **Toolbar.** The diff toolbar is one Radix Toolbar (arrow keys move between items): previous and next file (Alt+↑/↓), change (`[` and `]`), Unified or Split, Hide whitespace, Wrap, Copy patch, Open in editor, More.
 - **The header is one row.** Name, tags, description and path sit on the left; branch picker, status chips, "Fetched …" and Fetch on the right. It wraps instead of stacking, so the tabs start close to the top.
 - **The commit message folds away.** In the split file pane, Hide folds the summary and description into one row (Show message, the summary so far, Commit). The choice is remembered on this computer. Committing with no summary opens the fields and focuses Summary instead of failing out of sight.
 - **Authors are 6px squares.** Your own commits (matched by your gitdesk account email or your global Git email) show your gitdesk account picture, or initials on the accent tint when there is no picture. Everyone else gets initials on `control`. gitdesk never asks another service for pictures.

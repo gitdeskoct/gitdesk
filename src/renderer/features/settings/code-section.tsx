@@ -359,6 +359,19 @@ export function CodeSection() {
           />
         </SettingRow>
         <SettingRow
+          id="diff-collapse-generated"
+          label="Fold generated files"
+          description="Lockfiles and minified files open folded, with Show diff. They are still staged and committed as usual."
+        >
+          <Switch
+            aria-label="Fold generated files"
+            checked={settings.diffCollapseGenerated}
+            onCheckedChange={(diffCollapseGenerated) =>
+              update.mutate({ diffCollapseGenerated })
+            }
+          />
+        </SettingRow>
+        <SettingRow
           id="diff-syntax"
           label="Syntax highlighting"
           description="Off shows plain text, which is faster on very large diffs."

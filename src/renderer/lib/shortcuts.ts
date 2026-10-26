@@ -56,6 +56,19 @@ export const SHORTCUTS: Shortcut[] = [
   { id: 'quit', label: 'Quit gitdesk', mod: true, keys: ['q'], display: 'Q' },
 ];
 
+// Keys that work while a diff has focus. The diff view handles them itself; this list is what
+// Settings › Shortcuts shows, so the two stay together here.
+export const DIFF_SHORTCUTS = [
+  { label: 'Next change in the diff', keys: [']'] },
+  { label: 'Previous change in the diff', keys: ['['] },
+  { label: 'Next changed file', keys: ['Alt', '↓'] },
+  { label: 'Previous changed file', keys: ['Alt', '↑'] },
+  {
+    label: 'Select a changed line (then Shift+click for a range)',
+    keys: ['Space'],
+  },
+] as const;
+
 const mac = () => window.desktop?.platform === 'darwin';
 export const modLabel = () => (mac() ? '⌘' : 'Ctrl');
 

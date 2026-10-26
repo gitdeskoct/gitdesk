@@ -62,7 +62,9 @@ import {
 import {
   analyticsInputSchema,
   commitDetailInputSchema,
+  applySelectionInputSchema,
   commitInputSchema,
+  copyPatchInputSchema,
   createBranchInputSchema,
   diffInputSchema,
   fetchInputSchema,
@@ -685,6 +687,31 @@ export function registerIpc(
     w.discard,
     pathsInputSchema,
     userFacing((input) => workspace.discard(input)),
+  );
+  handle(
+    w.discardAll,
+    pathsInputSchema,
+    userFacing((input) => workspace.discardAll(input)),
+  );
+  handle(
+    w.applySelection,
+    applySelectionInputSchema,
+    userFacing((input) => workspace.applySelection(input)),
+  );
+  handle(
+    w.copyPatch,
+    copyPatchInputSchema,
+    userFacing((input) => workspace.copyPatch(input)),
+  );
+  handle(
+    w.revealDiscarded,
+    id.nullable(),
+    userFacing((repoId) => workspace.revealDiscarded(repoId)),
+  );
+  handle(
+    w.commitIdentity,
+    id,
+    userFacing((repoId) => workspace.commitIdentity(repoId)),
   );
   handle(
     w.commit,

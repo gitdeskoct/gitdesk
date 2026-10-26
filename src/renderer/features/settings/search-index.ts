@@ -268,6 +268,12 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: 'colors plain text performance',
   },
   {
+    id: 'diff-collapse-generated',
+    label: 'Fold generated files',
+    section: 'code',
+    keywords: 'lockfile minified generated collapse fold diff',
+  },
+  {
     id: 'editor-goto-line',
     label: 'Open files at the changed line',
     section: 'editor',
@@ -302,6 +308,42 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Add Signed-off-by',
     section: 'git',
     keywords: 'signoff dco commit',
+  },
+  {
+    id: 'changes-untracked',
+    label: 'Untracked files',
+    section: 'git',
+    keywords: 'changes new files folders status',
+  },
+  {
+    id: 'changes-renames',
+    label: 'Detect renames',
+    section: 'git',
+    keywords: 'changes rename move similarity',
+  },
+  {
+    id: 'changes-submodules',
+    label: 'Submodule changes',
+    section: 'git',
+    keywords: 'changes submodule vendor',
+  },
+  {
+    id: 'changes-partial',
+    label: 'Stage parts of a file',
+    section: 'git',
+    keywords: 'changes partial hunk line staging select',
+  },
+  {
+    id: 'changes-keep-discarded',
+    label: 'Keep a copy of discarded changes',
+    section: 'git',
+    keywords: 'discard backup patch undo restore copy',
+  },
+  {
+    id: 'changes-resolved',
+    label: 'Mark resolved',
+    section: 'git',
+    keywords: 'conflict merge resolved stage',
   },
   {
     id: 'commit-signing',

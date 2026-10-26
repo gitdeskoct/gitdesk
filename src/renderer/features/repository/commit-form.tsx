@@ -7,8 +7,16 @@ import { InlineStatus } from '../../components/ui/status';
 import { cn } from '../../lib/cn';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { modLabel } from '../../lib/shortcuts';
-import { useCommit, useSettings } from '../../lib/queries';
+import { useCommit, useCommitIdentity, useSettings } from '../../lib/queries';
 import { useNavigation } from '../../app/navigation';
+import { AuthorAvatar } from './author-avatar';
+
+const SCOPE_WORDS = {
+  local: 'repository setting',
+  global: 'global Git setting',
+  system: 'system Git setting',
+  environment: 'set by the environment',
+} as const;
 
 const plural = (count: number, word: string) =>
   `${count} ${word}${count === 1 ? '' : 's'}`;
@@ -57,23 +65,34 @@ export function CommitForm({
     saveOpen(next);
     if (next) requestAnimationFrame(() => summaryRef.current?.focus());
   };
+  const identity = useCommitIdentity(repo.id, repo.statusAt);
   const branch = repo.status?.branch;
+  const operation = repo.status?.operation ?? null;
+  // A merge whose resolution matches HEAD stages nothing and still needs its commit.
+  const merging = operation === 'merge';
   const guide = settings?.commitSummaryGuide ?? 72;
   const over = guide > 0 && summary.trim().length > guide;
-  const blocked = staged === 0 || conflicts > 0 || !summary.trim();
+  const blocked =
+    (staged === 0 && !merging) ||
+    conflicts > 0 ||
+    operation === 'rebase' ||
+    !summary.trim();
   const reason =
     conflicts > 0
       ? `${plural(conflicts, 'file')} still ${conflicts === 1 ? 'has' : 'have'} conflicts. Resolve and stage them first.`
-      : staged === 0
-        ? 'Stage at least one file to commit.'
-        : !summary.trim()
-          ? 'Write a summary to commit.'
-          : 'A local commit. It stays on this computer until you push.';
+      : operation === 'rebase'
+        ? 'A rebase is in progress. Continue it from the conflict screen; it makes its own commits.'
+        : staged === 0 && !merging
+          ? 'Stage at least one file to commit.'
+          : !summary.trim()
+            ? 'Write a summary to commit.'
+            : 'A local commit. It stays on this computer until you push.';
 
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     // Folded with no summary yet: open the fields instead of refusing silently.
-    if (!open && staged > 0 && !summary.trim()) return setOpen(true);
+    if (!open && (staged > 0 || merging) && !summary.trim())
+      return setOpen(true);
     if (blocked || commit.isPending) return;
     setResult(null);
     commit.mutate(
@@ -93,10 +112,47 @@ export function CommitForm({
     if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) submit();
   };
 
-  const label =
-    staged > 0
+  const label = merging
+    ? `Commit merge${branch ? ` to ${branch}` : ''}`
+    : staged > 0
       ? `Commit ${plural(staged, 'file')}${branch ? ` to ${branch}` : ''}`
       : `Commit${branch ? ` to ${branch}` : ''}`;
+  const who = identity.data;
+  // The identity Git will write, which may differ from the signed-in account.
+  const identityLine = (
+    <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
+      {who?.email ? (
+        <AuthorAvatar
+          name={who.name ?? who.email}
+          email={who.email}
+          size="sm"
+        />
+      ) : null}
+      <span className="min-w-0 flex-1 truncate">
+        {identity.isPending ? (
+          'Reading your Git identity…'
+        ) : who?.name && who.email ? (
+          <>
+            Commits as <b className="font-semibold text-ink">{who.name}</b> &lt;
+            {who.email}&gt;
+            {who.scope ? ` · ${SCOPE_WORDS[who.scope]}` : ''}
+          </>
+        ) : (
+          'Git has no name or email for commits yet.'
+        )}
+      </span>
+      <Button
+        size="sm"
+        variant="link"
+        className="h-auto shrink-0 text-xs"
+        onClick={() =>
+          navigate({ name: 'repository', id: repo.id, tab: 'settings' })
+        }
+      >
+        Review
+      </Button>
+    </div>
+  );
 
   return (
     <form
@@ -135,9 +191,18 @@ export function CommitForm({
             variant="primary"
             className="shrink-0"
             pending={commit.isPending}
-            aria-disabled={staged === 0 || conflicts > 0 || undefined}
+            aria-disabled={
+              (staged === 0 && !merging) ||
+              conflicts > 0 ||
+              operation === 'rebase' ||
+              undefined
+            }
           >
-            {staged > 0 ? `Commit ${plural(staged, 'file')}` : 'Commit'}
+            {merging
+              ? 'Commit merge'
+              : staged > 0
+                ? `Commit ${plural(staged, 'file')}`
+                : 'Commit'}
           </Button>
         </div>
       )}
@@ -205,6 +270,7 @@ export function CommitForm({
               className="field resize-y px-3 py-2 text-[0.8125rem] outline-none placeholder:text-muted"
             />
           </label>
+          {identityLine}
           <Button
             type="submit"
             variant="primary"
@@ -269,7 +335,9 @@ export function CommitForm({
                   ? 'Some files still have conflicts. Resolve and stage them first.'
                   : result.reason === 'busy'
                     ? 'Another Git process is using this repository. Try again in a moment.'
-                    : 'Git did not make the commit. Nothing was changed.'}
+                    : result.reason === 'operation'
+                      ? 'A rebase or a multi-commit pick is in progress. Continue it from the conflict screen.'
+                      : 'Git did not make the commit. Nothing was changed.'}
           </span>
           {result.output && (
             <pre className="max-h-32 overflow-auto rounded-[4px] bg-surface p-2 font-mono text-[0.71875rem] leading-4 whitespace-pre-wrap">

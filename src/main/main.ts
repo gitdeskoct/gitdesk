@@ -331,6 +331,7 @@ async function start() {
   let source: SourceService | null = null;
   const ws = createWorkspaceService({
     journal,
+    discardDir: path.join(userData, 'Discarded changes'),
     forgetAuth: (remoteId) => tokens.forget(remoteId),
     onPushed: (op) => sync?.pushed(op),
     store,
@@ -357,6 +358,11 @@ async function start() {
       openPath: (target) => shell.openPath(target),
       copyText: (text) => clipboard.writeText(text),
       isOnline: () => net.isOnline(),
+      // The path is one main found itself while detecting editors, never a renderer value.
+      fileIcon: async (target) => {
+        const icon = await app.getFileIcon(target, { size: 'normal' });
+        return icon.isEmpty() ? null : icon.toDataURL();
+      },
     },
   });
   workspace = ws;

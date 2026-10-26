@@ -96,6 +96,15 @@ export const settingsSchema = z.object({
   diffIgnoreWhitespace: z.boolean(),
   diffWrap: z.boolean(),
   diffSyntax: z.boolean(),
+  // Lockfiles and minified files open folded; only the view changes, never the patch.
+  diffCollapseGenerated: z.boolean(),
+  // The Changes list: how Git's status is asked for, and what the diff lets you stage.
+  changesUntracked: z.enum(['all', 'normal']),
+  changesRenames: z.boolean(),
+  changesSubmodules: z.enum(['none', 'dirty', 'all']),
+  changesPartial: z.boolean(),
+  // Every discard first saves the discarded changes as a patch in the app data folder.
+  changesKeepDiscarded: z.boolean(),
   // The Files tab: tree, viewer and how large a text file opens without asking (in MiB).
   sourceLayout: z.enum(['auto', 'centered', 'split']),
   sourceShowIgnored: z.boolean(),
@@ -186,6 +195,12 @@ export const DEFAULT_SETTINGS: Settings = {
   diffIgnoreWhitespace: false,
   diffWrap: false,
   diffSyntax: true,
+  diffCollapseGenerated: true,
+  changesUntracked: 'all',
+  changesRenames: true,
+  changesSubmodules: 'none',
+  changesPartial: true,
+  changesKeepDiscarded: true,
   sourceLayout: 'auto',
   sourceShowIgnored: false,
   sourceShowHidden: true,
