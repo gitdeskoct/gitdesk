@@ -10,7 +10,13 @@ import {
   type AppDatabase,
 } from '../db/database';
 import { UserError } from '../errors';
-import { customGitBinary, gitAt, useGitBinary } from '../repos/git-inspector';
+import {
+  customGitBinary,
+  gitAt,
+  MIN_GIT_VERSION,
+  useGitBinary,
+  versionAtLeast,
+} from '../repos/git-inspector';
 
 const KEY = 'git_binary';
 
@@ -80,6 +86,8 @@ export function createGitInstall(deps: {
     return {
       available: true,
       version: match[1]!,
+      tooOld: !versionAtLeast(match[1]!, MIN_GIT_VERSION),
+      minimum: MIN_GIT_VERSION,
       location: customGitBinary() ?? onPath(),
       custom,
       prune: prune === null ? null : /^(true|yes|on|1)$/i.test(prune),

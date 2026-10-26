@@ -70,10 +70,22 @@ export class PullError extends UserError {}
 const MERGE_TIMEOUT_MS = 120_000;
 const CONFLICT_MARKER = /^(<{7}|>{7})(\s|$)/m;
 const MAX_WORKING_BYTES = 2 * 1024 * 1024;
+// shortcut: a working file larger than this is overwritten without a saved copy; stream it if that matters.
+const MAX_COPY_BYTES = 64 * 1024 * 1024;
+const LOCKED =
+  'Another Git process is using this repository, so nothing changed. gitdesk leaves its lock alone; try again when it finishes.';
 
 type Workspace = {
   serial<T>(id: string, fn: () => Promise<T>): Promise<T>;
   rootOf(id: string): string;
+  lockHeld(id: string): Promise<boolean>;
+  // Settings › Git › Keep a copy: saves bytes about to be overwritten; false when the setting is off.
+  keepCopy(
+    id: string,
+    label: string,
+    bytes: Buffer,
+    suffix: string,
+  ): Promise<boolean>;
   operationInProgress(id: string): Promise<boolean>;
   push(input: { id: string; jobId: string }): Promise<PushResult>;
 };
@@ -191,6 +203,23 @@ export function createPullService(deps: {
     } catch (err) {
       throw new PullError(describeGitError(err));
     }
+  }
+
+  // Index writes for conflict steps: Git's exit code decides, and a held lock is reported, never raced.
+  async function gitIndex(root: string, args: string[]): Promise<void> {
+    const result = await gitBytes(root, args, {
+      maxBytes: 1024 * 1024,
+      timeoutMs: 60_000,
+    }).catch((err: unknown) => {
+      throw new PullError(describeGitError(err));
+    });
+    if (result.code === 0) return;
+    if (/index\.lock|Another git process/i.test(result.stderr))
+      throw new PullError(LOCKED);
+    throw new PullError(
+      sanitizeOutput(result.stderr, root)?.split('\n')[0] ??
+        "Git didn't make that change.",
+    );
   }
 
   async function currentBranch(root: string): Promise<string | null> {
@@ -1561,6 +1590,8 @@ export function createPullService(deps: {
       wrap(() =>
         deps.workspace.serial(input.repoId, async () => {
           const root = deps.workspace.rootOf(input.repoId);
+          if (await deps.workspace.lockHeld(input.repoId))
+            throw new PullError(LOCKED);
           const file = (await unmergedFiles(root)).find(
             (entry) => entry.path === input.path,
           );
@@ -1577,7 +1608,7 @@ export function createPullService(deps: {
               throw new PullError(
                 'The file still has conflict markers. Edit them out, then mark it resolved.',
               );
-            await git(
+            await gitIndex(
               root,
               text === null
                 ? ['rm', '--quiet', '--', input.path]
@@ -1586,18 +1617,44 @@ export function createPullService(deps: {
           } else {
             const index = input.take === 'target' ? 0 : 1;
             const side = stages[index]!;
+            // Taking a side overwrites the working file, edits included: keep a copy first.
+            const inside = await resolveInside(root, input.path);
+            if (!inside)
+              throw new PullError('That file is outside the repository.');
+            if (inside.stat?.isFile() && inside.stat.size <= MAX_COPY_BYTES) {
+              const working = await readFile(inside.abs);
+              if (side.text === null || working.toString('utf8') !== side.text)
+                await deps.workspace.keepCopy(
+                  input.repoId,
+                  input.path,
+                  working,
+                  '.orig',
+                );
+            }
             const present = side.text !== null || side.binary || side.tooLarge;
             if (present) {
-              await git(root, [
+              await gitIndex(root, [
                 'checkout',
                 (input.take === 'target') !== swap ? '--ours' : '--theirs',
                 '--',
                 input.path,
               ]);
-              await git(root, ['add', '--', input.path]);
-            } else await git(root, ['rm', '--quiet', '--', input.path]);
+              await gitIndex(root, ['add', '--', input.path]);
+            } else await gitIndex(root, ['rm', '--quiet', '--', input.path]);
           }
+          // Resolved is Git's word, not ours: the path must have left the unmerged entries.
+          const still = await gitBytes(
+            root,
+            ['ls-files', '-u', '-z', '--', input.path],
+            {
+              maxBytes: 64 * 1024,
+            },
+          ).catch(() => null);
           await deps.refresh(input.repoId).catch(() => undefined);
+          if (!still || still.code !== 0 || still.stdout.length > 0)
+            throw new PullError(
+              `Git still lists ${input.path} as unmerged, so it isn't resolved yet. Refresh and try again.`,
+            );
           return conflictState(input.repoId);
         }),
       ),

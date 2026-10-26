@@ -80,6 +80,7 @@ import {
   commitDetailInputSchema,
   applySelectionInputSchema,
   commitInputSchema,
+  contextLinesInputSchema,
   copyPatchInputSchema,
   createBranchInputSchema,
   diffInputSchema,
@@ -786,6 +787,11 @@ export function registerIpc(
     w.copyPatch,
     copyPatchInputSchema,
     userFacing((input) => workspace.copyPatch(input)),
+  );
+  handle(
+    w.contextLines,
+    contextLinesInputSchema,
+    userFacing((input) => workspace.contextLines(input)),
   );
   handle(
     w.revealDiscarded,

@@ -232,7 +232,7 @@ function install(list: PullRequest[]) {
       remoteOverview: vi.fn(never),
       remoteList: vi.fn(never),
       history: vi.fn(never),
-      changes: vi.fn(async () => ({ files: [], truncated: false })),
+      changes: vi.fn(async () => ({ files: [], truncated: false, total: 0 })),
       open: vi.fn(async () => repo),
       refresh: vi.fn(async () => undefined),
       onChanged: vi.fn(() => () => {}),
@@ -389,7 +389,7 @@ describe('pull requests', () => {
       path: 'src/search.ts',
       binary: false,
       tooLarge: false,
-      base: 'a\n',
+      base: 'base line\n',
       target: 'target line\n',
       source: 'source line\n',
       merged:
@@ -413,6 +413,15 @@ describe('pull requests', () => {
     expect(
       screen.getByRole('button', { name: 'Mark resolved' }),
     ).toHaveAttribute('aria-disabled', 'true');
+    // The common ancestor is one click away, and taking a side says it keeps a copy first.
+    expect(screen.queryByText('base line')).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Base, the common ancestor' }),
+    );
+    expect(await screen.findByText('base line')).toBeInTheDocument();
+    expect(
+      screen.getByText(/A copy of it is saved in Discarded changes first/),
+    ).toBeInTheDocument();
     await userEvent.click(
       await screen.findByRole('button', { name: 'Use source version' }),
     );

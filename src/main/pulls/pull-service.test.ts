@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -129,6 +130,7 @@ async function setup(
       copyText: vi.fn(),
       isOnline: () => true,
     },
+    discardDir: path.join(dir, 'discarded'),
   });
   cleanups.push(() => workspace.dispose());
   const records = createLocalRecords(db, repoId);
@@ -517,6 +519,37 @@ describe('mergeability and merging', () => {
     expect(git(root, 'rev-parse', 'main')).toBe(before);
     expect(git(root, 'branch', '--show-current').trim()).toBe('elsewhere');
     expect((await pulls.get({ repoId, id: pull.id })).pull.status).toBe('open');
+  });
+
+  it('takes a side only without a held lock, keeping a copy of the working file first', async () => {
+    const root = makeRepo();
+    write(root, 'src/search.ts', 'main version\n');
+    commit(root, 'Main rewrites search');
+    const picked = git(root, 'rev-parse', 'feature').trim();
+    expect(() => git(root, 'cherry-pick', picked)).toThrow();
+    // Half-way edits of the conflicted file that taking a side would throw away.
+    write(root, 'src/search.ts', 'my half-way resolution\n');
+    const { repoId, pulls } = await setup(root);
+
+    writeFileSync(path.join(root, '.git', 'index.lock'), '');
+    await expect(
+      pulls.resolveConflict({ repoId, path: 'src/search.ts', take: 'source' }),
+    ).rejects.toThrow(/Another Git process/);
+    expect(existsSync(path.join(root, '.git', 'index.lock'))).toBe(true);
+    rmSync(path.join(root, '.git', 'index.lock'));
+
+    const state = await pulls.resolveConflict({
+      repoId,
+      path: 'src/search.ts',
+      take: 'source',
+    });
+    expect(state.files).toEqual([]);
+    expect(git(root, 'ls-files', '-u').trim()).toBe('');
+    const folder = path.join(dir, 'discarded', 'app');
+    const [copy] = readdirSync(folder).filter((name) => name.endsWith('.orig'));
+    expect(readFileSync(path.join(folder, copy!), 'utf8')).toBe(
+      'my half-way resolution\n',
+    );
   });
 
   it('finishes and aborts a cherry-pick started in a terminal, naming both sides', async () => {

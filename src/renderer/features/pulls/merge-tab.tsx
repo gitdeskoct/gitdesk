@@ -1,12 +1,14 @@
+import * as Collapsible from '@radix-ui/react-collapsible';
 import {
   Check,
+  ChevronRight,
   CircleAlert,
   CircleCheck,
   GitMerge,
   TriangleAlert,
   Undo2,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import type {
   ConflictFile,
   MergeResult,
@@ -15,7 +17,11 @@ import type {
   RevertResult,
 } from '../../../shared/pulls';
 import type { RepositorySummary } from '../../../shared/repos';
-import { DiffArt, PullRequestsArt } from '../../components/illustrations';
+import {
+  DiffArt,
+  OfflineArt,
+  PullRequestsArt,
+} from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
 import { EmptyState } from '../../components/ui/empty-state';
@@ -341,17 +347,32 @@ const KIND_WORDS: Record<ConflictFile['kind'], string> = {
   'added-by-target': 'Added on the target only',
   'added-by-source': 'Added in the source only',
 };
+// The same, in the words of a pull or of a merge started outside gitdesk: yours and incoming.
+const KIND_WORDS_YOURS: Record<ConflictFile['kind'], string> = {
+  'both-modified': 'Both changed the same lines',
+  'both-added': 'Both added this file',
+  'both-deleted': 'Both deleted this file',
+  'deleted-by-target': 'You deleted it, incoming changed it',
+  'deleted-by-source': 'You changed it, incoming deleted it',
+  'added-by-target': 'Added on your side only',
+  'added-by-source': 'Added on the incoming side only',
+};
 
 // One version of a conflicted file, with Shiki colors when Settings › Code allows them. Conflict
 // markers stay plain and carry a label, so they never read as code.
 function CodeBox({
   text,
   label,
+  note,
+  action,
   path,
   words,
 }: {
   text: string | null;
+  // With no text: why there is none (the empty state's title and sentence) and the next step.
   label: string;
+  note: string;
+  action: ReactNode;
   path: string;
   // What the <<<<<<<, ======= and >>>>>>> markers open and close.
   words: readonly [string, string, string];
@@ -365,9 +386,15 @@ function CodeBox({
   );
   if (text === null)
     return (
-      <p className="rounded-sm border border-line bg-sunken px-3 py-2 text-[0.8125rem] text-muted">
-        {label}
-      </p>
+      <EmptyState
+        compact
+        className="rounded-sm border border-line px-3"
+        art={<DiffArt />}
+        title={label}
+        action={action}
+      >
+        {note}
+      </EmptyState>
     );
   return (
     <pre className="code-text max-h-72 overflow-auto rounded-sm border border-line bg-surface px-3 py-2 whitespace-pre">
@@ -407,15 +434,22 @@ export function ConflictsView({
   pullTarget,
   upstream = false,
   external = false,
+  initialPath = null,
 }: {
   repo: RepositorySummary;
   pullSource: string;
   pullTarget: string;
   upstream?: boolean;
   external?: boolean;
+  // The conflicted file picked in Changes, so the screen opens on that file, not the first one.
+  initialPath?: string | null;
 }) {
   const conflicts = useConflicts(repo.id, repo.statusAt);
-  const [picked, setPicked] = useState<string | null>(null);
+  const { data: settings } = useSettings();
+  const [picked, setPicked] = useState<string | null>(initialPath);
+  useEffect(() => {
+    if (initialPath) setPicked(initialPath);
+  }, [initialPath]);
   const [aborting, setAborting] = useState(false);
   const resolve = useResolveConflict(repo.id);
   const proceed = useContinueMerge(repo.id);
@@ -627,7 +661,7 @@ export function ConflictsView({
                     {f.path}
                   </span>
                   <span className="block text-xs text-muted">
-                    {KIND_WORDS[f.kind]}
+                    {(yoursAndIncoming ? KIND_WORDS_YOURS : KIND_WORDS)[f.kind]}
                     {f.binary ? ' · binary' : ''}
                   </span>
                 </button>
@@ -648,12 +682,25 @@ export function ConflictsView({
               {sides.isPending ? (
                 <Loading label="Reading both sides…" />
               ) : sides.isError ? (
-                <InlineStatus tone="danger">
+                <EmptyState
+                  compact
+                  art={<OfflineArt />}
+                  title="Couldn't read this file's versions"
+                  action={
+                    <Button
+                      size="sm"
+                      pending={sides.isFetching}
+                      onClick={() => void sides.refetch()}
+                    >
+                      Try again
+                    </Button>
+                  }
+                >
                   {ipcErrorMessage(
                     sides.error,
-                    "Couldn't read this file's versions.",
+                    'Git did not answer when gitdesk asked for each side.',
                   )}
-                </InlineStatus>
+                </EmptyState>
               ) : (
                 <>
                   <div className="grid gap-4 @min-[700px]:grid-cols-2">
@@ -704,15 +751,72 @@ export function ConflictsView({
                           text={sides.data.binary ? null : text}
                           label={
                             sides.data.binary
-                              ? 'Binary file: no text view.'
+                              ? 'Binary file'
                               : sides.data.tooLarge
-                                ? 'Too large to show here.'
-                                : 'Deleted on this side.'
+                                ? 'Too large to show here'
+                                : 'Deleted on this side'
+                          }
+                          note={
+                            sides.data.binary
+                              ? 'Git has no lines to compare. Open it in your editor or another program to choose.'
+                              : sides.data.tooLarge
+                                ? 'This version is over 2 MB. Your editor shows it in full.'
+                                : 'This side removed the file. The button above keeps or takes that deletion.'
+                          }
+                          action={
+                            <OpenInEditorButton
+                              repoId={repo.id}
+                              path={
+                                sides.data.merged === null ? null : file.path
+                              }
+                            />
                           }
                         />
                       </div>
                     ))}
                   </div>
+                  <p className="mt-2 text-xs text-muted">
+                    Using a side replaces your working file.{' '}
+                    {(settings?.changesKeepDiscarded ?? true)
+                      ? 'A copy of it is saved in Discarded changes first.'
+                      : "Keeping a copy is off in Settings, so edits in it can't be brought back."}
+                  </p>
+                  <Collapsible.Root className="mt-4 border-t border-line pt-3">
+                    <Collapsible.Trigger className="group flex items-center gap-1.5 rounded-sm text-[0.8125rem] font-semibold text-ink focus-visible:outline-offset-2">
+                      <ChevronRight
+                        aria-hidden
+                        className="size-4 text-muted transition-transform group-data-[state=open]:rotate-90"
+                      />
+                      Base, the common ancestor
+                    </Collapsible.Trigger>
+                    <Collapsible.Content className="mt-2">
+                      <CodeBox
+                        path={file.path}
+                        words={markerWords}
+                        text={sides.data.binary ? null : sides.data.base}
+                        label={
+                          sides.data.binary
+                            ? 'Binary file'
+                            : sides.data.tooLarge
+                              ? 'Too large to show here'
+                              : 'No common version'
+                        }
+                        note={
+                          sides.data.binary
+                            ? 'Git has no lines to compare.'
+                            : sides.data.tooLarge
+                              ? 'This version is over 2 MB. Your editor shows it in full.'
+                              : 'Both sides added this file separately, so there is no version they started from.'
+                        }
+                        action={
+                          <OpenInEditorButton
+                            repoId={repo.id}
+                            path={sides.data.merged === null ? null : file.path}
+                          />
+                        }
+                      />
+                    </Collapsible.Content>
+                  </Collapsible.Root>
                   {!sides.data.binary && (
                     <>
                       <div className="mt-4 mb-1.5 flex flex-wrap items-center gap-2">
@@ -742,7 +846,11 @@ export function ConflictsView({
                         path={file.path}
                         words={markerWords}
                         text={sides.data.merged}
-                        label="The file is not in the working tree."
+                        label="Not in your working tree"
+                        note="The file is gone from disk. Take a side above, or bring it back in your editor."
+                        action={
+                          <OpenInEditorButton repoId={repo.id} path={null} />
+                        }
                       />
                       <div className="mt-3 flex flex-wrap items-center gap-2.5">
                         <Button

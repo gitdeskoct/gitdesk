@@ -199,7 +199,7 @@ function install() {
       remoteOverview: vi.fn(never),
       remoteList: vi.fn(never),
       history: vi.fn(never),
-      changes: vi.fn(async () => ({ files: [], truncated: false })),
+      changes: vi.fn(async () => ({ files: [], truncated: false, total: 0 })),
       open: vi.fn(async () => repo()),
       refresh: vi.fn(async () => undefined),
       onChanged: vi.fn(() => () => {}),

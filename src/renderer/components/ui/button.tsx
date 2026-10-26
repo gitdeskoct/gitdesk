@@ -45,15 +45,18 @@ export function Button({
   pending = false,
   onClick,
   children,
+  'aria-disabled': ariaDisabled,
   ...props
 }: ButtonProps) {
   const Comp = asChild ? Slot : 'button';
+  // The caller's aria-disabled (an unavailable action) and pending both hold; one never hides the other.
+  const unavailable = ariaDisabled === true || ariaDisabled === 'true';
   return (
     <Comp
       type={asChild ? undefined : (type ?? 'button')}
       className={cn(buttonVariants({ variant, size }), className)}
       aria-busy={pending || undefined}
-      aria-disabled={pending || props.disabled || undefined}
+      aria-disabled={pending || props.disabled || unavailable || undefined}
       onClick={pending ? (event) => event.preventDefault() : onClick}
       {...props}
     >

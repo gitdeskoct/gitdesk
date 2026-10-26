@@ -112,6 +112,18 @@ describe('parseStatus', () => {
     expect(status.untracked).toBe(600);
     expect(status.files).toHaveLength(500);
     expect(status.truncated).toBe(true);
+    expect(status.total).toBe(600);
+  });
+
+  it('takes a larger cap for the Changes list and counts every path', () => {
+    const many = Array.from({ length: 6000 }, (_, i) => `? gen/${i}.js`);
+    const status = parseStatus(z(...many), 5000);
+    expect(status.files).toHaveLength(5000);
+    expect(status.total).toBe(6000);
+    expect(parseStatus(z('? one.txt'), 5000)).toMatchObject({
+      truncated: false,
+      total: 1,
+    });
   });
 });
 

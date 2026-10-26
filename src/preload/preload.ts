@@ -133,6 +133,7 @@ const api: DesktopApi = {
     discardAll: (input) => ipcRenderer.invoke(W.discardAll, input),
     applySelection: (input) => ipcRenderer.invoke(W.applySelection, input),
     copyPatch: (input) => ipcRenderer.invoke(W.copyPatch, input),
+    contextLines: (input) => ipcRenderer.invoke(W.contextLines, input),
     revealDiscarded: (id) => ipcRenderer.invoke(W.revealDiscarded, id),
     commitIdentity: (id) => ipcRenderer.invoke(W.commitIdentity, id),
     commit: (input) => ipcRenderer.invoke(W.commit, input),

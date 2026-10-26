@@ -201,9 +201,10 @@ describe('workspace changes and diffs', () => {
     const root = makeRepo();
     writeFileSync(path.join(dir, 'outside.txt'), 'secret\n');
     const { id, service, repos } = await setup(root);
-    await expect(service.stage({ id, paths: ['README.md'] })).rejects.toThrow(
-      /moved on/,
-    );
+    // A stale list is an answer the page shows as a band, not an error.
+    expect(await service.stage({ id, paths: ['README.md'] })).toEqual({
+      status: 'stale',
+    });
     // A stale request also refreshes the list; let it finish before the folder is removed.
     await repos.refresh(id);
     await expect(
@@ -399,9 +400,11 @@ describe('staging parts of a file', () => {
       status: 'rejected',
       reason: 'busy',
     });
-    await expect(service.stage({ id, paths: ['README.md'] })).rejects.toThrow(
-      /Another Git process/,
-    );
+    expect(await service.stage({ id, paths: ['README.md'] })).toMatchObject({
+      status: 'rejected',
+      reason: 'busy',
+      message: expect.stringMatching(/Another Git process/),
+    });
     expect(existsSync(path.join(root, '.git', 'index.lock'))).toBe(true);
     rmSync(path.join(root, '.git', 'index.lock'));
     expect(git(root, 'diff', '--cached', '--name-only').trim()).toBe('');
@@ -428,6 +431,133 @@ describe('staging parts of a file', () => {
     expect(git(root, 'show', `:${name}`)).toBe('keep\n');
   });
 
+  it('lists binary files with their size on each side instead of line counts', async () => {
+    const root = makeRepo();
+    writeFileSync(path.join(root, 'logo.bin'), Buffer.from([0, 1, 2, 3]));
+    git(root, 'add', 'logo.bin');
+    git(root, 'commit', '-q', '-m', 'logo');
+    writeFileSync(path.join(root, 'logo.bin'), Buffer.alloc(10, 0));
+    git(root, 'add', 'logo.bin');
+    writeFileSync(path.join(root, 'logo.bin'), Buffer.alloc(24, 0));
+    const { id, repos } = await setup(root);
+    const { files, total } = await repos.changes(id);
+    expect(total).toBe(1);
+    expect(files).toEqual([
+      expect.objectContaining({ kind: 'staged', binary: true, size: 10 }),
+      expect.objectContaining({ kind: 'modified', binary: true, size: 24 }),
+    ]);
+  });
+
+  it('stages part of an untracked CRLF file the way git add would store it', async () => {
+    const root = makeRepo();
+    git(root, 'config', 'core.autocrlf', 'true');
+    writeFileSync(path.join(root, 'crlf.txt'), 'keep\r\nskip\r\n');
+    const { id, service } = await setup(root);
+    const diff = await read(service, id, 'crlf.txt', 'untracked');
+    if (diff.status !== 'text') throw new Error(diff.status);
+    expect(
+      await service.applySelection({
+        id,
+        path: 'crlf.txt',
+        side: 'untracked',
+        action: 'stage',
+        token: diff.token!,
+        context: 3,
+        hunks: [{ index: 0, lines: [0] }],
+      }),
+    ).toMatchObject({ status: 'applied' });
+    // autocrlf=true stores LF, as `git add` would; the raw bytes would have kept the CR.
+    expect(git(root, 'cat-file', 'blob', ':crlf.txt')).toBe('keep\n');
+  });
+
+  it('refuses to stage part of a file a clean filter rewrites', async () => {
+    const root = makeRepo();
+    git(root, 'config', 'filter.upper.clean', 'tr a-z A-Z');
+    writeFileSync(path.join(root, '.gitattributes'), '*.up filter=upper\n');
+    writeFileSync(path.join(root, 'x.up'), 'one\ntwo\n');
+    const { id, service } = await setup(root);
+    const diff = await read(service, id, 'x.up', 'untracked');
+    if (diff.status !== 'text') throw new Error(diff.status);
+    expect(
+      await service.applySelection({
+        id,
+        path: 'x.up',
+        side: 'untracked',
+        action: 'stage',
+        token: diff.token!,
+        context: 3,
+        hunks: [{ index: 0, lines: [0] }],
+      }),
+    ).toMatchObject({ status: 'rejected', reason: 'unsupported' });
+    expect(git(root, 'ls-files', '--stage', 'x.up')).toBe('');
+  });
+
+  it('reads context lines from the index for staged and the disk for unstaged', async () => {
+    const root = makeRepo();
+    const lines = Array.from({ length: 40 }, (_, i) => `line ${i + 1}`);
+    writeFileSync(path.join(root, 'long.txt'), lines.join('\n') + '\n');
+    git(root, 'add', 'long.txt');
+    git(root, 'commit', '-q', '-m', 'long');
+    writeFileSync(
+      path.join(root, 'long.txt'),
+      lines.map((l, i) => (i === 0 ? 'staged first' : l)).join('\n') + '\n',
+    );
+    git(root, 'add', 'long.txt');
+    writeFileSync(
+      path.join(root, 'long.txt'),
+      lines.map((l, i) => (i === 0 ? 'disk first' : l)).join('\r\n') + '\r\n',
+    );
+    const { id, service } = await setup(root);
+    const staged = await service.contextLines({
+      id,
+      path: 'long.txt',
+      side: 'staged',
+      start: 1,
+      count: 2,
+    });
+    expect(staged).toEqual({
+      start: 1,
+      total: 40,
+      lines: ['staged first', 'line 2'],
+    });
+    const disk = await service.contextLines({
+      id,
+      path: 'long.txt',
+      side: 'unstaged',
+      start: 39,
+      count: 20,
+    });
+    expect(disk).toEqual({
+      start: 39,
+      total: 40,
+      lines: ['line 39', 'line 40'],
+    });
+    await expect(
+      service.contextLines({
+        id,
+        path: 'README.md',
+        side: 'unstaged',
+        start: 1,
+        count: 1,
+      }),
+    ).rejects.toThrow(/moved on/);
+  });
+
+  it('copies an untracked file as a new-file patch Git can apply', async () => {
+    const root = makeRepo();
+    writeFileSync(path.join(root, 'new café.txt'), 'hello\n');
+    const { id, service, desktop } = await setup(root);
+    await service.copyPatch({ id, path: 'new café.txt', side: 'untracked' });
+    const patch = desktop.copyText.mock.calls[0]![0] as string;
+    expect(patch).toContain('new file mode 100644');
+    expect(patch).toContain('+hello');
+    rmSync(path.join(root, 'new café.txt'));
+    execFileSync('git', ['apply', '-'], { cwd: root, input: patch });
+    expect(readFileSync(path.join(root, 'new café.txt'), 'utf8')).toBe(
+      'hello\n',
+    );
+  });
+
   it('discards staged and working changes back to HEAD, keeping a copy', async () => {
     const root = makeRepo();
     writeFileSync(path.join(root, 'README.md'), 'staged\n');
@@ -435,6 +565,7 @@ describe('staging parts of a file', () => {
     writeFileSync(path.join(root, 'README.md'), 'staged and more\n');
     const { id, service } = await setup(root);
     expect(await service.discardAll({ id, paths: ['README.md'] })).toEqual({
+      status: 'applied',
       saved: true,
     });
     expect(readFileSync(path.join(root, 'README.md'), 'utf8')).toBe('# hi\n');
