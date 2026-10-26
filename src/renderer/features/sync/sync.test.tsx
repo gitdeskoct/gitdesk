@@ -166,7 +166,7 @@ function install(list: RepositorySummary[], view: SyncOverview) {
       remoteOverview: vi.fn(never),
       remoteList: vi.fn(never),
       history: vi.fn(never),
-      changes: vi.fn(async () => ({ files: [], truncated: false })),
+      changes: vi.fn(async () => ({ files: [], truncated: false, total: 0 })),
       open: vi.fn(async () => list[0]),
       refresh: vi.fn(async () => undefined),
       onChanged: vi.fn(() => () => {}),

@@ -25,11 +25,13 @@ import {
 } from 'react';
 import { fileType } from '../../../shared/file-types';
 import type { Settings } from '../../../shared/settings';
-import type {
-  DiffHunk,
-  DiffLine,
-  DiffResult,
-  DiffSide,
+import {
+  CONTEXT_LINES_MAX,
+  type ContextLinesInput,
+  type DiffHunk,
+  type DiffLine,
+  type DiffResult,
+  type DiffSide,
 } from '../../../shared/workspace';
 import { DiffArt, OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
@@ -40,6 +42,7 @@ import {
   DropdownMenuTrigger,
 } from '../../components/ui/dropdown-menu';
 import { EmptyState } from '../../components/ui/empty-state';
+import { Spinner } from '../../components/ui/spinner';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { useToast } from '../../components/ui/toast';
 import { Tooltip } from '../../components/ui/tooltip';
@@ -48,6 +51,7 @@ import { formatBytes } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useApplySelection,
+  useContextLines,
   useCopyFilePath,
   useCopyPatch,
   useDiff,
@@ -63,11 +67,24 @@ import { wordRanges, type Range } from './word-diff';
 
 const WHOLE_FILE = 1_000_000;
 const VIRTUALIZE_FROM = 400;
+// Lines one click on a gap reveals, as in most code review tools.
+const EXPAND_STEP = 20;
 
 type Row =
   | { type: 'hunk'; header: string; hunk: number }
-  | { type: 'gap'; hidden: number | null }
+  // gap: which gap (before hunk n, or hunks.length for after the last one); hidden: lines still
+  // folded there, null when not known yet.
+  | { type: 'gap'; hidden: number | null; gap: number }
   | { type: 'line'; hunk: number; index: number; line: DiffLine }
+  // An unchanged line revealed from a gap: shown only, never part of a patch.
+  | {
+      type: 'context';
+      old: number;
+      new: number;
+      text: string;
+      run: string;
+      index: number;
+    }
   | {
       type: 'pair';
       hunk: number;
@@ -110,11 +127,87 @@ function gapBefore(hunks: DiffHunk[], index: number): number | null {
   return hidden > 0 ? hidden : null;
 }
 
-function buildRows(hunks: DiffHunk[], split: boolean): Row[] {
+// Old minus new line number around a hunk: unchanged lines before it (edge 'before') or after it
+// share this offset, so a revealed line's old number follows from its new one.
+function offsetAt(hunk: DiffHunk, edge: 'before' | 'after'): number {
+  const both = hunk.lines.filter((l) => l.old !== null && l.new !== null);
+  const line = edge === 'before' ? both[0] : both.at(-1);
+  if (line) return line.old! - line.new!;
+  return hunk.oldStart - hunk.newStart;
+}
+
+const lastNew = (hunk: DiffHunk) =>
+  [...hunk.lines].reverse().find((l) => l.new !== null)?.new ?? null;
+
+// Where gap g sits in the new file: lines first..last, and the old-minus-new offset there. The gap
+// after the last hunk ends at the file's last line, so it appears once that is known.
+export function gapBounds(
+  hunks: DiffHunk[],
+  g: number,
+  total: number | null,
+): { first: number; last: number; offset: number } | null {
+  if (!hunks.length) return null;
+  if (g < hunks.length) {
+    const hunk = hunks[g]!;
+    const first = g === 0 ? 1 : (lastNew(hunks[g - 1]!) ?? 0) + 1;
+    const last = hunk.newStart - 1;
+    return last >= first
+      ? { first, last, offset: offsetAt(hunk, 'before') }
+      : null;
+  }
+  const end = lastNew(hunks.at(-1)!);
+  if (end === null) return null;
+  if (total === null || total <= end) return null;
+  return {
+    first: end + 1,
+    last: total,
+    offset: offsetAt(hunks.at(-1)!, 'after'),
+  };
+}
+
+export type ContextRun = { start: number; lines: string[] };
+// Per-gap expansion in Changes: what each gap shows from its top and its bottom.
+export type GapControls = {
+  total: number | null;
+  shown: (gap: number) => { top: ContextRun | null; bottom: ContextRun | null };
+  more: (gap: number, edge: 'top' | 'bottom') => void;
+  pending: (gap: number) => boolean;
+};
+
+function buildRows(
+  hunks: DiffHunk[],
+  split: boolean,
+  gaps?: GapControls,
+): Row[] {
   const rows: Row[] = [];
+  const reveal = (g: number) => {
+    const bounds = gapBounds(hunks, g, gaps?.total ?? null);
+    if (!gaps || !bounds) {
+      if (g >= hunks.length) return;
+      const hidden = gapBefore(hunks, g);
+      if (hidden) rows.push({ type: 'gap', hidden, gap: g });
+      return;
+    }
+    const { top, bottom } = gaps.shown(g);
+    const runRows = (run: ContextRun | null, key: string) =>
+      run?.lines.forEach((text, i) =>
+        rows.push({
+          type: 'context',
+          new: run.start + i,
+          old: run.start + i + bounds.offset,
+          text,
+          run: key,
+          index: i,
+        }),
+      );
+    runRows(top, `${g}:top`);
+    const shownCount = (top?.lines.length ?? 0) + (bottom?.lines.length ?? 0);
+    const hidden = bounds.last - bounds.first + 1 - shownCount;
+    if (hidden > 0) rows.push({ type: 'gap', hidden, gap: g });
+    runRows(bottom, `${g}:bottom`);
+  };
   hunks.forEach((hunk, h) => {
-    const hidden = gapBefore(hunks, h);
-    if (hidden) rows.push({ type: 'gap', hidden });
+    reveal(h);
     rows.push({ type: 'hunk', header: hunk.header, hunk: h });
     if (!split) {
       hunk.lines.forEach((line, index) =>
@@ -156,7 +249,55 @@ function buildRows(hunks: DiffHunk[], split: boolean): Row[] {
         });
     }
   });
+  reveal(hunks.length);
   return rows;
+}
+
+const EMPTY_TOKENS = new Map<string, (CodeToken[] | null)[]>();
+
+// Shiki colors for revealed lines, one block per run, so a comment or string that spans lines
+// in the run is colored right. Plain until ready, and when syntax colors are off.
+function useRunTokens(
+  rows: Row[],
+  path: string,
+  settings: Settings | undefined,
+): Map<string, (CodeToken[] | null)[]> {
+  const theme = settings?.codeTheme ?? 'github';
+  const enabled = settings?.diffSyntax ?? true;
+  const runs = useMemo(() => {
+    const byRun = new Map<string, string[]>();
+    for (const row of rows)
+      if (row.type === 'context')
+        byRun.set(row.run, [...(byRun.get(row.run) ?? []), row.text]);
+    return byRun;
+  }, [rows]);
+  // Rows rebuild when anything in the diff view changes; only new revealed text re-tokenizes.
+  const signature = useMemo(() => JSON.stringify([...runs]), [runs]);
+  const [result, setResult] = useState<{
+    signature: string;
+    tokens: Map<string, (CodeToken[] | null)[]>;
+  } | null>(null);
+  useEffect(() => {
+    const lang = languageOf(path);
+    if (!enabled || !lang || !runs.size) return;
+    let cancelled = false;
+    void Promise.all(
+      [...runs].map(
+        async ([key, lines]) =>
+          [key, (await tokenizeLines(lines, lang, theme)) ?? []] as const,
+      ),
+    )
+      .then((entries) => {
+        if (!cancelled) setResult({ signature, tokens: new Map(entries) });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [signature, path, theme, enabled]);
+  return enabled && result?.signature === signature
+    ? result.tokens
+    : EMPTY_TOKENS;
 }
 
 // Tokens for every line of every hunk: each side of a hunk is tokenized as one block, so
@@ -390,12 +531,16 @@ export function DiffBody({
   onLineComment,
   staging,
   navRef,
+  gaps,
 }: {
   diff: Extract<DiffResult, { status: 'text' }>;
   path: string;
   settings: Settings | undefined;
   split: boolean;
+  // Show the whole file; null once it is.
   onExpand: (() => void) | null;
+  // Changes: each gap reveals 20 lines at a time from either end.
+  gaps?: GapControls;
   maxHeight?: string;
   lineSlot?: (line: DiffLine) => ReactNode;
   onLineComment?: (line: DiffLine, side: 'old' | 'new') => void;
@@ -405,7 +550,11 @@ export function DiffBody({
   navRef?: MutableRefObject<((delta: number) => void) | null>;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
-  const rows = useMemo(() => buildRows(diff.hunks, split), [diff, split]);
+  const rows = useMemo(
+    () => buildRows(diff.hunks, split, gaps),
+    [diff, split, gaps],
+  );
+  const runTokens = useRunTokens(rows, path, settings);
   const highlighted = useHighlighted(diff, path, settings);
   const tokens = highlighted?.tokens ?? null;
   const words = useMemo(
@@ -530,6 +679,129 @@ export function DiffBody({
       role: 'row',
       'aria-rowindex': index + 1,
     };
+    if (row.type === 'gap' && gaps) {
+      const last = row.gap >= diff.hunks.length;
+      const busy = gaps.pending(row.gap);
+      const gapButton =
+        'inline-flex h-7 items-center gap-1.5 rounded-[4px] px-2 hover:bg-control hover:text-ink';
+      return (
+        <div
+          key={index}
+          {...common}
+          className="border-y border-line bg-sunken font-sans text-xs text-muted"
+        >
+          <div
+            role="cell"
+            className="sticky left-0 flex w-[100cqw] flex-wrap items-center gap-x-1 px-2"
+          >
+            {row.gap > 0 && (
+              <button
+                type="button"
+                className={gapButton}
+                aria-label={`Show ${EXPAND_STEP} more lines below the change above`}
+                onClick={() => gaps.more(row.gap, 'top')}
+              >
+                <ArrowDown aria-hidden className="size-3.5" />
+                Show {EXPAND_STEP} more lines
+              </button>
+            )}
+            {!last && (
+              <button
+                type="button"
+                className={gapButton}
+                aria-label={`Show ${EXPAND_STEP} more lines above the change below`}
+                onClick={() => gaps.more(row.gap, 'bottom')}
+              >
+                <ArrowUp aria-hidden className="size-3.5" />
+                Show {EXPAND_STEP} more lines
+              </button>
+            )}
+            {onExpand && (
+              <button type="button" className={gapButton} onClick={onExpand}>
+                <UnfoldVertical aria-hidden className="size-3.5" />
+                Show whole file
+              </button>
+            )}
+            <span className="ml-auto inline-flex items-center gap-1.5 py-1.5">
+              {busy && <Spinner />}
+              {row.hidden} hidden {row.hidden === 1 ? 'line' : 'lines'}
+            </span>
+          </div>
+        </div>
+      );
+    }
+    if (row.type === 'context') {
+      const line: DiffLine = {
+        kind: 'context',
+        old: row.old,
+        new: row.new,
+        text: row.text,
+      };
+      const text = (
+        <span
+          role="cell"
+          className={cn(
+            'min-w-0 pr-4',
+            wrap ? 'break-all whitespace-pre-wrap' : 'whitespace-pre',
+          )}
+        >
+          <LineText
+            text={row.text}
+            tokens={runTokens.get(row.run)?.[row.index] ?? null}
+            ranges={undefined}
+            kind="context"
+          />
+        </span>
+      );
+      if (!split)
+        return (
+          <div
+            key={index}
+            {...common}
+            className={cn(
+              'grid',
+              staging
+                ? 'grid-cols-[1.5rem_3rem_3rem_1.25rem_minmax(0,1fr)]'
+                : 'grid-cols-[3rem_3rem_1.25rem_minmax(0,1fr)]',
+            )}
+          >
+            {staging && <span role="cell" />}
+            <Gutter value={line.old} removed />
+            <Gutter value={line.new} />
+            <Sign kind="context" />
+            {text}
+          </div>
+        );
+      const half = (value: number, first: boolean) => (
+        <div
+          className={cn(
+            staging ? 'col-span-4' : 'col-span-3',
+            'grid grid-cols-subgrid',
+            !first && 'border-l border-line',
+          )}
+        >
+          {staging && <span role="cell" />}
+          <Gutter value={value} removed={first} />
+          <Sign kind="context" />
+          {text}
+        </div>
+      );
+      return (
+        <div
+          key={index}
+          {...common}
+          className={cn(
+            'grid',
+            staging
+              ? 'grid-cols-[1.5rem_3rem_1.25rem_minmax(0,1fr)_1.5rem_3rem_1.25rem_minmax(0,1fr)]'
+              : 'grid-cols-[3rem_1.25rem_minmax(0,1fr)_3rem_1.25rem_minmax(0,1fr)]',
+          )}
+        >
+          {half(row.old, true)}
+          {half(row.new, false)}
+        </div>
+      );
+    }
     if (row.type === 'gap')
       return (
         <div key={index} {...common} className="border-y border-line">
@@ -812,6 +1084,8 @@ type Pick = { index: number; lines?: number[] }[];
 // refused. Each says what happened and that nothing changed.
 type Problem =
   | { kind: 'stale' }
+  // The file changed on disk while lines were selected; the selection was cleared.
+  | { kind: 'moved' }
   | { kind: 'busy'; message: string }
   | { kind: 'refused'; message: string };
 
@@ -865,11 +1139,16 @@ export function DiffView({
     hunks: Pick;
     label: string;
   } | null>(null);
+  // Lines revealed in each gap, from its top and from its bottom.
+  const [reveals, setReveals] = useState<
+    Map<number, { top: number; bottom: number }>
+  >(() => new Map());
   useEffect(() => {
     setFull(false);
     setExpanded(false);
     setShowGenerated(false);
     setProblem(null);
+    setReveals(new Map());
   }, [path, side]);
 
   const context = expanded ? WHOLE_FILE : (settings?.diffContext ?? 3);
@@ -884,11 +1163,24 @@ export function DiffView({
   const diff = query.data;
   const current = diff && diff.path === path ? diff : undefined;
   const token = current?.status === 'text' ? current.token : null;
-  // A new diff means new line indexes: an old selection would point at other lines.
+  // Whether a selection or a discard confirm is open, as of the render that read the old diff.
+  const reviewing = useRef({ key: '', token, busy: false, active: false });
+  // A new diff means new line indexes: an old selection would point at other lines. When the file
+  // changed under an open selection (not because gitdesk applied it), the band says so.
   useEffect(() => {
+    const was = reviewing.current;
+    if (
+      was.key === `${side}:${path}` &&
+      was.token &&
+      was.token !== token &&
+      was.active &&
+      !was.busy
+    )
+      setProblem({ kind: 'moved' });
     setSelected(new Map());
     setAnchor(null);
     setConfirming(null);
+    setReveals(new Map());
   }, [token, path, side]);
 
   const partial =
@@ -898,6 +1190,85 @@ export function DiffView({
     current?.status === 'text';
   const canPick = partial && !!token;
   const keepCopy = settings?.changesKeepDiscarded ?? true;
+
+  // Gaps in Changes reveal lines from the new side of the comparison: the index for staged,
+  // the file on disk for not staged. Untracked files and conflicts have no gaps to fill.
+  const canReveal =
+    (side === 'staged' || side === 'unstaged') &&
+    current?.status === 'text' &&
+    !expanded;
+  const textDiff = current?.status === 'text' ? current : null;
+  const probe = canReveal
+    ? [{ path, side, start: 1, count: 1 } as Omit<ContextLinesInput, 'id'>]
+    : [];
+  const ranges: Omit<ContextLinesInput, 'id'>[] = [];
+  const rangeOf = new Map<string, number>();
+  const probed = useContextLines(repoId, probe, statusAt);
+  const total = probed[0]?.data?.total ?? null;
+  if (canReveal && textDiff)
+    for (const [g, open] of reveals) {
+      const bounds = gapBounds(textDiff.hunks, g, total);
+      if (!bounds) continue;
+      const top = Math.min(open.top, CONTEXT_LINES_MAX);
+      const bottom = Math.min(open.bottom, CONTEXT_LINES_MAX);
+      if (top > 0) {
+        rangeOf.set(`${g}:top`, ranges.length);
+        ranges.push({ path, side, start: bounds.first, count: top });
+      }
+      if (bottom > 0) {
+        rangeOf.set(`${g}:bottom`, ranges.length);
+        ranges.push({
+          path,
+          side,
+          start: bounds.last - bottom + 1,
+          count: bottom,
+        });
+      }
+    }
+  const revealed = useContextLines(repoId, ranges, statusAt);
+  const gapData = revealed.map((q) => q.data);
+  const gapPending = revealed.map((q) => q.isFetching);
+  const gapSignature = JSON.stringify([
+    total,
+    gapData,
+    gapPending,
+    [...rangeOf],
+  ]);
+  const gaps = useMemo<GapControls | undefined>(() => {
+    if (!canReveal || !textDiff) return undefined;
+    const run = (key: string): ContextRun | null => {
+      const at = rangeOf.get(key);
+      const data = at === undefined ? undefined : gapData[at];
+      return data ? { start: data.start, lines: data.lines } : null;
+    };
+    return {
+      total,
+      shown: (g) => ({ top: run(`${g}:top`), bottom: run(`${g}:bottom`) }),
+      pending: (g) =>
+        [`${g}:top`, `${g}:bottom`].some((key) => {
+          const at = rangeOf.get(key);
+          return at !== undefined && !!gapPending[at];
+        }),
+      more: (g, edge) =>
+        setReveals((previous) => {
+          const bounds = gapBounds(textDiff.hunks, g, total);
+          if (!bounds) return previous;
+          const next = new Map(previous);
+          const open = next.get(g) ?? { top: 0, bottom: 0 };
+          const span = bounds.last - bounds.first + 1;
+          const room = Math.max(0, span - open.top - open.bottom);
+          const step = Math.min(EXPAND_STEP, room);
+          next.set(
+            g,
+            edge === 'top'
+              ? { ...open, top: open.top + step }
+              : { ...open, bottom: open.bottom + step },
+          );
+          return next;
+        }),
+    };
+    // Query results are new arrays every render; their contents decide, or rows rebuild in a loop.
+  }, [canReveal, textDiff, gapSignature]);
 
   const run = (action: 'stage' | 'unstage' | 'discard', hunks: Pick) => {
     if (!token || side === 'conflict') return;
@@ -947,6 +1318,15 @@ export function DiffView({
       lines: [...lines].sort((a, b) => a - b),
     }));
   const selectedCount = selection.reduce((n, h) => n + h.lines!.length, 0);
+  // Recorded after the token check above has run, so that check sees the previous render's state.
+  useEffect(() => {
+    reviewing.current = {
+      key: `${side}:${path}`,
+      token,
+      busy: apply.isPending,
+      active: selectedCount > 0 || !!confirming,
+    };
+  });
   const pendingAction =
     apply.isPending && apply.variables ? apply.variables : null;
   const isPending = (action: string, hunk: number | null) =>
@@ -1109,7 +1489,7 @@ export function DiffView({
           Wrap lines
         </Button>
       </Toolbar.Button>
-      {(side === 'staged' || side === 'unstaged') && (
+      {side !== 'conflict' && (
         <Toolbar.Button asChild>
           <Button
             size="sm"
@@ -1238,6 +1618,13 @@ export function DiffView({
           {current?.status === 'text' && current.modeChange && (
             <span>Mode {current.modeChange}</span>
           )}
+          {/* The previous diff stays on screen while Git reads the new one; this says so. */}
+          {query.isFetching && query.isPlaceholderData && (
+            <span role="status" className="inline-flex items-center gap-1.5">
+              <Spinner />
+              Updating diff
+            </span>
+          )}
         </p>
       </div>
       {toolbar}
@@ -1285,7 +1672,28 @@ export function DiffView({
 
   const problemBand =
     problem &&
-    (problem.kind === 'stale' ? (
+    (problem.kind === 'moved' ? (
+      <div
+        role="alert"
+        className="flex flex-none flex-wrap items-center gap-3 bg-warning-soft px-4 py-2.5 text-[0.8125rem] text-ink"
+      >
+        <TriangleAlert aria-hidden className="size-4 text-warning" />
+        <span className="min-w-0 flex-1">
+          <b className="font-semibold">
+            {path.split('/').pop()} changed while you were reviewing it.
+          </b>{' '}
+          Your selection was cleared and nothing was staged. The diff below is
+          the file as it is now.
+        </span>
+        <Button
+          size="sm"
+          className="bg-surface"
+          onClick={() => setProblem(null)}
+        >
+          Review new diff
+        </Button>
+      </div>
+    ) : problem.kind === 'stale' ? (
       <div
         role="alert"
         className="flex flex-none flex-wrap items-center gap-3 bg-warning-soft px-4 py-2.5 text-[0.8125rem] text-ink"
@@ -1570,6 +1978,7 @@ export function DiffView({
           onExpand={expanded ? null : () => setExpanded(true)}
           maxHeight={inline ? 'max-h-[32rem]' : undefined}
           navRef={navRef}
+          gaps={gaps}
           staging={
             canPick ? { selected, onToggle: toggle, hunkActions } : undefined
           }

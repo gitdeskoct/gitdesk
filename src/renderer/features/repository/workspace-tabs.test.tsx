@@ -114,7 +114,11 @@ function install(list: RepositorySummary[] = [repo()]) {
     remoteOverview: vi.fn(never),
     remoteList: vi.fn(never),
     history: vi.fn(never),
-    changes: vi.fn(async () => ({ files, truncated: false })),
+    changes: vi.fn(async () => ({
+      files,
+      truncated: false,
+      total: new Set(files.map((f) => f.path)).size,
+    })),
     open: vi.fn(async () => list[0]),
     refresh: vi.fn(async () => undefined),
     onChanged: vi.fn(() => () => {}),
@@ -293,6 +297,127 @@ describe('staging parts of a file', () => {
     expect(stage).toHaveAttribute('aria-busy', 'true');
   });
 
+  it('shows Updating diff while Git reads it again, and says when the file moved under a selection', async () => {
+    await openEdited();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Select added line 1 for staging' }),
+    );
+    // Hiding whitespace asks Git again; the old diff stays while the new one loads.
+    let answer: (value: object) => void = () => {};
+    workspace.diff = vi.fn(
+      () => new Promise<object>((resolve) => (answer = resolve)),
+    );
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Hide whitespace' }),
+    );
+    expect(await screen.findByText('Updating diff')).toBeInTheDocument();
+    answer({
+      status: 'text',
+      path: 'src/edited.ts',
+      oldPath: null,
+      added: 1,
+      removed: 1,
+      truncated: false,
+      newFile: false,
+      deleted: false,
+      modeChange: null,
+      token: 'e'.repeat(40),
+      hunks: [
+        {
+          header: '@@ -1,1 +1,1 @@',
+          oldStart: 1,
+          newStart: 1,
+          lines: [
+            { kind: 'del', old: 1, new: null, text: 'const a = 1;' },
+            { kind: 'add', old: null, new: 1, text: 'const a = 3;' },
+          ],
+        },
+      ],
+    });
+    expect(
+      await screen.findByText(/changed while you were reviewing it/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Your selection was cleared/)).toBeInTheDocument();
+    expect(screen.queryByText('Updating diff')).not.toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Review new diff' }),
+    );
+    expect(
+      screen.queryByText(/changed while you were reviewing it/),
+    ).not.toBeInTheDocument();
+  });
+
+  it('reveals hidden lines 20 at a time from Git, above and below the change', async () => {
+    settings = { ...DEFAULT_SETTINGS, workspaceLayout: 'split' };
+    install();
+    workspace.diff = vi.fn(async ({ path }: { path: string }) => ({
+      status: 'text',
+      path,
+      oldPath: null,
+      added: 1,
+      removed: 1,
+      truncated: false,
+      newFile: false,
+      deleted: false,
+      modeChange: null,
+      token: TOKEN,
+      hunks: [
+        {
+          header: '@@ -30,3 +30,3 @@',
+          oldStart: 30,
+          newStart: 30,
+          lines: [
+            { kind: 'context', old: 30, new: 30, text: 'line 30' },
+            { kind: 'del', old: 31, new: null, text: 'old 31' },
+            { kind: 'add', old: null, new: 31, text: 'new 31' },
+            { kind: 'context', old: 32, new: 32, text: 'line 32' },
+          ],
+        },
+      ],
+    }));
+    workspace.contextLines = vi.fn(
+      async ({ start, count }: { start: number; count: number }) => ({
+        start,
+        total: 60,
+        lines: Array.from(
+          { length: Math.min(count, 61 - start) },
+          (_, i) => `line ${start + i}`,
+        ),
+      }),
+    );
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1000,
+    } as DOMRect);
+    await openRepo();
+    await userEvent.click(
+      await screen.findByRole('option', { name: /src\/edited\.ts/ }),
+    );
+    expect(await screen.findByText('29 hidden lines')).toBeInTheDocument();
+    // The gap after the change appears once Git has said how long the file is.
+    expect(await screen.findByText('28 hidden lines')).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'Show 20 more lines above the change below',
+      }),
+    );
+    expect(workspace.contextLines).toHaveBeenCalledWith({
+      id: ID,
+      path: 'src/edited.ts',
+      side: 'unstaged',
+      start: 10,
+      count: 20,
+    });
+    expect(await screen.findByText('line 10')).toBeInTheDocument();
+    expect(screen.getByText('9 hidden lines')).toBeInTheDocument();
+    await userEvent.click(
+      screen.getByRole('button', {
+        name: 'Show 20 more lines below the change above',
+      }),
+    );
+    expect(await screen.findByText('line 52')).toBeInTheDocument();
+    expect(screen.getByText('8 hidden lines')).toBeInTheDocument();
+  });
+
   it('says so when the file changed while it was open, and when Git is busy', async () => {
     await openEdited();
     workspace.applySelection = vi.fn(async () => ({ status: 'stale' }));
@@ -347,15 +472,15 @@ describe('staging parts of a file', () => {
 describe('changes', () => {
   it('groups files the way Git keeps them apart and stages one with a spinner', async () => {
     await openRepo();
+    const list = await screen.findByRole('listbox', { name: 'Changed files' });
+    for (const group of ['Staged', 'Not staged', 'Untracked'])
+      expect(
+        within(list).getByRole('heading', { name: group }),
+      ).toBeInTheDocument();
+    // Each row names its group, so the comparison is never only implied by position.
     expect(
-      await screen.findByRole('listbox', { name: 'Staged' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('listbox', { name: 'Not staged' }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole('listbox', { name: 'Untracked' }),
-    ).toBeInTheDocument();
+      within(list).getByRole('option', { name: /src\/staged\.ts/ }),
+    ).toHaveAccessibleDescription(/Staged/);
     const stage = screen.getByRole('button', { name: 'Stage src/edited.ts' });
     await userEvent.click(stage);
     expect(workspace.stage).toHaveBeenCalledWith({
@@ -364,6 +489,121 @@ describe('changes', () => {
     });
     expect(stage).toHaveAttribute('aria-busy', 'true');
     expect(stage).not.toBeDisabled();
+  });
+
+  it('checks rows from the keyboard: x for one, Shift+arrows for a range, Home and End', async () => {
+    settings = { ...DEFAULT_SETTINGS, workspaceLayout: 'split' };
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 1000,
+    } as DOMRect);
+    await openRepo();
+    const first = await screen.findByRole('option', {
+      name: /src\/staged\.ts/,
+    });
+    await userEvent.click(first);
+    first.focus();
+    await userEvent.keyboard('x');
+    expect(
+      screen.getByRole('checkbox', { name: 'Select src/staged.ts' }),
+    ).toBeChecked();
+    expect(screen.getByText('1 file selected')).toBeInTheDocument();
+    await userEvent.keyboard('{Shift>}{ArrowDown}{/Shift}');
+    expect(screen.getByText('2 files selected')).toBeInTheDocument();
+    await userEvent.keyboard('{End}');
+    expect(
+      await screen.findByRole('option', { name: /notes\.md/, selected: true }),
+    ).toBeInTheDocument();
+  });
+
+  it('shows a stale or locked whole-file stage as a band, and Try again runs it again', async () => {
+    workspace.stage = vi.fn(async () => ({ status: 'stale' }));
+    await openRepo();
+    await userEvent.click(
+      await screen.findByRole('button', { name: 'Stage src/edited.ts' }),
+    );
+    expect(
+      await screen.findByText('The files moved on before Git ran this.'),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Got it' }));
+
+    workspace.stage = vi.fn(async () => ({
+      status: 'rejected',
+      reason: 'busy',
+      message: 'Another Git process is using this repository.',
+    }));
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Stage src/edited.ts' }),
+    );
+    expect(
+      await screen.findByText('Another Git process is using this repository.'),
+    ).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(workspace.stage).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows binary files by size, and refuses Stage all during conflicts with the reason', async () => {
+    const conflicted: ChangedFile[] = [
+      {
+        path: 'src/clash.ts',
+        kind: 'conflict',
+        code: 'U',
+        conflict: 'both-modified',
+        origPath: null,
+        submodule: false,
+      },
+      {
+        path: 'logo.png',
+        kind: 'modified',
+        code: 'M',
+        origPath: null,
+        submodule: false,
+        binary: true,
+        size: 24 * 1024,
+      },
+    ];
+    install([repo({ conflicts: 1, operation: 'merge' })]);
+    repos.changes = vi.fn(async () => ({
+      files: conflicted,
+      truncated: false,
+      total: 2,
+    }));
+    const stageAll = vi.fn(never);
+    workspace.stageAll = stageAll;
+    await openRepo();
+    expect(await screen.findByText('Binary · 24.0 KB')).toBeInTheDocument();
+    const all = screen.getByRole('button', { name: 'Stage all' });
+    expect(all).toHaveAttribute('aria-disabled', 'true');
+    expect(all).toHaveAccessibleDescription(/waits until the conflicts/);
+    await userEvent.click(all);
+    expect(stageAll).not.toHaveBeenCalled();
+    // A conflict opens its resolver; it is never staged from the list.
+    expect(
+      screen.getByRole('button', { name: 'Resolve src/clash.ts' }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole('button', { name: 'Stage src/clash.ts' }),
+    ).not.toBeInTheDocument();
+  });
+
+  it('says how much the list and the filter cover when Git reports more than it shows', async () => {
+    repos.changes = vi.fn(async () => ({
+      files,
+      truncated: true,
+      total: 6000,
+    }));
+    await openRepo();
+    expect(
+      await screen.findByText(/Showing the first 3 of 6,000 changed paths/),
+    ).toBeInTheDocument();
+    await userEvent.type(
+      screen.getByRole('searchbox', { name: 'Filter changed files' }),
+      'nothing-matches',
+    );
+    expect(
+      await screen.findByText(
+        'The filter searched the first 3 of 6,000 changed paths.',
+      ),
+    ).toBeInTheDocument();
   });
 
   it('expands a diff inline with + and − marks that do not rely on color', async () => {

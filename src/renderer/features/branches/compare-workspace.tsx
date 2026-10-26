@@ -41,6 +41,7 @@ import { plural, shortOid } from '../pulls/pull-bits';
 import { PullStrip } from '../pulls/pull-preview';
 import { AuthorAvatar } from '../repository/author-avatar';
 import { DiffBody } from '../repository/diff-view';
+import { OpenInEditorButton } from '../repository/editor-button';
 import { usePushAction } from '../repository/use-push';
 import { RefSelect } from './ref-select';
 
@@ -623,6 +624,10 @@ export function CompareWorkspace({
   );
   const files = result?.comparison.files ?? [];
   const file = files.find((f) => f.path === picked) ?? files[0] ?? null;
+  // Past the size guard on an explicit Load full diff, for this file only.
+  const [full, setFull] = useState(false);
+  useEffect(() => setFull(false), [file?.path]);
+  const nextFile = file ? files[files.indexOf(file) + 1] : undefined;
   const diff = useBranchFileDiff(
     result && file
       ? {
@@ -633,7 +638,7 @@ export function CompareWorkspace({
           oldPath: file.oldPath,
           context: expanded ? 1_000_000 : (settings?.diffContext ?? 3),
           ignoreWhitespace: settings?.diffIgnoreWhitespace ?? false,
-          full: false,
+          full,
         }
       : null,
   );
@@ -812,9 +817,22 @@ export function CompareWorkspace({
         {diff.isPending ? (
           <Loading label="Reading the diff…" />
         ) : diff.isError ? (
-          <InlineStatus tone="danger">
-            {ipcErrorMessage(diff.error, "Couldn't read this file's diff.")}
-          </InlineStatus>
+          <EmptyState
+            compact
+            art={<OfflineArt />}
+            title="Couldn't read this file's diff"
+            action={
+              <Button
+                size="sm"
+                pending={diff.isFetching}
+                onClick={() => void diff.refetch()}
+              >
+                Try again
+              </Button>
+            }
+          >
+            {ipcErrorMessage(diff.error, 'Git did not answer.')}
+          </EmptyState>
         ) : diff.data.status === 'text' && diff.data.hunks.length ? (
           <div className="flex min-h-0 flex-col overflow-hidden rounded-sm border border-line">
             <DiffBody
@@ -827,13 +845,40 @@ export function CompareWorkspace({
             />
           </div>
         ) : (
-          <InlineStatus>
+          <EmptyState
+            compact
+            art={<DiffArt />}
+            title={
+              diff.data.status === 'binary'
+                ? `${file.path.split('/').pop()} is binary`
+                : diff.data.status === 'too-large'
+                  ? 'This diff is large'
+                  : 'No text changes to show'
+            }
+            action={
+              diff.data.status === 'too-large' ? (
+                <Button
+                  size="sm"
+                  pending={diff.isFetching}
+                  onClick={() => setFull(true)}
+                >
+                  Load full diff
+                </Button>
+              ) : nextFile ? (
+                <Button size="sm" onClick={() => setPicked(nextFile.path)}>
+                  Next file
+                </Button>
+              ) : (
+                <OpenInEditorButton repoId={repo.id} path={null} />
+              )
+            }
+          >
             {diff.data.status === 'binary'
-              ? 'Binary file: no text view.'
+              ? "Git can't show it as lines, so there are no line counts."
               : diff.data.status === 'too-large'
-                ? `Too large to show here (+${diff.data.added} −${diff.data.removed}).`
-                : 'No text change.'}
-          </InlineStatus>
+                ? `It changes +${diff.data.added.toLocaleString()} −${diff.data.removed.toLocaleString()} lines. Showing them all may slow gitdesk down.`
+                : 'Only the file mode changed, or the change is whitespace Git was asked to ignore.'}
+          </EmptyState>
         )}
         <p className="mt-2 text-xs text-muted">
           Git's own diff from where the branches split to {r.source.name},

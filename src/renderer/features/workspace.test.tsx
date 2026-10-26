@@ -130,7 +130,7 @@ function install(list: () => Promise<RepositorySummary[]>) {
     list: vi.fn(list),
     activity: vi.fn(async () => []),
     remoteOverview: vi.fn(async () => signedOut),
-    changes: vi.fn(async () => ({ files: [], truncated: false })),
+    changes: vi.fn(async () => ({ files: [], truncated: false, total: 0 })),
     open: vi.fn(async (id: string) => ({ ...repo(), id })),
     pin: vi.fn(never),
     refresh: vi.fn(async () => undefined),

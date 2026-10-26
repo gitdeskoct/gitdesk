@@ -1,16 +1,23 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import { existsSync, realpath } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { promisify } from 'node:util';
 import path from 'node:path';
 import { simpleGit, type SimpleGit, type SimpleGitOptions } from 'simple-git';
 import type {
+  ChangedFile,
   RepoStatus,
   RepositoryChanges,
   RepositoryHistory,
 } from '../../shared/repos';
 import { UserError } from '../errors';
-import { parseLastCommit, parseNumstatAll, parseStatus } from './git-status';
+import { resolveInside } from './paths';
+import {
+  MAX_CHANGES_FILES,
+  parseLastCommit,
+  parseNumstatAll,
+  parseStatus,
+} from './git-status';
 
 const TIMEOUT_MS = 20_000;
 
@@ -78,6 +85,41 @@ export const SAFE_CONFIG = [
 let gitBinary: string | null = null;
 export function useGitBinary(binary: string | null): void {
   gitBinary = binary;
+  versionCheck = null;
+}
+
+// git restore needs 2.23 and config --show-scope 2.26; an older Git would fail mid-operation.
+export const MIN_GIT_VERSION = '2.26.0';
+export function versionAtLeast(version: string, minimum: string): boolean {
+  const parts = (text: string) => {
+    const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(text);
+    return match ? [match[1], match[2], match[3] ?? '0'].map(Number) : null;
+  };
+  const have = parts(version);
+  const need = parts(minimum);
+  if (!have || !need) return false;
+  for (let i = 0; i < 3; i++)
+    if (have[i] !== need[i]) return have[i]! > need[i]!;
+  return true;
+}
+
+// Checked once per Git binary. A missing Git is left to the command that needs it, whose error
+// already says so; only a Git that answers with an old version is refused here.
+let versionCheck: Promise<string | null> | null = null;
+export async function assertGitVersion(): Promise<void> {
+  versionCheck ??= gitBytes(process.cwd(), ['--version'], {
+    maxBytes: 1000,
+    timeoutMs: 5000,
+  })
+    .then(
+      (r) => /^git version (\S+)/.exec(r.stdout.toString('utf8'))?.[1] ?? null,
+    )
+    .catch(() => null);
+  const version = await versionCheck;
+  if (version && !versionAtLeast(version, MIN_GIT_VERSION))
+    throw new GitError(
+      `Git ${version.slice(0, 40)} is too old. gitdesk needs Git ${MIN_GIT_VERSION} or newer.`,
+    );
 }
 export const customGitBinary = (): string | null => gitBinary;
 
@@ -129,6 +171,34 @@ export function gitAt(
 
 export type GitBytes = { code: number | null; stdout: Buffer; stderr: string };
 
+// taskkill by its full path, so a taskkill.exe earlier on PATH can't stand in for it.
+const TASKKILL = path.join(
+  process.env.SystemRoot ?? 'C:\\Windows',
+  'System32',
+  'taskkill.exe',
+);
+
+// On Windows child.kill() ends git.exe but not the hooks and helpers it started, which would keep
+// running unsupervised after a timeout. /T ends the whole tree.
+export function stopTree(
+  child: Pick<ChildProcess, 'pid' | 'kill'>,
+  platform: NodeJS.Platform = process.platform,
+  run: typeof execFile = execFile,
+): void {
+  if (platform !== 'win32' || !child.pid) {
+    child.kill();
+    return;
+  }
+  run(
+    TASKKILL,
+    ['/pid', String(child.pid), '/T', '/F'],
+    { windowsHide: true, timeout: 5000 },
+    (err) => {
+      if (err) child.kill();
+    },
+  );
+}
+
 // For output simple-git would mangle (file bytes, NUL-separated lists, exact patches) and for writes
 // whose exit code matters: simple-git reports a non-zero exit with empty stderr as success.
 // Same binary, environment and safe config as gitAt; output past maxBytes stops the process.
@@ -175,13 +245,13 @@ export function gitBytes(
       else resolve({ code, stdout: Buffer.concat(chunks, size), stderr });
     };
     const timer = setTimeout(() => {
-      child.kill();
-      finish(new GitError('Git took too long to answer.'));
+      stopTree(child);
+      finish(new GitTimeout('Git took too long to answer.'));
     }, options.timeoutMs ?? TIMEOUT_MS);
     child.stdout.on('data', (chunk: Buffer) => {
       size += chunk.length;
       if (size > options.maxBytes) {
-        child.kill();
+        stopTree(child);
         finish(new GitError('Git returned more than gitdesk reads at once.'));
         return;
       }
@@ -210,6 +280,20 @@ export function gitAuthEnv(url: string, token: string): Record<string, string> {
 }
 
 export class GitError extends UserError {}
+export class GitTimeout extends GitError {}
+
+// Status output grows with the tree; a huge untracked folder stops being read past this.
+const STATUS_BYTES = 32 * 1024 * 1024;
+
+// `git status` through gitBytes: bounded output and a real exit code.
+export async function readStatus(
+  root: string,
+  args: string[],
+): Promise<string> {
+  const result = await gitBytes(root, args, { maxBytes: STATUS_BYTES });
+  if (result.code !== 0) throw new GitError(describeGitError(result.stderr));
+  return result.stdout.toString('utf8');
+}
 
 // Git's own messages can carry paths and config detail, so the renderer gets one of these instead.
 export function describeGitError(err: unknown): string {
@@ -333,10 +417,15 @@ export async function inspect(root: string): Promise<Inspection> {
     const top = (await git.raw(['rev-parse', '--show-toplevel'])).trim();
     if (!top || pathKey(await canonicalPath(top)) !== pathKey(root))
       return { availability: 'not-a-repo', status: null, error: null };
-    raw = await git.raw(STATUS_ARGS);
+    raw = await readStatus(root, STATUS_ARGS);
   } catch (err) {
-    if (/not a git repository|must be run in a work tree/i.test(String(err)))
+    if (
+      /not a git repository|must be run in a work tree|isn't a Git repository/i.test(
+        String(err),
+      )
+    )
       return { availability: 'not-a-repo', status: null, error: null };
+    if (err instanceof GitError) throw err;
     throw new GitError(describeGitError(err));
   }
   const parsed = parseStatus(raw);
@@ -370,7 +459,12 @@ export async function inspect(root: string): Promise<Inspection> {
         .catch(() => null)
     : null;
 
-  const { files: _files, truncated: _truncated, ...counts } = parsed;
+  const {
+    files: _files,
+    truncated: _truncated,
+    total: _total,
+    ...counts
+  } = parsed;
   return {
     availability: 'available',
     error: null,
@@ -511,9 +605,11 @@ export async function listChanges(
   options: ChangesOptions = DEFAULT_CHANGES_OPTIONS,
 ): Promise<RepositoryChanges> {
   try {
+    await assertGitVersion();
     const git = gitAt(root);
-    const { files, truncated } = parseStatus(
-      await git.raw(workspaceStatusArgs(options)),
+    const { files, truncated, total } = parseStatus(
+      await readStatus(root, workspaceStatusArgs(options)),
+      MAX_CHANGES_FILES,
     );
     // Each side's line counts come from that side's own comparison: Index → Working tree for
     // unstaged rows, HEAD → Index for staged ones. Counts are a nicety, so a failure leaves them out.
@@ -543,8 +639,51 @@ export async function listChanges(
       if (counts && file.kind !== 'conflict' && file.kind !== 'untracked')
         Object.assign(file, counts);
     }
-    return { files, truncated };
+    await binarySizes(root, files);
+    return { files, truncated, total };
   } catch (err) {
+    if (err instanceof GitError) throw err;
     throw new GitError(describeGitError(err));
   }
+}
+
+// At most this many binary rows get a size; each is one cat-file line or one stat.
+const MAX_SIZED = 200;
+
+// Binary files have no line counts, so the list shows their size instead: the index blob for a
+// staged row (one cat-file for all of them), the file on disk otherwise. Unknown stays null.
+async function binarySizes(root: string, files: ChangedFile[]): Promise<void> {
+  const binary = files
+    .filter((f) => f.binary && (f.kind === 'staged' || f.kind === 'modified'))
+    .slice(0, MAX_SIZED);
+  // cat-file reads one name per line, so a path with a line break gets no size.
+  const staged = binary.filter(
+    (f) => f.kind === 'staged' && !/[\r\n]/.test(f.path),
+  );
+  if (staged.length) {
+    const result = await gitBytes(
+      root,
+      ['cat-file', '--batch-check=%(objectsize)'],
+      {
+        maxBytes: 64 * 1024,
+        input: staged.map((f) => `:${f.path}\n`).join(''),
+      },
+    ).catch(() => null);
+    const lines = result?.stdout.toString('utf8').split('\n') ?? [];
+    staged.forEach((file, i) => {
+      file.size = /^\d+$/.test(lines[i] ?? '') ? Number(lines[i]) : null;
+    });
+  }
+  await Promise.all(
+    binary
+      .filter((f) => f.kind === 'modified')
+      .map(async (file) => {
+        const inside = await resolveInside(root, file.path);
+        file.size = inside
+          ? await stat(inside.abs)
+              .then((info) => (info.isFile() ? info.size : null))
+              .catch(() => null)
+          : null;
+      }),
+  );
 }

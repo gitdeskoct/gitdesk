@@ -1,6 +1,8 @@
 import {
   useInfiniteQuery,
   useMutation,
+  useMutationState,
+  useQueries,
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query';
@@ -30,6 +32,7 @@ import type {
   AnalyticsRange,
   CommitInput,
   ApplySelectionInput,
+  ContextLinesInput,
   DiffInput,
   GitInstall,
   RepoConfigInput,
@@ -498,12 +501,24 @@ function useWorkspaceMutation<I, R>(
   id: string,
   fn: (input: I) => Promise<R>,
   scopes: Parameters<typeof invalidateRepository>[2],
+  mutationKey?: readonly unknown[],
 ) {
   const qc = useQueryClient();
   return useMutation({
+    mutationKey,
     mutationFn: fn,
     onSettled: () => invalidateRepository(qc, id, scopes),
   });
+}
+
+// Whole-file stage and unstage share a key, so a row shows its spinner whichever control
+// (its button, its menu, the bulk bar) started the write for its path.
+export const fileWriteKey = (id: string) => ['ws-file-write', id] as const;
+export function usePathPending(id: string, path: string): boolean {
+  return useMutationState({
+    filters: { mutationKey: fileWriteKey(id), status: 'pending' },
+    select: (mutation) => mutation.state.variables as string[] | undefined,
+  }).some((paths) => paths?.includes(path));
 }
 
 export const useStage = (id: string) =>
@@ -511,6 +526,7 @@ export const useStage = (id: string) =>
     id,
     (paths: string[]) => workspace().stage({ id, paths }),
     ['changes', 'diff'],
+    fileWriteKey(id),
   );
 export const useStageAll = (id: string) =>
   useWorkspaceMutation(id, () => workspace().stageAll(id), ['changes', 'diff']);
@@ -519,6 +535,7 @@ export const useUnstage = (id: string) =>
     id,
     (paths: string[]) => workspace().unstage({ id, paths }),
     ['changes', 'diff'],
+    fileWriteKey(id),
   );
 export const useDiscard = (id: string) =>
   useWorkspaceMutation(
@@ -542,8 +559,24 @@ export const useApplySelection = (id: string) =>
   );
 export const useCopyPatch = (id: string) =>
   useMutation({
-    mutationFn: (input: { path: string; side: 'staged' | 'unstaged' }) =>
-      workspace().copyPatch({ id, ...input }),
+    mutationFn: (input: {
+      path: string;
+      side: 'staged' | 'unstaged' | 'untracked';
+    }) => workspace().copyPatch({ id, ...input }),
+  });
+// Lines around a hunk for an expanded gap. Keyed by the status snapshot like the diff itself,
+// so an edit on disk reads them again.
+export const useContextLines = (
+  id: string,
+  ranges: Omit<ContextLinesInput, 'id'>[],
+  statusAt: number | null,
+) =>
+  useQueries({
+    queries: ranges.map((range) => ({
+      queryKey: ['ws-context', id, range, statusAt],
+      queryFn: () => workspace().contextLines({ id, ...range }),
+      staleTime: Infinity,
+    })),
   });
 export const useRevealDiscarded = () =>
   useMutation({

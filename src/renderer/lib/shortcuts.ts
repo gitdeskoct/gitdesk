@@ -67,6 +67,10 @@ export const DIFF_SHORTCUTS = [
     label: 'Select a changed line (then Shift+click for a range)',
     keys: ['Space'],
   },
+  { label: 'Stage or unstage the file picked in Changes', keys: ['Space'] },
+  { label: 'Check the picked file for a bulk action', keys: ['X'] },
+  { label: 'Check a range of files', keys: ['Shift', '↓'] },
+  { label: 'First or last changed file', keys: ['Home'] },
 ] as const;
 
 const mac = () => window.desktop?.platform === 'darwin';

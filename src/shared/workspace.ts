@@ -138,16 +138,37 @@ export type SelectionResult =
       message: string;
     };
 
-// A discard can keep a copy of what it threw away (Settings › Git › Keep a copy).
-export type DiscardResult = { saved: boolean };
+// Whole-file stage, unstage and discard. Stale and busy are answers, not errors, so the page can
+// show the same bands as partial staging. A discard can keep a copy (Settings › Git › Keep a copy).
+export type WriteResult =
+  | { status: 'applied'; saved: boolean }
+  // The list on screen no longer matches Git's status; it has been refreshed and nothing ran.
+  | { status: 'stale' }
+  | { status: 'rejected'; reason: 'busy' | 'timeout'; message: string };
 
 export const copyPatchInputSchema = z
   .object({
     id: repoIdSchema,
     path: repoPathSchema,
-    side: z.enum(['unstaged', 'staged']),
+    side: z.enum(['unstaged', 'staged', 'untracked']),
   })
   .strict();
+
+// Unchanged lines around a hunk, shown when the reader expands a gap. Display only: the patch
+// Git staged from stays as it was. Lines are numbered on the new side of the comparison.
+export const CONTEXT_LINES_MAX = 500;
+export const contextLinesInputSchema = z
+  .object({
+    id: repoIdSchema,
+    path: repoPathSchema,
+    side: z.enum(['unstaged', 'staged']),
+    start: z.number().int().min(1).max(10_000_000),
+    count: z.number().int().min(1).max(CONTEXT_LINES_MAX),
+  })
+  .strict();
+export type ContextLinesInput = z.infer<typeof contextLinesInputSchema>;
+// `total` is the file's line count on that side, so the view knows where the last gap ends.
+export type ContextLines = { start: number; lines: string[]; total: number };
 
 // The identity Git will write into the next commit, and which config level set it.
 export type CommitIdentity = {
@@ -530,6 +551,9 @@ export type GitInstall =
   | {
       available: true;
       version: string;
+      // Older than gitdesk's floor (minimum): Changes refuses to run rather than fail mid-way.
+      tooOld: boolean;
+      minimum: string;
       // Where the Git in use lives; display only.
       location: string | null;
       custom: boolean;
@@ -547,6 +571,7 @@ export const WORKSPACE_IPC = {
   discardAll: 'workspace:discard-all',
   applySelection: 'workspace:apply-selection',
   copyPatch: 'workspace:copy-patch',
+  contextLines: 'workspace:context-lines',
   revealDiscarded: 'workspace:reveal-discarded',
   commitIdentity: 'workspace:commit-identity',
   commit: 'workspace:commit',
@@ -580,18 +605,19 @@ export const WORKSPACE_IPC = {
 
 export interface WorkspaceApi {
   diff(input: DiffInput): Promise<DiffResult>;
-  stage(input: PathsInput): Promise<void>;
+  stage(input: PathsInput): Promise<WriteResult>;
   // Every eligible change in this repository; ignored files are never staged.
-  stageAll(id: string): Promise<void>;
-  unstage(input: PathsInput): Promise<void>;
+  stageAll(id: string): Promise<WriteResult>;
+  unstage(input: PathsInput): Promise<WriteResult>;
   // Unstaged edits go back to the staged version; untracked files go to the system trash.
-  discard(input: PathsInput): Promise<DiscardResult>;
+  discard(input: PathsInput): Promise<WriteResult>;
   // Staged and unstaged changes both go: the files return to HEAD.
-  discardAll(input: PathsInput): Promise<DiscardResult>;
+  discardAll(input: PathsInput): Promise<WriteResult>;
   // Stages, unstages or discards part of one file through `git apply`.
   applySelection(input: ApplySelectionInput): Promise<SelectionResult>;
   // Copies Git's patch for one file to the clipboard; the text never passes through the page.
   copyPatch(input: z.infer<typeof copyPatchInputSchema>): Promise<void>;
+  contextLines(input: ContextLinesInput): Promise<ContextLines>;
   // Shows the newest saved discard for this repository, or the whole folder for null.
   revealDiscarded(id: string | null): Promise<void>;
   commitIdentity(id: string): Promise<CommitIdentity>;

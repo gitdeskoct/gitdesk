@@ -3,11 +3,13 @@ import type { ChangedFile, ConflictKind, RepoStatus } from '../../shared/repos';
 export type ParsedStatus = Omit<
   RepoStatus,
   'operation' | 'hasRemotes' | 'lastCommit'
-> & { files: ChangedFile[]; truncated: boolean };
+> & { files: ChangedFile[]; truncated: boolean; total: number };
 
 // Paths and branch names come from the repository, so they are capped and kept as plain text.
 // Paths keep their full length: staging and diffs act on them, and a clipped path names nothing.
-const MAX_FILES = 500;
+// Repository cards need only counts; the Changes list keeps more paths so most trees fit whole.
+export const MAX_FILES = 500;
+export const MAX_CHANGES_FILES = 5000;
 const MAX_TEXT = 255;
 const MAX_PATH = 4096;
 const clip = (text: string) => text.slice(0, MAX_TEXT);
@@ -71,7 +73,7 @@ function pathOf(record: string, fields: number): string {
 
 // Parses `git status --porcelain=v2 --branch -z`. With -z every record ends in NUL, and a
 // rename or copy record ("2 ...") is followed by one more NUL-terminated field: the old path.
-export function parseStatus(output: string): ParsedStatus {
+export function parseStatus(output: string, cap = MAX_FILES): ParsedStatus {
   const status: ParsedStatus = {
     branch: null,
     detached: false,
@@ -85,8 +87,11 @@ export function parseStatus(output: string): ParsedStatus {
     conflicts: 0,
     files: [],
     truncated: false,
+    total: 0,
   };
   const seen = new Set<string>();
+  // Paths past the cap, so the list can say how many it left out.
+  const past = new Set<string>();
   const add = (
     path: string,
     kind: ChangedFile['kind'],
@@ -95,8 +100,9 @@ export function parseStatus(output: string): ParsedStatus {
   ) => {
     if (path.length > MAX_PATH) return;
     // The cap counts paths, so a file with staged and unstaged edits keeps both of its rows.
-    if (!seen.has(path) && seen.size >= MAX_FILES) {
+    if (!seen.has(path) && seen.size >= cap) {
       status.truncated = true;
+      past.add(path);
       return;
     }
     seen.add(path);
@@ -186,6 +192,7 @@ export function parseStatus(output: string): ParsedStatus {
       }
     }
   }
+  status.total = seen.size + past.size;
   return status;
 }
 

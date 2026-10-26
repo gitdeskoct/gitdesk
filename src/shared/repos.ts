@@ -85,9 +85,16 @@ export type ChangedFile = {
   added?: number;
   removed?: number;
   binary?: boolean;
+  // A binary file's size on this side (the index for staged, the disk otherwise), in bytes.
+  size?: number | null;
 };
 
-export type RepositoryChanges = { files: ChangedFile[]; truncated: boolean };
+// `total` counts every changed path Git reported; `files` stops at the list's cap.
+export type RepositoryChanges = {
+  files: ChangedFile[];
+  truncated: boolean;
+  total: number;
+};
 
 export type LocalActivity = {
   id: number;

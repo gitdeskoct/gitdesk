@@ -16,8 +16,10 @@ import {
   type ApplySelectionInput,
   type BranchList,
   type CommitIdentity,
-  type DiscardResult,
+  type ContextLines,
+  type ContextLinesInput,
   type SelectionResult,
+  type WriteResult,
   type CommitDetail,
   type CommitInput,
   type CommitResult,
@@ -54,16 +56,20 @@ import { parseGitProgress } from './clone-runner';
 import { parseDiff, parseNumstat, untrackedDiff } from './git-diff';
 import { aggregate, parseLogNumstat, rangeStart } from './git-analytics';
 import {
+  assertGitVersion,
   canonicalPath,
   changesOptions,
   describeGitError,
+  GitError,
+  GitTimeout,
   gitAt,
   gitBytes,
   pathKey,
+  readStatus,
   STATUS_ARGS,
   workspaceStatusArgs,
 } from './git-inspector';
-import { parseStatus } from './git-status';
+import { MAX_CHANGES_FILES, parseStatus } from './git-status';
 import { buildPatch, newFilePatch, parsePatch } from './patch-builder';
 import { resolveInside } from './paths';
 import type { RepositoryStore } from './repository-store';
@@ -75,6 +81,10 @@ import type { Journal } from '../sync/journal';
 const SIZE_TTL_MS = 30_000;
 
 export class WorkspaceError extends UserError {}
+// The list on screen no longer matches Git's status, or another program holds index.lock. Whole-file
+// writes answer these as results instead of errors (WriteResult).
+class StaleChanges extends WorkspaceError {}
+class RepoBusy extends WorkspaceError {}
 
 // Desktop integration this service needs, injected so tests run without Electron.
 export type WorkspaceDesktop = {
@@ -414,7 +424,27 @@ export function createWorkspaceService(deps: {
     );
   }
   async function assertUnlocked(root: string): Promise<void> {
-    if (await lockHeld(root)) throw new WorkspaceError(BUSY);
+    if (await lockHeld(root)) throw new RepoBusy(BUSY);
+  }
+
+  // A whole-file write's answer: applied, or stale, busy or timed out with nothing hidden. The
+  // list is refreshed either way, since part of a batch may have run before Git stopped.
+  async function written(
+    id: string,
+    fn: () => Promise<boolean | void>,
+  ): Promise<WriteResult> {
+    try {
+      return { status: 'applied', saved: (await fn()) === true };
+    } catch (err) {
+      if (err instanceof StaleChanges) return { status: 'stale' };
+      if (!(err instanceof RepoBusy) && !(err instanceof GitTimeout)) throw err;
+      await deps.refresh(id).catch(() => undefined);
+      return {
+        status: 'rejected',
+        reason: err instanceof RepoBusy ? 'busy' : 'timeout',
+        message: err.message,
+      };
+    }
   }
 
   // Writes read Git's exit code: simple-git reports a failure with empty stderr as success.
@@ -428,11 +458,12 @@ export function createWorkspaceService(deps: {
       input,
       timeoutMs: WRITE_TIMEOUT_MS,
     }).catch((err: unknown) => {
+      if (err instanceof GitTimeout) throw err;
       throw new WorkspaceError(describeGitError(err));
     });
     if (result.code === 0) return;
     if (/index\.lock|Another git process/i.test(result.stderr))
-      throw new WorkspaceError(BUSY);
+      throw new RepoBusy(BUSY);
     throw new WorkspaceError(
       sanitizeOutput(result.stderr, root)?.split('\n')[0] ??
         "Git didn't make that change.",
@@ -477,6 +508,30 @@ export function createWorkspaceService(deps: {
       .update(bytes)
       .digest('hex');
 
+  // An untracked file as `git add` would store it: clean filters and core.autocrlf applied.
+  // `git apply --cached` writes patch bytes as they are, so a partial stage builds its patch from
+  // this blob. Only line endings may differ from the bytes on screen, or the selected line numbers
+  // would point elsewhere; any other filter (LFS, a custom clean) returns null.
+  async function cleanBlob(
+    root: string,
+    rel: string,
+    bytes: Buffer,
+  ): Promise<Buffer | null> {
+    const hashed = await gitBytes(
+      root,
+      ['hash-object', '-w', '--stdin', `--path=${rel}`],
+      { maxBytes: 200, input: bytes, timeoutMs: WRITE_TIMEOUT_MS },
+    ).catch(() => null);
+    const oid = hashed?.code === 0 ? hashed.stdout.toString('utf8').trim() : '';
+    if (!OID.test(oid)) return null;
+    const blob = await gitBytes(root, ['cat-file', 'blob', oid], {
+      maxBytes: MAX_FILE_BYTES * 2,
+    }).catch(() => null);
+    if (!blob || blob.code !== 0) return null;
+    const lf = (b: Buffer) => b.toString('latin1').replace(/\r\n/g, '\n');
+    return lf(blob.stdout) === lf(bytes) ? blob.stdout : null;
+  }
+
   async function blobSize(root: string, spec: string): Promise<number | null> {
     const text = (
       await gitAt(root)
@@ -518,6 +573,7 @@ export function createWorkspaceService(deps: {
     id: string,
     label: string,
     patch: Buffer,
+    suffix = '.patch',
   ): Promise<boolean> {
     if (!deps.settings().changesKeepDiscarded || !deps.discardDir) return false;
     if (!patch.length) return false;
@@ -531,7 +587,7 @@ export function createWorkspaceService(deps: {
     try {
       await mkdir(folder, { recursive: true });
       await writeFile(
-        path.join(folder, `${stamp}-${safe(path.basename(label))}.patch`),
+        path.join(folder, `${stamp}-${safe(path.basename(label))}${suffix}`),
         patch,
         { flag: 'wx' },
       );
@@ -548,9 +604,18 @@ export function createWorkspaceService(deps: {
       return await gitAt(root).raw(args);
     } catch (err) {
       if (/index\.lock|Another git process/i.test(errorText(err)))
-        throw new WorkspaceError(
-          'Another Git process is using this repository. Try again in a moment.',
-        );
+        throw new RepoBusy(BUSY);
+      throw new WorkspaceError(describeGitError(err));
+    }
+  }
+
+  async function statusRaw(root: string, args: string[]): Promise<string> {
+    try {
+      return await readStatus(root, args);
+    } catch (err) {
+      if (/index\.lock|Another git process/i.test(errorText(err)))
+        throw new RepoBusy(BUSY);
+      if (err instanceof GitError) throw err;
       throw new WorkspaceError(describeGitError(err));
     }
   }
@@ -561,18 +626,21 @@ export function createWorkspaceService(deps: {
     root: string,
     paths: string[],
   ): Promise<ChangedFile[]> {
-    const whole = parseStatus(await gitRaw(root, statusArgs()));
+    const whole = parseStatus(
+      await statusRaw(root, statusArgs()),
+      MAX_CHANGES_FILES,
+    );
     if (!whole.truncated) return whole.files;
     const seen = new Set(whole.files.map((file) => file.path));
     const rest = paths.filter((p) => !seen.has(p));
     const files = [...whole.files];
     for (let i = 0; i < rest.length; i += BATCH) {
-      const output = await gitRaw(root, [
+      const output = await statusRaw(root, [
         ...statusArgs(),
         '--',
         ...rest.slice(i, i + BATCH),
       ]);
-      files.push(...parseStatus(output).files);
+      files.push(...parseStatus(output, MAX_CHANGES_FILES).files);
     }
     return files;
   }
@@ -585,6 +653,7 @@ export function createWorkspaceService(deps: {
     paths: string[],
     kinds: ChangedFile['kind'][],
   ): Promise<ChangedFile[]> {
+    await assertGitVersion();
     const unique = [...new Set(paths)];
     const files = await statusOf(root, unique);
     const matched = unique.map((p) =>
@@ -592,7 +661,7 @@ export function createWorkspaceService(deps: {
     );
     if (matched.some((file) => !file)) {
       void deps.refresh(id).catch(() => undefined);
-      throw new WorkspaceError(
+      throw new StaleChanges(
         'Those changes moved on since the list was read. It has been refreshed.',
       );
     }
@@ -1622,126 +1691,137 @@ export function createWorkspaceService(deps: {
     diff,
 
     stage: (input: PathsInput) =>
-      serial(input.id, async () => {
-        const root = rootOf(input.id);
-        await assertUnlocked(root);
-        const files = await requireChanged(input.id, root, input.paths, [
-          'modified',
-          'untracked',
-          'conflict',
-        ]);
-        for (const file of files)
-          if (file.kind === 'conflict') await assertResolved(root, file.path);
-        await inBatches(
-          root,
-          ['add'],
-          files.map((f) => f.path),
-        );
-        await deps.refresh(input.id);
-      }),
+      serial(input.id, () =>
+        written(input.id, async () => {
+          const root = rootOf(input.id);
+          await assertUnlocked(root);
+          const files = await requireChanged(input.id, root, input.paths, [
+            'modified',
+            'untracked',
+            'conflict',
+          ]);
+          for (const file of files)
+            if (file.kind === 'conflict') await assertResolved(root, file.path);
+          await inBatches(
+            root,
+            ['add'],
+            files.map((f) => f.path),
+          );
+          await deps.refresh(input.id);
+        }),
+      ),
 
     stageAll: (id: string) =>
-      serial(id, async () => {
-        const root = rootOf(id);
-        await assertUnlocked(root);
-        const status = parseStatus(await gitRaw(root, STATUS_ARGS));
-        if (status.conflicts > 0)
-          throw new WorkspaceError(
-            'Resolve the conflicted files first. Stage all would mark them resolved.',
-          );
-        await gitWrite(root, ['add', '--all']);
-        await deps.refresh(id);
-      }),
+      serial(id, () =>
+        written(id, async () => {
+          const root = rootOf(id);
+          await assertUnlocked(root);
+          await assertGitVersion();
+          const status = parseStatus(await statusRaw(root, STATUS_ARGS));
+          if (status.conflicts > 0)
+            throw new WorkspaceError(
+              'Resolve the conflicted files first. Stage all would mark them resolved.',
+            );
+          await gitWrite(root, ['add', '--all']);
+          await deps.refresh(id);
+        }),
+      ),
 
     unstage: (input: PathsInput) =>
-      serial(input.id, async () => {
-        const root = rootOf(input.id);
-        await assertUnlocked(root);
-        const files = await requireChanged(input.id, root, input.paths, [
-          'staged',
-        ]);
-        // A staged rename is a deletion plus an addition; both sides leave the index together.
-        const paths = files.flatMap((f) =>
-          f.origPath ? [f.path, f.origPath] : [f.path],
-        );
-        // An unborn branch has no HEAD to restore from; rm --cached only touches the index.
-        if (await headOid(root))
-          await inBatches(root, ['restore', '--staged'], paths);
-        else await inBatches(root, ['rm', '--cached', '--quiet'], paths);
-        await deps.refresh(input.id);
-      }),
+      serial(input.id, () =>
+        written(input.id, async () => {
+          const root = rootOf(input.id);
+          await assertUnlocked(root);
+          const files = await requireChanged(input.id, root, input.paths, [
+            'staged',
+          ]);
+          // A staged rename is a deletion plus an addition; both sides leave the index together.
+          const paths = files.flatMap((f) =>
+            f.origPath ? [f.path, f.origPath] : [f.path],
+          );
+          // An unborn branch has no HEAD to restore from; rm --cached only touches the index.
+          if (await headOid(root))
+            await inBatches(root, ['restore', '--staged'], paths);
+          else await inBatches(root, ['rm', '--cached', '--quiet'], paths);
+          await deps.refresh(input.id);
+        }),
+      ),
 
     // Unstaged edits go back to the staged version; untracked files go to the system trash.
     discard: (input: PathsInput) =>
-      serial(input.id, async (): Promise<DiscardResult> => {
-        const root = rootOf(input.id);
-        await assertUnlocked(root);
-        const files = await requireChanged(input.id, root, input.paths, [
-          'modified',
-          'untracked',
-        ]);
-        const tracked = files
-          .filter((f) => f.kind === 'modified')
-          .map((f) => f.path);
-        let saved = false;
-        if (tracked.length) {
-          saved = await saveDiscard(
-            input.id,
-            tracked.length === 1 ? tracked[0]! : `${tracked.length}-files`,
-            await patchOf(root, ['diff'], tracked),
-          );
-          await inBatches(root, ['restore', '--worktree'], tracked);
-        }
-        for (const file of files.filter((f) => f.kind === 'untracked')) {
-          const target = await insideRoot(root, file.path);
-          try {
-            await deps.desktop.trashItem(target);
-          } catch {
-            await deps.refresh(input.id).catch(() => undefined);
-            throw new WorkspaceError(
-              tracked.length
-                ? `Couldn't move ${file.path} to the trash. The tracked files were already discarded.`
-                : `Couldn't move ${file.path} to the trash. Nothing else was changed.`,
+      serial(input.id, () =>
+        written(input.id, async () => {
+          const root = rootOf(input.id);
+          await assertUnlocked(root);
+          const files = await requireChanged(input.id, root, input.paths, [
+            'modified',
+            'untracked',
+          ]);
+          const tracked = files
+            .filter((f) => f.kind === 'modified')
+            .map((f) => f.path);
+          let saved = false;
+          if (tracked.length) {
+            saved = await saveDiscard(
+              input.id,
+              tracked.length === 1 ? tracked[0]! : `${tracked.length}-files`,
+              await patchOf(root, ['diff'], tracked),
             );
+            await inBatches(root, ['restore', '--worktree'], tracked);
           }
-        }
-        await deps.refresh(input.id);
-        return { saved };
-      }),
+          for (const file of files.filter((f) => f.kind === 'untracked')) {
+            const target = await insideRoot(root, file.path);
+            try {
+              await deps.desktop.trashItem(target);
+            } catch {
+              await deps.refresh(input.id).catch(() => undefined);
+              throw new WorkspaceError(
+                tracked.length
+                  ? `Couldn't move ${file.path} to the trash. The tracked files were already discarded.`
+                  : `Couldn't move ${file.path} to the trash. Nothing else was changed.`,
+              );
+            }
+          }
+          await deps.refresh(input.id);
+          return saved;
+        }),
+      ),
 
     // Back to HEAD for both the index and the working tree, a copy saved first.
     discardAll: (input: PathsInput) =>
-      serial(input.id, async (): Promise<DiscardResult> => {
-        const root = rootOf(input.id);
-        await assertUnlocked(root);
-        if (!(await headOid(root)))
-          throw new WorkspaceError(
-            "There's no commit to go back to yet. Unstage the files, then discard them.",
-          );
-        const files = await requireChanged(input.id, root, input.paths, [
-          'staged',
-          'modified',
-        ]);
-        const paths = [
-          ...new Set(
-            files.flatMap((f) =>
-              f.origPath ? [f.path, f.origPath] : [f.path],
+      serial(input.id, () =>
+        written(input.id, async () => {
+          const root = rootOf(input.id);
+          await assertUnlocked(root);
+          if (!(await headOid(root)))
+            throw new WorkspaceError(
+              "There's no commit to go back to yet. Unstage the files, then discard them.",
+            );
+          const files = await requireChanged(input.id, root, input.paths, [
+            'staged',
+            'modified',
+          ]);
+          const paths = [
+            ...new Set(
+              files.flatMap((f) =>
+                f.origPath ? [f.path, f.origPath] : [f.path],
+              ),
             ),
-          ),
-        ];
-        const saved = await saveDiscard(
-          input.id,
-          paths.length === 1 ? paths[0]! : `${paths.length}-files`,
-          await patchOf(root, ['diff', 'HEAD'], paths),
-        );
-        await inBatches(
-          root,
-          ['restore', '--source=HEAD', '--staged', '--worktree'],
-          paths,
-        );
-        await deps.refresh(input.id);
-        return { saved };
-      }),
+          ];
+          const saved = await saveDiscard(
+            input.id,
+            paths.length === 1 ? paths[0]! : `${paths.length}-files`,
+            await patchOf(root, ['diff', 'HEAD'], paths),
+          );
+          await inBatches(
+            root,
+            ['restore', '--source=HEAD', '--staged', '--worktree'],
+            paths,
+          );
+          await deps.refresh(input.id);
+          return saved;
+        }),
+      ),
 
     applySelection: (input: ApplySelectionInput) =>
       serial(input.id, async (): Promise<SelectionResult> => {
@@ -1759,13 +1839,16 @@ export function createWorkspaceService(deps: {
             : input.side === 'unstaged'
               ? 'modified'
               : 'untracked';
-        const [file] = await requireChanged(
-          input.id,
-          root,
-          [input.path],
-          [kind],
-        );
-        if (file!.submodule)
+        const file = (
+          await requireChanged(input.id, root, [input.path], [kind]).catch(
+            (err: unknown) => {
+              if (err instanceof StaleChanges) return [null];
+              throw err;
+            },
+          )
+        )[0];
+        if (!file) return { status: 'stale' };
+        if (file.submodule)
           return refuse(
             'A submodule is staged as a whole: its new commit, not lines.',
           );
@@ -1783,14 +1866,19 @@ export function createWorkspaceService(deps: {
             return refuse('A binary file is staged as a whole.');
           const executable =
             process.platform !== 'win32' && (info.mode & 0o111) !== 0;
+          const stored = await cleanBlob(root, input.path, bytes);
+          if (!stored)
+            return refuse(
+              'A Git filter (such as LFS) changes this file when it is added, so it is staged as a whole.',
+            );
           // The patch is bytes held as latin1, so the name goes in as its UTF-8 bytes.
           text = newFilePatch(
             Buffer.from(input.path, 'utf8').toString('latin1'),
-            bytes.toString('latin1'),
+            stored.toString('latin1'),
             executable ? '100755' : '100644',
           );
         } else {
-          const bytes = await diffBytes(root, input.side, file!, {
+          const bytes = await diffBytes(root, input.side, file, {
             context: input.context,
           });
           if (tokenOf(input.side, input.context, bytes) !== input.token)
@@ -1839,15 +1927,41 @@ export function createWorkspaceService(deps: {
     copyPatch: async (input: {
       id: string;
       path: string;
-      side: 'staged' | 'unstaged';
+      side: 'staged' | 'unstaged' | 'untracked';
     }) => {
       const root = rootOf(input.id);
       const [file] = await requireChanged(
         input.id,
         root,
         [input.path],
-        [input.side === 'staged' ? 'staged' : 'modified'],
+        [
+          input.side === 'staged'
+            ? 'staged'
+            : input.side === 'unstaged'
+              ? 'modified'
+              : 'untracked',
+        ],
       );
+      if (input.side === 'untracked') {
+        // The file as it is on disk, as a new-file patch `git apply` recreates byte for byte.
+        const target = await insideRoot(root, input.path);
+        const info = await lstat(target);
+        if (!info.isFile() || info.size > MAX_FILE_BYTES)
+          throw new WorkspaceError(
+            'Only a regular file can be copied as a patch.',
+          );
+        const bytes = await readFile(target);
+        if (bytes.subarray(0, 8000).includes(0))
+          throw new WorkspaceError('A binary file has no text patch to copy.');
+        // Built as latin1 bytes like the staging patch, so a quoted name keeps its UTF-8 bytes.
+        const patch = newFilePatch(
+          Buffer.from(input.path, 'utf8').toString('latin1'),
+          bytes.toString('latin1'),
+          '100644',
+        );
+        deps.desktop.copyText(Buffer.from(patch, 'latin1').toString('utf8'));
+        return;
+      }
       const bytes = await diffBytes(root, input.side, file!, {
         context: deps.settings().diffContext,
         binary: true,
@@ -1855,6 +1969,53 @@ export function createWorkspaceService(deps: {
       if (!bytes.length)
         throw new WorkspaceError('There are no changes in this file to copy.');
       deps.desktop.copyText(bytes.toString('utf8'));
+    },
+
+    // The new side of the comparison: the index for staged, the file on disk for unstaged.
+    contextLines: async (input: ContextLinesInput): Promise<ContextLines> => {
+      const root = rootOf(input.id);
+      const [file] = await requireChanged(
+        input.id,
+        root,
+        [input.path],
+        [input.side === 'staged' ? 'staged' : 'modified'],
+      );
+      if (file!.submodule)
+        throw new WorkspaceError('A submodule has no lines to show.');
+      let bytes: Buffer;
+      if (input.side === 'staged') {
+        const result = await gitBytes(
+          root,
+          ['cat-file', 'blob', `:${input.path}`],
+          {
+            maxBytes: MAX_FILE_BYTES,
+          },
+        ).catch(() => null);
+        if (!result || result.code !== 0)
+          throw new WorkspaceError(
+            "Git couldn't read the staged version of this file.",
+          );
+        bytes = result.stdout;
+      } else {
+        const target = await insideRoot(root, input.path);
+        const info = await lstat(target);
+        if (!info.isFile())
+          throw new WorkspaceError('Only a regular file has lines to show.');
+        if (info.size > MAX_FILE_BYTES)
+          throw new WorkspaceError('This file is too large to expand here.');
+        bytes = await readFile(target);
+      }
+      if (bytes.subarray(0, 8000).includes(0))
+        throw new WorkspaceError('A binary file has no lines to show.');
+      const all = bytes.toString('utf8').split('\n');
+      if (all.at(-1) === '') all.pop();
+      return {
+        start: input.start,
+        total: all.length,
+        lines: all
+          .slice(input.start - 1, input.start - 1 + input.count)
+          .map((line) => line.replace(/\r$/, '').slice(0, 2000)),
+      };
     },
 
     revealDiscarded: async (id: string | null) => {
@@ -1871,7 +2032,7 @@ export function createWorkspaceService(deps: {
             );
       await mkdir(folder, { recursive: true });
       const newest = (await readdir(folder).catch(() => [] as string[]))
-        .filter((name) => name.endsWith('.patch'))
+        .filter((name) => name.endsWith('.patch') || name.endsWith('.orig'))
         .sort()
         .at(-1);
       if (newest) deps.desktop.showItemInFolder(path.join(folder, newest));
@@ -1921,7 +2082,8 @@ export function createWorkspaceService(deps: {
         const root = rootOf(input.id);
         if (await lockHeld(root))
           return { status: 'rejected', reason: 'busy', output: null };
-        const status = parseStatus(await gitRaw(root, STATUS_ARGS));
+        await assertGitVersion();
+        const status = parseStatus(await statusRaw(root, STATUS_ARGS));
         if (status.conflicts > 0)
           return { status: 'rejected', reason: 'conflicts', output: null };
         // A rebase or a pick of several commits makes its own commits on Continue.
@@ -2132,6 +2294,8 @@ export function createWorkspaceService(deps: {
     serial,
     operationInProgress: (id: string) => operationInProgress(rootOf(id)),
     rootOf,
+    lockHeld: (id: string) => lockHeld(rootOf(id)),
+    keepCopy: saveDiscard,
     // For the sync and move services, which run their own transfers with the same protections.
     transferGit,
     hostedAuth,
