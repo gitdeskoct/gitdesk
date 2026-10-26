@@ -171,15 +171,17 @@ Run these in `backend/`.
 
 ## Releasing
 
-GitHub Actions builds every release; nothing is published until a person publishes the draft. The source repository is private, so installers and update metadata go to the public [BotCoder254/gitdesk-releases](https://github.com/BotCoder254/gitdesk-releases), which installed copies read without a token.
+Every push to `main`, a merged pull request included, is released by `release.yml`. The source repository is private, so installers and update metadata go to the public [BotCoder254/gitdesk-releases](https://github.com/BotCoder254/gitdesk-releases), which installed copies read without a token.
 
-1. Set `version` in `package.json` on `main`, commit it, and push a tag of the same version: `git tag v1.2.0` then `git push origin v1.2.0`.
-2. `release.yml` checks that the tag matches `package.json` and is on `main`, then runs Quality.
-3. It builds Windows (NSIS) and Linux (AppImage, deb, pacman, tar.gz) on their own runners and starts each packaged app once.
-4. It checks every file against `latest.yml` and `latest-linux.yml`, writes `SHA256SUMS.txt` and `gitdesk.nix`, and creates a **draft** in gitdesk-releases.
-5. Read the draft, edit its notes, and publish it there. Installed copies see it at their next check.
+1. It picks the version (`.github/scripts/next-version.cjs`). The patch number goes up from the newest `v*` tag, so 1.2.0 becomes 1.2.1. A commit since the last release whose message says `#minor` or `#major` (or `BREAKING CHANGE`) raises that part instead; a pull request title counts, since it is in the merge commit's message. A `package.json` version above the newest tag, set by hand, is released as it is. With no tag yet, the first release is `package.json`'s version.
+2. It runs Quality on that commit.
+3. It writes the version to `package.json` and `package-lock.json`, commits `Release vX.Y.Z` to `main` as github-actions, and tags it `vX.Y.Z`. That commit starts no workflow of its own. Pull before you work on `main` again.
+4. It builds Windows (NSIS) and Linux (AppImage, deb, pacman, tar.gz) from the tag on their own runners and starts each packaged app once.
+5. It checks every file against `latest.yml` and `latest-linux.yml`, writes `SHA256SUMS.txt` and `gitdesk.nix`, and **publishes** the release in gitdesk-releases, marked latest, with the commit subjects since the last release as its notes. Installed copies see it at their next check in Settings › Updates.
 
-To try the whole build without a draft, run Release from the Actions tab with **dry run** ticked.
+Put `[skip release]` in the message of the commit you push, or in the pull request title, to run Quality without releasing. Pushes that land while a release runs wait their turn, then go out together as the next version. If a build fails after the tag is pushed, re-run the failed jobs; the next push otherwise releases the following version.
+
+To try the whole build without committing, tagging or publishing, run Release from the Actions tab with **dry run** ticked. It can run from any branch.
 
 **What each install gets.** The Windows installer and the AppImage update themselves from Settings › Updates. `.deb` and pacman installs update through gitdesk too, and Linux asks for an administrator password. The `.tar.gz` archive and Nix can't update themselves; users install the new version the same way.
 
@@ -187,25 +189,27 @@ To try the whole build without a draft, run Release from the Actions tab with **
 
 **Settings it needs** (repository Settings › Secrets and variables › Actions):
 
-| Name                   | Kind                          | What it is                                                                        |
-| ---------------------- | ----------------------------- | --------------------------------------------------------------------------------- |
-| `API_ORIGIN`           | Variable                      | The production Worker's https origin, baked into packaged builds.                 |
-| `RELEASES_TOKEN`       | Secret, `release` environment | A fine-grained token with Contents read and write on gitdesk-releases only.       |
-| `WIN_SIGNING`          | Variable                      | `required` makes a release fail unless the Windows files are validly signed.      |
-| `WIN_PUBLISHER_NAME`   | Variable                      | The certificate's subject name. Installed copies refuse updates signed by others. |
-| `WIN_CSC_LINK`         | Secret, `release` environment | The signing certificate, as electron-builder reads it.                            |
-| `WIN_CSC_KEY_PASSWORD` | Secret, `release` environment | Its password.                                                                     |
+| Name                   | Kind     | What it is                                                                        |
+| ---------------------- | -------- | --------------------------------------------------------------------------------- |
+| `API_ORIGIN`           | Variable | The production Worker's https origin, baked into packaged builds.                 |
+| `RELEASES_TOKEN`       | Secret   | A token that can write releases in gitdesk-releases; fine-grained is best.        |
+| `WIN_SIGNING`          | Variable | `required` makes a release fail unless the Windows files are validly signed.      |
+| `WIN_PUBLISHER_NAME`   | Variable | The certificate's subject name. Installed copies refuse updates signed by others. |
+| `WIN_CSC_LINK`         | Secret   | The signing certificate, as electron-builder reads it.                            |
+| `WIN_CSC_KEY_PASSWORD` | Secret   | Its password.                                                                     |
 
-Secrets can also be repository secrets; jobs in the `release` environment read both. A repository secret is the only option until the `release` environment exists, which needs the repository owner.
+All are repository-level. Environments on a private repository need GitHub Pro or Team, which this account doesn't have, so the workflow uses none.
 
 **The releases token.** GitHub has no command or API that creates a fine-grained token, so it is made in the browser, signed in as BotCoder254:
 
-1. Open [this pre-filled form](https://github.com/settings/personal-access-tokens/new?name=gitdesk+releases&description=Lets+shikki841%2Fgitdesk+create+draft+releases+in+BotCoder254%2Fgitdesk-releases&target_name=BotCoder254&expires_in=366&contents=write). It sets the name, the owner, a one-year expiry and Contents read and write.
+1. Open [this pre-filled form](https://github.com/settings/personal-access-tokens/new?name=gitdesk+releases&description=Lets+shikki841%2Fgitdesk+publish+releases+in+BotCoder254%2Fgitdesk-releases&target_name=BotCoder254&expires_in=366&contents=write). It sets the name, the owner, a one-year expiry and Contents read and write.
 2. Under Repository access choose **Only select repositories** and pick `gitdesk-releases`. The form can't pre-fill that part, and an all-repositories token would let a leaked secret write anywhere.
 3. Generate it, then run `gh secret set RELEASES_TOKEN --repo shikki841/gitdesk` and paste it when asked. It never touches a file or the shell history.
 
-Renew it before it expires; the draft job fails with a message naming the secret when it's missing or expired.
+Renew it before it expires; the publish job fails with a message naming the secret when it's missing or expired. The secret is currently the BotCoder254 `gh` CLI token, which can write to every BotCoder254 repository; replace it with the fine-grained one above.
 
-**Signing.** Windows builds are unsigned until `WIN_SIGNING` is `required`; the draft says which. Until then an update is checked only against the SHA-512 in the release metadata, fetched over HTTPS, and Windows SmartScreen warns before the installer runs. New code-signing certificates keep their key in hardware or a cloud HSM, so a `.pfx` secret only works for an older certificate; a cloud signing service needs electron-builder's own signing options instead.
+The version commit is pushed with the workflow's own token, so `main` must accept pushes from GitHub Actions: no branch protection or ruleset may block github-actions from pushing to it.
+
+**Signing.** Windows builds are unsigned until `WIN_SIGNING` is `required`; the release notes say which. Until then an update is checked only against the SHA-512 in the release metadata, fetched over HTTPS, and Windows SmartScreen warns before the installer runs. New code-signing certificates keep their key in hardware or a cloud HSM, so a `.pfx` secret only works for an older certificate; a cloud signing service needs electron-builder's own signing options instead.
 
 **Cost.** Actions minutes on a private repository are billed, and Windows runners count double.

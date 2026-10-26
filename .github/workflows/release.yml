@@ -1,74 +1,154 @@
-# Builds every installer for a version tag and leaves a draft release in the public releases
-# repository for a person to review and publish. Nothing here publishes a release.
+# Every push to main is a release: it picks the next version (.github/scripts/next-version.cjs),
+# runs Quality on that commit, commits the version to package.json and package-lock.json, tags it,
+# builds every installer from the tag and publishes the release in the public releases repository,
+# where installed copies find it at their next update check.
 name: Release
 
 on:
   push:
-    tags: ['v*.*.*']
+    branches: [main]
   workflow_dispatch:
     inputs:
       dry_run:
-        description: Build and check everything, but don't create the draft
+        description: Build and check everything, but don't commit, tag or publish
         type: boolean
         default: true
 
 permissions:
   contents: read
 
-# One release at a time per ref, and never cancelled halfway.
+# One release at a time, never cancelled halfway. A push that lands meanwhile waits its turn and
+# then releases everything after the last tag.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}
   cancel-in-progress: false
 
 env:
   RELEASES_REPO: BotCoder254/gitdesk-releases
 
 jobs:
-  verify:
-    name: Check the version
+  plan:
+    name: Pick the version
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      skip: ${{ steps.check.outputs.skip }}
+      sha: ${{ steps.sha.outputs.sha }}
+      publish: ${{ steps.mode.outputs.publish }}
     steps:
+      # The branch's tip when this run starts, not the pushed commit: a run that waited behind
+      # another release starts from that release's version commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ github.ref }}
           persist-credentials: false
           fetch-depth: 0
-      - id: version
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: mode
         env:
-          REF_TYPE: ${{ github.ref_type }}
-          REF_NAME: ${{ github.ref_name }}
+          EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          REF: ${{ github.ref }}
           API_ORIGIN: ${{ vars.API_ORIGIN }}
         run: |
-          version=$(node -p "require('./package.json').version")
-          if [ "$REF_TYPE" = tag ]; then
-            if [ "$REF_NAME" != "v$version" ]; then
-              echo "::error::Tag $REF_NAME doesn't match package.json version $version. Tag v$version instead."
-              exit 1
-            fi
-            # fetch-depth 0 already brought origin/main; credentials aren't kept for a second fetch.
-            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-              echo "::error::$REF_NAME points at a commit that isn't on main."
-              exit 1
-            fi
-          fi
           case "$API_ORIGIN" in
             https://*) ;;
             *) echo "::error::Set the API_ORIGIN repository variable to the Worker's https origin."; exit 1 ;;
           esac
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          publish=true
+          if [ "$EVENT" = workflow_dispatch ] && [ "$DRY_RUN" = true ]; then publish=false; fi
+          if [ "$publish" = true ] && [ "$REF" != refs/heads/main ]; then
+            echo "::error::Only main is released. Run from another branch with dry run ticked."
+            exit 1
+          fi
+          echo "publish=$publish" >> "$GITHUB_OUTPUT"
+      - id: version
+        run: node .github/scripts/next-version.cjs
+      - id: check
+        name: Not released before
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          NEEDS_TAG: ${{ steps.version.outputs.tag }}
+          SKIP: ${{ steps.version.outputs.skip }}
+        run: |
+          skip=$SKIP
+          if [ "$SKIP" != true ] && gh release view "v$VERSION" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            if [ "$NEEDS_TAG" != true ]; then
+              echo "::notice::v$VERSION is already published and nothing has changed since."
+              skip=true
+            else
+              echo "::error::$RELEASES_REPO already has a release for v$VERSION. Raise the version in package.json above it."
+              exit 1
+            fi
+          fi
+          echo "skip=$skip" >> "$GITHUB_OUTPUT"
 
   quality:
     name: Quality
+    needs: plan
     uses: ./.github/workflows/quality.yml
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+
+  tag:
+    name: Commit and tag the version
+    needs: [plan, quality]
+    if: needs.plan.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      ref: ${{ steps.push.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          # Kept only here, so this job alone can push the version commit and tag.
+          persist-credentials: true
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - id: push
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+          NEEDS_TAG: ${{ needs.plan.outputs.tag }}
+          PUBLISH: ${{ needs.plan.outputs.publish }}
+          SHA: ${{ needs.plan.outputs.sha }}
+        run: |
+          if [ "$NEEDS_TAG" != true ]; then
+            echo "ref=v$VERSION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$PUBLISH" != true ]; then
+            echo "Dry run: would commit and tag v$VERSION."
+            echo "ref=$SHA" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # A version raised by hand is already in package.json, so there may be nothing to commit.
+          if ! git diff --quiet; then
+            git commit -am "Release v$VERSION" -m '[skip ci]'
+          fi
+          git tag -a "v$VERSION" -m "gitdesk $VERSION"
+          # Both or neither. Pushes made with this job's token start no other workflow.
+          if ! git push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"; then
+            echo "::error::main moved while this run was checking it. The run for the newer push releases it."
+            exit 1
+          fi
+          echo "ref=v$VERSION" >> "$GITHUB_OUTPUT"
 
   build-windows:
     name: Build Windows
-    needs: [verify, quality]
+    needs: [plan, tag]
     runs-on: windows-latest
     timeout-minutes: 45
-    environment: release
     outputs:
       signed: ${{ steps.signing.outputs.signed }}
     defaults:
@@ -77,11 +157,16 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.tag.outputs.ref }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
+      # Already this version on a tag; a dry run builds the untagged commit under the version it would get.
+      - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
       - run: npm ci
       - name: Build the installer
         env:
@@ -133,12 +218,13 @@ jobs:
 
   build-linux:
     name: Build Linux
-    needs: [verify, quality]
+    needs: [plan, tag]
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.tag.outputs.ref }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -148,6 +234,9 @@ jobs:
       - run: |
           sudo apt-get update
           sudo apt-get install -y libarchive-tools xvfb
+      - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
       - run: npm ci
       - name: Build the packages
         env:
@@ -173,12 +262,13 @@ jobs:
 
   nix:
     name: Nix expression
-    needs: [verify, build-linux]
+    needs: [plan, tag, build-linux]
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.tag.outputs.ref }}
           persist-credentials: false
           sparse-checkout: nix
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -186,7 +276,7 @@ jobs:
           name: linux
           path: linux
       - env:
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           archive=$(ls linux/*.tar.gz)
           file=$(basename "$archive")
@@ -204,15 +294,15 @@ jobs:
           retention-days: 7
           path: gitdesk.nix
 
-  draft:
-    name: Draft release
-    needs: [verify, build-windows, build-linux, nix]
+  publish:
+    name: Publish the release
+    needs: [plan, tag, build-windows, build-linux, nix]
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    environment: release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.tag.outputs.ref }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -224,22 +314,19 @@ jobs:
           merge-multiple: true
       - name: Check every file
         env:
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: node .github/scripts/verify-release.cjs release "$VERSION"
       - name: Write the release notes
         env:
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
           SIGNED: ${{ needs.build-windows.outputs.signed }}
         run: |
-          previous=$(git describe --tags --abbrev=0 "$GITHUB_SHA^" 2>/dev/null || true)
+          previous=$(git describe --tags --abbrev=0 --match 'v*.*.*' --exclude "v$VERSION" HEAD 2>/dev/null || true)
+          range=${previous:+$previous..}HEAD
           {
             echo "## What's new"
             echo
-            if [ -n "$previous" ]; then
-              git log --no-merges --pretty='- %s' "$previous..$GITHUB_SHA"
-            else
-              git log --no-merges --pretty='- %s' -n 30 "$GITHUB_SHA"
-            fi
+            git log --no-merges --invert-grep --grep='^Release v[0-9]' --pretty='- %s' -n 50 "$range"
             echo
             echo "## Downloads"
             echo
@@ -254,23 +341,24 @@ jobs:
             fi
           } > notes.md
           cat notes.md
-      - name: Create the draft
-        if: github.event_name == 'push' || !inputs.dry_run
+      - name: Publish
+        if: needs.plan.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
-          VERSION: ${{ needs.verify.outputs.version }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
-            echo "::error::Add the RELEASES_TOKEN secret to this repository or its release environment: a fine-grained token with Contents read and write on $RELEASES_REPO only. README › Releasing has the steps."
+            echo "::error::Add the RELEASES_TOKEN secret to this repository: a token that can write releases in $RELEASES_REPO. README › Releasing has the steps."
             exit 1
           fi
           if gh release view "v$VERSION" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
-            echo "::error::$RELEASES_REPO already has a release or draft for v$VERSION. Delete the draft or bump the version."
+            echo "::error::$RELEASES_REPO already has a release for v$VERSION. Raise the version in package.json above it."
             exit 1
           fi
+          # Published and marked latest: electron-updater reads only the latest published release.
           gh release create "v$VERSION" release/* \
             --repo "$RELEASES_REPO" \
-            --draft \
+            --latest \
             --title "gitdesk $VERSION" \
             --notes-file notes.md
-          echo "Draft created. Review it at https://github.com/$RELEASES_REPO/releases and publish it there."
+          echo "Published https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"

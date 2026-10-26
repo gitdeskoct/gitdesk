@@ -1,4 +1,4 @@
-// Checks a folder of release files before the draft is made: one of each expected file, every file
+// Checks a folder of release files before the release is published: one of each expected file, every file
 // named for this version, and every file the updater metadata lists matching its SHA-512 and size.
 // Writes SHA256SUMS.txt beside them. Usage: node verify-release.cjs <dir> <version>
 

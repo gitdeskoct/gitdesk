@@ -1,5 +1,5 @@
 # Installers, update metadata and fuses. `npm run build` fills .vite/ first; every package is
-# bundled there, so no node_modules ship. Releases are drafted by .github/workflows/release.yml.
+# bundled there, so no node_modules ship. Releases are published by .github/workflows/release.yml.
 appId: io.github.shikki841.gitdesk
 productName: gitdesk
 copyright: Copyright © 2026 TELVIN TEUM
@@ -95,4 +95,4 @@ publish:
   provider: github
   owner: BotCoder254
   repo: gitdesk-releases
-  releaseType: draft
+  releaseType: release
