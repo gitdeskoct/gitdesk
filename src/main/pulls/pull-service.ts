@@ -35,6 +35,10 @@ import type {
   SubmitReviewInput,
   UpdatePullInput,
 } from '../../shared/pulls';
+import type {
+  BranchMergeMethod,
+  BranchMergeResult,
+} from '../../shared/branches';
 import type { DiffResult, PushResult } from '../../shared/workspace';
 import type { AppDatabase } from '../db/database';
 import { UserError } from '../errors';
@@ -78,7 +82,7 @@ type OpRow = {
   id: string;
   repository_id: string;
   pull_id: string | null;
-  kind: 'merge' | 'revert' | 'pull';
+  kind: 'merge' | 'revert' | 'pull' | 'branch-merge';
   state: MergeOperationState;
   strategy: MergeOperation['strategy'];
   source_oid: string;
@@ -90,7 +94,8 @@ type OpRow = {
   conflicts_json: string;
   message: string | null;
   commit_message: string | null;
-  // A pull of the upstream: the upstream (origin/main) and the local branch it went into.
+  // A pull of the upstream: the upstream (origin/main) and the local branch it went into. A branch
+  // merge keeps its two names the same way: remote is the source, branch the target.
   remote: string | null;
   branch: string | null;
   updated_at: number;
@@ -126,7 +131,7 @@ export function createPullService(deps: {
   };
   addActivity(
     repoId: string,
-    type: 'pr-merged' | 'pr-reverted' | 'pulled',
+    type: 'pr-merged' | 'pr-reverted' | 'pulled' | 'branch-merged',
     detail: string | null,
   ): void;
   refresh(repoId: string): Promise<void>;
@@ -195,6 +200,21 @@ export function createPullService(deps: {
         .catch(() => '')
     ).trim();
     return name || null;
+  }
+
+  async function refCommit(root: string, ref: string): Promise<string | null> {
+    const oid = (
+      await gitAt(root)
+        .raw([
+          'rev-parse',
+          '--verify',
+          '--quiet',
+          '--end-of-options',
+          `${ref}^{commit}`,
+        ])
+        .catch(() => '')
+    ).trim();
+    return /^[0-9a-f]{40,64}$/.test(oid) ? oid : null;
   }
 
   async function exists(root: string, name: string): Promise<boolean> {
@@ -364,14 +384,15 @@ export function createPullService(deps: {
         | 'message'
         | 'remote'
         | 'branch'
-      >,
+      > &
+        Partial<Pick<OpRow, 'remote' | 'branch'>>,
     ) {
       deps.db
         .prepare(
           `INSERT INTO merge_operations
              (id, repository_id, pull_id, kind, state, strategy, source_oid, target_oid, push, head_ref,
-              commit_message, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              commit_message, remote, branch, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           input.id,
@@ -385,6 +406,8 @@ export function createPullService(deps: {
           input.push,
           input.head_ref,
           input.commit_message,
+          input.remote ?? null,
+          input.branch ?? null,
           now(),
           now(),
         );
@@ -598,6 +621,50 @@ export function createPullService(deps: {
     };
   }
 
+  // A branch merge Git finished: the target must now contain the source commit pinned at the start.
+  async function finishBranchMerge(
+    root: string,
+    repoId: string,
+    op: OpRow,
+    jobId: string,
+  ): Promise<BranchMergeResult> {
+    const head = (await git(root, ['rev-parse', 'HEAD'])).trim();
+    if (!(await isAncestor(root, op.source_oid, head))) {
+      ops.update(op.id, {
+        state: 'failed',
+        message: 'The merge result does not contain the source.',
+      });
+      return {
+        status: 'failed',
+        message:
+          "Git finished, but the target doesn't contain the source, so this isn't reported as merged.",
+      };
+    }
+    let row = ops.update(op.id, { state: 'locally_merged', result_oid: head });
+    deps.addActivity(
+      repoId,
+      'branch-merged',
+      `${op.remote ?? 'a branch'} into ${op.branch ?? 'HEAD'}`.slice(0, 200),
+    );
+    let push: 'pushed' | 'skipped' | 'failed' = 'skipped';
+    let pushMessage: string | null = null;
+    if (row.push) {
+      const result = await deps.workspace.push({ id: repoId, jobId });
+      push = result.status === 'pushed' ? 'pushed' : 'failed';
+      pushMessage = result.status === 'pushed' ? null : result.message;
+    }
+    row = ops.update(op.id, {
+      state: push === 'failed' ? 'push_pending' : 'completed',
+    });
+    return {
+      status: 'merged',
+      operation: toOperation(row),
+      fastForward: head === op.source_oid,
+      push,
+      pushMessage,
+    };
+  }
+
   // The working-tree file for a conflicted path, read only when it stays inside the repository.
   async function workingFile(
     root: string,
@@ -647,6 +714,10 @@ export function createPullService(deps: {
       upstream:
         op?.kind === 'pull' && op.branch && op.remote
           ? { ours: op.branch, theirs: op.remote, rebase }
+          : null,
+      branchMerge:
+        op?.kind === 'branch-merge' && op.branch && op.remote
+          ? { target: op.branch, source: op.remote }
           : null,
       files,
       resolved: conflicted.filter((p) => !open.has(p)),
@@ -1286,6 +1357,170 @@ export function createPullService(deps: {
         }),
       ),
 
+    // A merge from the Branches tab: no pull request and no record, the same Git steps and the
+    // same conflict screen. The commits are pinned to the ones the person compared.
+    mergeBranches: (input: {
+      repoId: string;
+      target: string;
+      // A fully qualified ref the caller already found in Git's own branch list.
+      sourceRef: string;
+      sourceName: string;
+      targetOid: string;
+      sourceOid: string;
+      method: BranchMergeMethod;
+      push: boolean;
+      jobId: string;
+    }) =>
+      wrap(() =>
+        deps.workspace.serial(
+          input.repoId,
+          async (): Promise<BranchMergeResult> => {
+            const root = deps.workspace.rootOf(input.repoId);
+            const blocked = (
+              reason: Extract<
+                BranchMergeResult,
+                { status: 'blocked' }
+              >['reason'],
+              message: string,
+              files: string[] = [],
+            ): BranchMergeResult => ({
+              status: 'blocked',
+              reason,
+              message,
+              files,
+            });
+            const [sourceOid, targetOid] = await Promise.all([
+              refCommit(root, input.sourceRef),
+              resolveBranch(root, input.target),
+            ]);
+            if (!sourceOid)
+              return blocked(
+                'source-missing',
+                `${input.sourceName} no longer exists here.`,
+              );
+            if (!targetOid)
+              return blocked(
+                'target-missing',
+                `${input.target} no longer exists here.`,
+              );
+            if (sourceOid !== input.sourceOid || targetOid !== input.targetOid)
+              return blocked(
+                'changed',
+                'The branches moved since you compared them. Look at the new comparison, then merge.',
+              );
+            if (await deps.workspace.operationInProgress(input.repoId))
+              return blocked(
+                'operation',
+                'Another merge, rebase or revert is in progress. Finish or abort it first.',
+              );
+            const dirty = await trackedChanges(root);
+            if (dirty.length)
+              return blocked(
+                'local-changes',
+                'These files have uncommitted changes. Commit or discard them on Changes first; gitdesk never stashes for you.',
+                dirty,
+              );
+            if (
+              input.method === 'ff-only' &&
+              !(await isAncestor(root, targetOid, sourceOid))
+            )
+              return blocked(
+                'not-fast-forward',
+                `${input.target} has commits ${input.sourceName} doesn't, so it can't simply move forward. Choose another method to make a merge commit.`,
+              );
+            const startedOn = await currentBranch(root);
+            if (startedOn !== input.target) {
+              try {
+                await gitAt(root).raw(['switch', '--no-guess', input.target]);
+              } catch (err) {
+                const text = errorText(err);
+                if (/already (checked out|used by worktree)/i.test(text))
+                  return blocked(
+                    'target-elsewhere',
+                    `${input.target} is checked out in another worktree. Merge it there.`,
+                  );
+                return { status: 'failed', message: describeGitError(err) };
+              }
+            }
+            const message = `Merge ${input.sourceName} into ${input.target}`;
+            const op = ops.insert({
+              id: randomUUID(),
+              repository_id: input.repoId,
+              pull_id: null,
+              kind: 'branch-merge',
+              state: 'merging',
+              strategy: input.method,
+              source_oid: sourceOid,
+              target_oid: targetOid,
+              push: input.push ? 1 : 0,
+              head_ref: startedOn,
+              commit_message: message,
+              remote: input.sourceName,
+              branch: input.target,
+            });
+            // As for a pull request merge, the index decides: unmerged paths mean conflicts.
+            let thrown: unknown = null;
+            await gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS })
+              .raw([
+                'merge',
+                '--no-edit',
+                input.method === 'no-ff'
+                  ? '--no-ff'
+                  : input.method === 'ff-only'
+                    ? '--ff-only'
+                    : '--ff',
+                '-m',
+                message,
+                sourceOid,
+              ])
+              .catch((err: unknown) => {
+                thrown = err;
+              });
+            const conflicted = await unmergedFiles(root).catch(
+              (): ConflictFile[] => [],
+            );
+            if (
+              thrown ||
+              conflicted.length ||
+              (await exists(root, 'MERGE_HEAD'))
+            ) {
+              if (conflicted.length) {
+                const row = ops.update(op.id, {
+                  state: 'conflict_resolution',
+                  conflicts_json: JSON.stringify(
+                    conflicted.map((file) => file.path),
+                  ),
+                });
+                await deps.refresh(input.repoId).catch(() => undefined);
+                return {
+                  status: 'conflicts',
+                  operation: toOperation(row),
+                  files: conflicted,
+                };
+              }
+              if (await exists(root, 'MERGE_HEAD'))
+                await gitAt(root)
+                  .raw(['merge', '--abort'])
+                  .catch(() => undefined);
+              const err = thrown ?? new Error('Git stopped the merge.');
+              const text =
+                sanitizeOutput(errorText(err), root) ?? describeGitError(err);
+              ops.update(op.id, { state: 'failed', message: text });
+              await deps.refresh(input.repoId).catch(() => undefined);
+              return { status: 'failed', message: text };
+            }
+            const result = await finishBranchMerge(
+              root,
+              input.repoId,
+              ops.get(op.id)!,
+              input.jobId,
+            );
+            await deps.refresh(input.repoId).catch(() => undefined);
+            return result;
+          },
+        ),
+      ),
+
     conflicts: (repoId: string) => wrap(() => conflictState(repoId)),
 
     conflictSides: (input: { repoId: string; path: string }) =>
@@ -1396,6 +1631,41 @@ export function createPullService(deps: {
               return { status: 'continued', operation, remaining };
             }
             if (op.kind === 'pull') return finishPull(root, repoId, op);
+            if (op.kind === 'branch-merge') {
+              try {
+                if (await exists(root, 'MERGE_HEAD'))
+                  await gitAt(root, { timeoutMs: MERGE_TIMEOUT_MS }).raw([
+                    'commit',
+                    '--no-edit',
+                  ]);
+              } catch (err) {
+                throw new PullError(
+                  sanitizeOutput(errorText(err), root) ?? describeGitError(err),
+                );
+              }
+              const result = await finishBranchMerge(
+                root,
+                repoId,
+                op,
+                randomUUID(),
+              );
+              await deps.refresh(repoId).catch(() => undefined);
+              if (result.status !== 'merged')
+                return {
+                  status: 'failed',
+                  message:
+                    result.status === 'failed'
+                      ? result.message
+                      : 'Git stopped the merge.',
+                };
+              return {
+                status: 'merged',
+                operation: result.operation,
+                push: result.push,
+                pushMessage: result.pushMessage,
+                recorded: true,
+              };
+            }
             const records = deps.recordsFor(repoId);
             const pull = await pullOf(records, op.pull_id!);
             try {

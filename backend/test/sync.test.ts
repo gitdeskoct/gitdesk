@@ -3,7 +3,7 @@ import { eq } from 'drizzle-orm';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
 import { getDb } from '../src/db/client';
-import { syncEvents } from '../src/db/schema';
+import { repositoryBranches, syncEvents } from '../src/db/schema';
 import { purgeExpired } from '../src/jobs/cleanup';
 import type { GitHost } from '../src/lib/git-host';
 import { call, fakeGoogle, postJson, signIn } from './helpers';
@@ -140,6 +140,70 @@ describe('sync events', () => {
       { ...push(), extra: true },
     ])
       expect((await report(owner.access_token, repo.id, bad)).status).toBe(400);
+  });
+
+  it('indexes a confirmed push and tombstones a confirmed deletion, never an unverified one', async () => {
+    const { fake, owner, create, report } = await setup();
+    const repo = await create('app');
+    const host = fake.stored.get(repo.id)!;
+    host.commits.add(A);
+    host.tips.set('refs/heads/feature', A);
+    await report(owner.access_token, repo.id, push({ ref: 'refs/heads/feature' }));
+    const branch = () =>
+      getDb(env.DB)
+        .select()
+        .from(repositoryBranches)
+        .where(eq(repositoryBranches.repositoryId, repo.id));
+    expect(await branch()).toMatchObject([{ name: 'feature', oid: A, deletedAt: null }]);
+
+    const remove = () => ({
+      operationId: crypto.randomUUID(),
+      kind: 'delete',
+      ref: 'refs/heads/feature',
+      oldOid: A,
+      newOid: null,
+    });
+    // Still on the server: the report is kept but the branch stays listed.
+    expect(await (await report(owner.access_token, repo.id, remove())).json()).toEqual({
+      event: { result: 'unverified', tip: A },
+    });
+    expect((await branch())[0]!.deletedAt).toBeNull();
+
+    host.tips.delete('refs/heads/feature');
+    expect(await (await report(owner.access_token, repo.id, remove())).json()).toEqual({
+      event: { result: 'confirmed', tip: null },
+    });
+    expect((await branch())[0]).toMatchObject({ oid: null });
+    expect((await branch())[0]!.deletedAt).not.toBeNull();
+
+    for (const bad of [
+      { ...remove(), newOid: A },
+      { ...remove(), kind: 'push', newOid: null },
+      { ...remove(), ref: 'refs/heads/-x' },
+    ])
+      expect((await report(owner.access_token, repo.id, bad)).status).toBe(400);
+  });
+
+  it('keeps deletions out of the push list and its weekly counts', async () => {
+    const { fake, owner, create, report, app } = await setup();
+    const repo = await create('app');
+    fake.stored.get(repo.id)!.commits.add(A);
+    await report(owner.access_token, repo.id, push());
+    await report(owner.access_token, repo.id, {
+      operationId: crypto.randomUUID(),
+      kind: 'delete',
+      ref: 'refs/heads/old',
+      oldOid: A,
+      newOid: null,
+    });
+    const list = (await (
+      await call(app, '/api/v1/sync-events', { headers: bearer(owner.access_token) })
+    ).json()) as { events: { kind: string }[] };
+    expect(list.events.map((e) => e.kind)).toEqual(['push']);
+    const { weeks } = (await (
+      await call(app, '/api/v1/sync-events/stats', { headers: bearer(owner.access_token) })
+    ).json()) as { weeks: { confirmed: number; unverified: number }[] };
+    expect(weeks[7]).toMatchObject({ confirmed: 1, unverified: 0 });
   });
 
   it('purges records older than half a year', async () => {

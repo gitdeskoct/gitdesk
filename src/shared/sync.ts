@@ -71,7 +71,8 @@ export type SyncOperation = {
   id: string;
   repositoryId: string;
   repositoryName: string;
-  kind: 'fetch' | 'pull' | 'push' | 'move';
+  // remote-delete: a branch deleted on a remote from the Branches tab.
+  kind: 'fetch' | 'pull' | 'push' | 'move' | 'remote-delete';
   state: SyncOperationState;
   strategy: PullStrategy | null;
   remote: string | null;

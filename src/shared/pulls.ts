@@ -384,11 +384,11 @@ export type MergeOperationState =
   | 'failed';
 export type MergeOperation = {
   id: string;
-  // null for a pull of the upstream, which shares the conflict screen.
+  // null for a pull of the upstream or a branch merge, which share the conflict screen.
   pullId: string | null;
-  kind: 'merge' | 'revert' | 'pull';
+  kind: 'merge' | 'revert' | 'pull' | 'branch-merge';
   state: MergeOperationState;
-  strategy: MergeStrategy | null;
+  strategy: MergeStrategy | 'ff-only' | null;
   sourceOid: string;
   targetOid: string;
   resultOid: string | null;
@@ -444,6 +444,8 @@ export type ConflictState = {
   // A pull of the upstream: the two sides' names for the screen ("main", "origin/main"). In a
   // rebase the file's conflict markers hold the upstream first and your commit second.
   upstream: { ours: string; theirs: string; rebase: boolean } | null;
+  // A merge from the Branches tab: the branch being merged into and the one merged in.
+  branchMerge: { target: string; source: string } | null;
   files: ConflictFile[];
   // Paths that were conflicted in this operation and are now staged.
   resolved: string[];

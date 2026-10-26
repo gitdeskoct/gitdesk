@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { BranchesApi } from './branches';
 import type { SyncApi } from './sync';
 import type { PullsApi } from './pulls';
 import type { ReposApi } from './repos';
@@ -180,4 +181,5 @@ export interface DesktopApi {
   pulls: PullsApi;
   sync: SyncApi;
   source: SourceApi;
+  branches: BranchesApi;
 }

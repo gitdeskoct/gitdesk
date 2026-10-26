@@ -53,6 +53,7 @@ import {
 import { createGitAuth, type GitAuth } from './remote/git-auth';
 import { createAccountRecords } from './pulls/account-records';
 import { createLocalRecords, createViewedStore } from './pulls/local-records';
+import { createBranchService } from './branches/branch-service';
 import { createPullService } from './pulls/pull-service';
 import { createMoveService } from './sync/move-service';
 import { createJournal } from './sync/journal';
@@ -514,6 +515,15 @@ async function start() {
     log,
   });
 
+  const branches = createBranchService({
+    store,
+    workspace: ws,
+    pulls,
+    addActivity: (id, type, detail) =>
+      store.addActivity(id, type, detail, Date.now()),
+    refresh: (id) => repos.refresh(id),
+  });
+
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
     {
@@ -531,6 +541,7 @@ async function start() {
       sync: syncService,
       source: localSource,
       remoteSource,
+      branches,
     },
   );
 

@@ -1,32 +1,30 @@
 import { and, count, desc, eq, gte, lt, or, sql } from 'drizzle-orm';
 import type { Db } from '../../db/client';
-import { repositories, syncEvents } from '../../db/schema';
+import { repositories, repositoryBranches, syncEvents } from '../../db/schema';
 import { encodeCursor } from '../../lib/cursor';
 import type { GitHost } from '../../lib/git-host';
 import { logEvent } from '../../lib/log';
 
-export type PushReport = {
-  operationId: string;
-  kind: 'push';
-  ref: string;
-  oldOid: string | null;
-  newOid: string;
-};
+export type RefReport =
+  | { operationId: string; kind: 'push'; ref: string; oldOid: string | null; newOid: string }
+  | { operationId: string; kind: 'delete'; ref: string; oldOid: string | null; newOid: null };
 
 export type RecordResult =
   | { status: 'recorded'; result: 'confirmed' | 'unverified'; tip: string | null }
   | { status: 'not_found' }
   | { status: 'conflict' };
 
-// The desktop says it pushed; the server checks Artifacts. Confirmed means the pushed commit is
-// stored there, whatever was pushed after it. Hosting off, or Artifacts not answering, leaves the
-// push unverified rather than failing the report. One row per operation id: a retry returns it.
-export async function recordPush(
+// The desktop says it pushed or deleted a branch; the server checks Artifacts. A push is confirmed
+// when the commit is stored there, whatever was pushed after it; a deletion when the branch has no
+// tip any more. Hosting off, or Artifacts not answering, leaves the event unverified rather than
+// failing the report. One row per operation id: a retry returns it. The branch index changes only
+// for a confirmed event.
+export async function recordRefEvent(
   db: Db,
   git: GitHost | null,
   accountId: string,
   repositoryId: string,
-  input: PushReport,
+  input: RefReport,
   now: number,
 ): Promise<RecordResult> {
   const [row] = await db
@@ -54,12 +52,17 @@ export async function recordPush(
   let tip: string | null = null;
   if (git && row.gitRemote && row.status === 'ready') {
     try {
-      const [stored, current] = await Promise.all([
-        git.hasCommit(row.id, input.newOid),
-        git.tip(row.id, input.ref),
-      ]);
-      result = stored ? 'confirmed' : 'unverified';
-      tip = current;
+      if (input.kind === 'delete') {
+        tip = await git.tip(row.id, input.ref);
+        result = tip === null ? 'confirmed' : 'unverified';
+      } else {
+        const [stored, current] = await Promise.all([
+          git.hasCommit(row.id, input.newOid),
+          git.tip(row.id, input.ref),
+        ]);
+        result = stored ? 'confirmed' : 'unverified';
+        tip = current;
+      }
     } catch (err) {
       logEvent('sync_verify_failed', { accountId, error: String(err) }, 'warn');
     }
@@ -79,8 +82,23 @@ export async function recordPush(
       createdAt: now,
     })
     .onConflictDoNothing();
-  // A concurrent retry may have written first; its row is the answer.
-  return (await known()) ?? { status: 'recorded', result, tip };
+  const answer = (await known()) ?? { status: 'recorded' as const, result, tip };
+  // A concurrent retry may have written first; its row is the answer, and indexing it twice is harmless.
+  if (answer.status === 'recorded' && answer.result === 'confirmed') {
+    const name = input.ref.slice('refs/heads/'.length);
+    const values =
+      input.kind === 'delete'
+        ? { oid: null, deletedAt: now }
+        : { oid: answer.tip ?? input.newOid, deletedAt: null };
+    await db
+      .insert(repositoryBranches)
+      .values({ repositoryId, name, updatedAt: now, ...values })
+      .onConflictDoUpdate({
+        target: [repositoryBranches.repositoryId, repositoryBranches.name],
+        set: { updatedAt: now, ...values },
+      });
+  }
+  return answer;
 }
 
 const WEEK_MS = 7 * 24 * 60 * 60_000;
@@ -128,6 +146,8 @@ export async function listPushes(
     .where(
       and(
         eq(syncEvents.accountId, accountId),
+        // The list is of pushes; deletions are indexed on the branch instead.
+        eq(syncEvents.kind, 'push'),
         input.repositoryId ? eq(syncEvents.repositoryId, input.repositoryId) : undefined,
         input.result ? eq(syncEvents.result, input.result) : undefined,
         after,
@@ -151,7 +171,13 @@ export async function pushStats(db: Db, accountId: string, now: number) {
   const rows = await db
     .select({ week, result: syncEvents.result, count: count() })
     .from(syncEvents)
-    .where(and(eq(syncEvents.accountId, accountId), gte(syncEvents.createdAt, first)))
+    .where(
+      and(
+        eq(syncEvents.accountId, accountId),
+        eq(syncEvents.kind, 'push'),
+        gte(syncEvents.createdAt, first),
+      ),
+    )
     .groupBy(week, syncEvents.result);
   const weeks = Array.from({ length: 8 }, (_, i) => ({
     start: first + i * WEEK_MS,

@@ -52,6 +52,7 @@ import { useWidth } from '../../lib/use-width';
 import {
   useNavigation,
   type RepoTab,
+  type Route,
   type SourceTarget,
 } from '../../app/navigation';
 import { SourceExplorer } from '../source/source-explorer';
@@ -68,7 +69,11 @@ import { usePullAction } from '../sync/use-pull';
 import { Page } from '../shell/page';
 import { Analytics } from './analytics';
 import { BranchPicker, type SwitchOutcome } from './branch-picker';
-import { BranchesTab } from './branches-tab';
+import { BranchHealth } from '../branches/branch-health';
+import { BranchesTab } from '../branches/branches-tab';
+type BranchCompareRoute = NonNullable<
+  Extract<Route, { name: 'repository' }>['compare']
+>;
 import { ChangesTab } from './changes-tab';
 import { OpenInEditorButton } from './editor-button';
 import {
@@ -359,11 +364,13 @@ export function RepositoryPage({
   tab,
   newPull,
   source,
+  compare,
 }: {
   id: string;
   tab?: RepoTab;
   newPull?: { source: string; target: string };
   source?: SourceTarget;
+  compare?: BranchCompareRoute;
 }) {
   const { navigate } = useNavigation();
   const repos = useRepositories();
@@ -425,6 +432,7 @@ export function RepositoryPage({
       tab={tab}
       newPull={newPull}
       source={source}
+      compare={compare}
     />
   );
 }
@@ -728,12 +736,14 @@ function RepositoryView({
   tab: routeTab,
   newPull,
   source,
+  compare,
 }: {
   repo: RepositorySummary;
   crumbs: { label: string; onSelect?: () => void }[];
   tab?: RepoTab;
   newPull?: { source: string; target: string };
   source?: SourceTarget;
+  compare?: BranchCompareRoute;
 }) {
   useNow();
   const { navigate } = useNavigation();
@@ -1113,12 +1123,12 @@ function RepositoryView({
             />
           </Tabs.Content>
           <Tabs.Content value="branches" className={tabContent}>
-            {scrolling(
-              <BranchesTab
-                repo={repo}
-                onOutcome={(next) => setOutcome(keepNotice(next))}
-              />,
-            )}
+            <BranchesTab
+              repo={repo}
+              width={width}
+              compare={compare}
+              onOutcome={(next) => setOutcome(keepNotice(next))}
+            />
           </Tabs.Content>
           <Tabs.Content value="pulls" className={tabContent}>
             <PullsTab repo={repo} width={width} newPull={newPull} />
@@ -1133,6 +1143,7 @@ function RepositoryView({
             {scrolling(
               <>
                 <Analytics repo={repo} />
+                <BranchHealth repo={repo} />
                 <FilesSummary repo={repo} />
                 <PullAnalytics repo={repo} />
                 {status && (

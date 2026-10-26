@@ -41,6 +41,7 @@ import {
   type AnalyticsRange,
   type SwitchResult,
 } from '../../shared/workspace';
+import type { DeleteRemoteResult } from '../../shared/branches';
 import { UserError } from '../errors';
 import {
   detectEditors,
@@ -330,7 +331,14 @@ export function createWorkspaceService(deps: {
   refresh: (id: string) => Promise<void>;
   addActivity: (
     id: string,
-    type: 'fetched' | 'pushed' | 'branch-created',
+    type:
+      | 'fetched'
+      | 'pushed'
+      | 'branch-created'
+      | 'branch-renamed'
+      | 'branch-deleted'
+      | 'remote-branch-deleted'
+      | 'upstream-set',
     detail: string | null,
   ) => void;
   // Credentials for the account's hosted remote of a linked repository; null for any other URL.
@@ -1146,6 +1154,8 @@ export function createWorkspaceService(deps: {
     id: string,
     jobId: string,
     publish?: { remote: string; branch: string },
+    // A branch other than the current one, from the Branches tab; its own upstream applies.
+    local?: string,
   ): Promise<PushResult> {
     const root = rootOf(id);
     const failed = (
@@ -1160,8 +1170,13 @@ export function createWorkspaceService(deps: {
       message,
       ...(operationId ? { operationId } : {}),
     });
-    const branch = await currentBranch(root);
+    const branch = local ?? (await currentBranch(root));
     if (!branch) return failed('detached');
+    const branchOid = local
+      ? await refOid(root, `refs/heads/${local}`)
+      : await headOid(root);
+    if (local && !branchOid)
+      throw new WorkspaceError(`${local} no longer exists on this computer.`);
     const config = (key: string) =>
       gitAt(root)
         .raw(['config', '--get', key])
@@ -1195,7 +1210,7 @@ export function createWorkspaceService(deps: {
         : `refs/heads/${branch}`;
     const short = target.slice('refs/heads/'.length);
     const [localOid, trackingOid] = await Promise.all([
-      headOid(root),
+      branchOid,
       gitAt(root)
         .raw([
           'rev-parse',
@@ -1290,6 +1305,190 @@ export function createWorkspaceService(deps: {
     } finally {
       pushes.delete(jobId);
       await deps.refresh(id).catch(() => undefined);
+    }
+  }
+
+  async function refOid(root: string, ref: string): Promise<string | null> {
+    const oid = (
+      await gitAt(root)
+        .raw(['rev-parse', '--verify', '--quiet', '--end-of-options', ref])
+        .catch(() => '')
+    ).trim();
+    return OID.test(oid) ? oid : null;
+  }
+
+  // Every branch the remote has, straight from the server, without downloading anything.
+  async function lsRemoteHeads(
+    id: string,
+    remote: string,
+  ): Promise<Map<string, string>> {
+    const root = rootOf(id);
+    if (!(await remoteNames(root)).includes(remote) || remote.startsWith('-'))
+      throw new WorkspaceError(
+        "That remote isn't configured in this repository.",
+      );
+    const output = await withHostedRetry(id, root, remote, 'read', (auth) =>
+      transferGit(
+        root,
+        randomUUID(),
+        new AbortController().signal,
+        FETCH_TIMEOUT_MS,
+        auth,
+      ).raw(['ls-remote', '--heads', '--', remote]),
+    );
+    const heads = new Map<string, string>();
+    for (const line of output.split('\n')) {
+      const [oid, ref] = line.trim().split('\t');
+      if (oid && ref?.startsWith('refs/heads/') && OID.test(oid))
+        heads.set(ref.slice('refs/heads/'.length), oid);
+    }
+    return heads;
+  }
+
+  // Deletes a branch on a remote only while it still points at the commit the person saw, so a
+  // push someone made meanwhile is never lost. Journaled like a push and reported to the account.
+  async function deleteRemoteBranch(input: {
+    id: string;
+    remote: string;
+    branch: string;
+    expectedOid: string;
+    jobId: string;
+  }): Promise<DeleteRemoteResult> {
+    const root = rootOf(input.id);
+    if (
+      !(await remoteNames(root)).includes(input.remote) ||
+      input.remote.startsWith('-') ||
+      input.branch.startsWith('-')
+    )
+      throw new WorkspaceError(
+        "That remote isn't configured in this repository.",
+      );
+    if (pushes.has(input.jobId))
+      throw new WorkspaceError('That push is already running.');
+    const ref = `refs/heads/${input.branch}`;
+    const opId = deps.journal?.start({
+      repoId: input.id,
+      kind: 'remote-delete',
+      state: 'pushing',
+      remote: input.remote,
+      branch: input.branch,
+      oldOid: input.expectedOid,
+      newOid: null,
+    });
+    const controller = new AbortController();
+    pushes.set(input.jobId, controller);
+    const done = (): DeleteRemoteResult => {
+      deps.addActivity(
+        input.id,
+        'remote-branch-deleted',
+        `${input.remote}/${input.branch}`,
+      );
+      deps.journal?.markPushed(input.id, input.remote);
+      const op = opId
+        ? deps.journal?.update(opId, { state: 'completed' })
+        : null;
+      if (op) deps.onPushed?.(op);
+      return {
+        status: 'deleted',
+        remote: input.remote,
+        branch: input.branch,
+        ...(opId ? { operationId: opId } : {}),
+      };
+    };
+    const failed = (
+      reason: Extract<DeleteRemoteResult, { status: 'failed' }>['reason'],
+      message: string,
+      code: SyncCode,
+    ): DeleteRemoteResult => {
+      if (opId)
+        deps.journal?.update(opId, {
+          state:
+            reason === 'unknown'
+              ? 'unknown'
+              : reason === 'cancelled'
+                ? 'cancelled'
+                : 'failed',
+          code,
+          message,
+        });
+      return {
+        status: 'failed',
+        reason,
+        code,
+        message,
+        ...(opId ? { operationId: opId } : {}),
+      };
+    };
+    try {
+      await withHostedRetry(input.id, root, input.remote, 'write', (auth) =>
+        transferGit(
+          root,
+          input.jobId,
+          controller.signal,
+          PUSH_TIMEOUT_MS,
+          auth,
+        ).raw([
+          'push',
+          '--progress',
+          '--recurse-submodules=no',
+          `--force-with-lease=${ref}:${input.expectedOid}`,
+          input.remote,
+          `:${ref}`,
+        ]),
+      );
+      return done();
+    } catch (err) {
+      const text = errorText(err);
+      if (/stale info/i.test(text))
+        return failed(
+          'moved',
+          `${input.remote}/${input.branch} moved since you looked, so nothing was deleted. Fetch to see the new commits.`,
+          'STALE_REFERENCE',
+        );
+      if (/remote ref does not exist/i.test(text))
+        return failed(
+          'not-found',
+          `${input.remote} no longer has ${input.branch}. Fetch to update this list.`,
+          'STALE_REFERENCE',
+        );
+      const reason = controller.signal.aborted
+        ? 'cancelled'
+        : err instanceof UserError
+          ? 'auth'
+          : classifyPushError(text);
+      // Cut off or refused for an unclear reason: the remote's own answer settles it.
+      if (reason !== 'auth' && reason !== 'refused') {
+        const tip = await lsRemote(input.id, root, input.remote, ref).catch(
+          () => undefined,
+        );
+        if (tip === null) return done();
+        if (tip !== undefined && tip !== input.expectedOid)
+          return failed(
+            'moved',
+            `${input.remote}/${input.branch} moved since you looked, so nothing was deleted.`,
+            'STALE_REFERENCE',
+          );
+        if (tip === undefined && reason !== 'rejected')
+          return failed(
+            'unknown',
+            "The connection ended, so gitdesk can't tell whether the branch was deleted. Fetch to find out.",
+            'OPERATION_RESULT_UNKNOWN',
+          );
+      }
+      return failed(
+        reason === 'rejected' || reason === 'not-found' || reason === 'refused'
+          ? 'failed'
+          : reason,
+        err instanceof UserError
+          ? err.message
+          : reason === 'rejected'
+            ? `${input.remote} refused to delete ${input.branch}.`
+            : PUSH_MESSAGES[reason],
+        syncCodeFor(reason, text),
+      );
+    } finally {
+      pushes.delete(input.jobId);
+      await deps.refresh(input.id).catch(() => undefined);
     }
   }
 
@@ -1923,6 +2122,11 @@ export function createWorkspaceService(deps: {
 
     lsRemote: (id: string, remote: string, ref: string) =>
       lsRemote(id, rootOf(id), remote, ref),
+    lsRemoteHeads,
+    deleteRemoteBranch,
+    // The Branches tab pushes any local branch the same way Push sends the current one.
+    pushLocal: (input: { id: string; name: string; jobId: string }) =>
+      pushBranch(input.id, input.jobId, undefined, input.name),
 
     // Pull request merges, conflict steps and reverts share the per-repository mutation lock.
     serial,

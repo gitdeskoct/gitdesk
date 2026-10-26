@@ -42,6 +42,7 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
           tab={route.tab}
           newPull={route.newPull}
           source={route.source}
+          compare={route.compare}
         />
       );
     case 'remote-repository':

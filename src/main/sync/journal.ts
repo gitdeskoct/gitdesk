@@ -28,7 +28,7 @@ type Row = {
   updated_at: number;
 };
 
-const KINDS = "('fetch', 'pull', 'push', 'move')";
+const KINDS = "('fetch', 'pull', 'push', 'move', 'remote-delete')";
 // Kept for half a year, and at most this many rows in all.
 const KEEP_MS = 180 * 24 * 60 * 60_000;
 const KEEP_ROWS = 2000;
@@ -139,7 +139,8 @@ export function createJournal(db: AppDatabase, now: () => number = Date.now) {
 
     get(id: string): SyncOperation | null {
       const row = get(id);
-      return row && ['fetch', 'pull', 'push', 'move'].includes(row.kind)
+      return row &&
+        ['fetch', 'pull', 'push', 'move', 'remote-delete'].includes(row.kind)
         ? toOperation(row)
         : null;
     },
@@ -228,7 +229,7 @@ export function createJournal(db: AppDatabase, now: () => number = Date.now) {
       return (
         db
           .prepare(
-            `${SELECT} WHERE o.kind = 'push' AND o.state = 'report_pending' ORDER BY o.updated_at LIMIT 20`,
+            `${SELECT} WHERE o.kind IN ('push', 'remote-delete') AND o.state = 'report_pending' ORDER BY o.updated_at LIMIT 20`,
           )
           .all() as Row[]
       ).map(toOperation);
@@ -239,7 +240,7 @@ export function createJournal(db: AppDatabase, now: () => number = Date.now) {
       return (
         db
           .prepare(
-            `${SELECT} WHERE o.kind IN ('fetch', 'pull', 'push') AND o.state IN ('fetching', 'pushing', 'merging')`,
+            `${SELECT} WHERE o.kind IN ('fetch', 'pull', 'push', 'remote-delete') AND o.state IN ('fetching', 'pushing', 'merging')`,
           )
           .all() as Row[]
       ).map(toOperation);

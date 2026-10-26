@@ -426,10 +426,12 @@ export function ConflictsView({
   const sides = useConflictSides(repo.id, file?.path ?? null, repo.statusAt);
   const reverting = conflicts.data?.operation === 'revert';
   const outside = external ? (conflicts.data?.external ?? null) : null;
+  // A merge from the Branches tab keeps its target and source names wherever it is resolved.
+  const branchMerge = conflicts.data?.branchMerge ?? null;
   // Changes shows a pull or a pull request merge in its own words when gitdesk started it.
-  const theirs = outside ? outside.theirs : pullSource;
-  const ours = outside ? outside.ours : pullTarget;
-  const yoursAndIncoming = upstream || external;
+  const theirs = outside ? outside.theirs : (branchMerge?.source ?? pullSource);
+  const ours = outside ? outside.ours : (branchMerge?.target ?? pullTarget);
+  const yoursAndIncoming = (upstream || external) && !branchMerge;
   const what = external
     ? (conflicts.data?.operation ?? 'merge')
     : upstream
@@ -439,7 +441,7 @@ export function ConflictsView({
         : 'merge';
   const sideNames = yoursAndIncoming
     ? { target: `Yours, ${ours}`, source: `Incoming, ${theirs}` }
-    : { target: `Target, ${pullTarget}`, source: `Source, ${pullSource}` };
+    : { target: `Target, ${ours}`, source: `Source, ${theirs}` };
   // A rebase replays your commit onto the upstream, so the upstream's lines come first.
   const rebase =
     conflicts.data?.upstream?.rebase || conflicts.data?.operation === 'rebase';

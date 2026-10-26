@@ -260,6 +260,11 @@ const LOCAL: Record<
   'pr-merged': { icon: GitMerge, label: 'Merged pull request' },
   'pr-reverted': { icon: Undo2, label: 'Reverted pull request' },
   'branch-created': { icon: GitBranch, label: 'New branch' },
+  'branch-renamed': { icon: Pencil, label: 'Renamed branch' },
+  'branch-deleted': { icon: GitBranch, label: 'Deleted branch' },
+  'branch-merged': { icon: GitMerge, label: 'Merged' },
+  'remote-branch-deleted': { icon: CloudOff, label: 'Deleted on the remote' },
+  'upstream-set': { icon: Link2, label: 'Changed upstream' },
 };
 
 export const REMOTE_ACTIVITY: Record<RemoteActivity['type'], string> = {

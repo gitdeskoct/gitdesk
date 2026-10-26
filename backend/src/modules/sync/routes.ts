@@ -8,27 +8,39 @@ import { rateLimit } from '../../middleware/rate-limit';
 import { validate } from '../../middleware/validate';
 import { branchName } from '../pull-requests/schemas';
 import { repositoryParams } from '../repositories/schemas';
-import { listPushes, pushStats, recordPush } from './sync';
+import { listPushes, pushStats, recordRefEvent } from './sync';
 import { cursor } from '../../lib/cursor';
 import { requireAuth } from '../../middleware/require-auth';
 
 const oid = z.string().regex(/^[0-9a-f]{40,64}$/);
 const syncLimit = rateLimit('SYNC_LIMITER', (c) => c.get('auth').accountId);
 
-export const syncEventBody = z
-  .object({
-    operationId: z.uuid(),
-    kind: z.literal('push'),
-    ref: z
-      .string()
-      .max(300)
-      .refine(
-        (ref) => ref.startsWith('refs/heads/') && branchName.safeParse(ref.slice(11)).success,
-      ),
-    oldOid: oid.nullable(),
-    newOid: oid,
-  })
-  .strict();
+const branchRef = z
+  .string()
+  .max(300)
+  .refine((ref) => ref.startsWith('refs/heads/') && branchName.safeParse(ref.slice(11)).success);
+
+// A push names the commit it sent; a deletion names none, and the server checks the ref is gone.
+export const syncEventBody = z.discriminatedUnion('kind', [
+  z
+    .object({
+      operationId: z.uuid(),
+      kind: z.literal('push'),
+      ref: branchRef,
+      oldOid: oid.nullable(),
+      newOid: oid,
+    })
+    .strict(),
+  z
+    .object({
+      operationId: z.uuid(),
+      kind: z.literal('delete'),
+      ref: branchRef,
+      oldOid: oid.nullable(),
+      newOid: z.null(),
+    })
+    .strict(),
+]);
 
 // Mounted inside the repository routes, behind their requireAuth.
 export function repositorySyncRoutes(
@@ -42,7 +54,7 @@ export function repositorySyncRoutes(
     validate('json', syncEventBody),
     async (c) => {
       const { accountId } = c.get('auth');
-      const result = await recordPush(
+      const result = await recordRefEvent(
         getDb(c.env.DB),
         gitHost(c.env),
         accountId,

@@ -1,8 +1,12 @@
+import { X } from 'lucide-react';
 import { useEffect, useState, type FormEvent } from 'react';
 import { z } from 'zod';
 import { gitIdentityInputSchema } from '../../../shared/ipc';
 import type { RepositorySummary } from '../../../shared/repos';
-import type { RepoPreferences } from '../../../shared/workspace';
+import {
+  protectedPatternSchema,
+  type RepoPreferences,
+} from '../../../shared/workspace';
 import { OfflineArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
@@ -10,6 +14,7 @@ import { Segmented } from '../../components/ui/segmented';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { InlineStatus, Loading } from '../../components/ui/status';
 import { TextField } from '../../components/ui/text-field';
+import { useBranchOverview } from '../../lib/branch-queries';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import {
   useEditors,
@@ -127,6 +132,194 @@ function IdentityRows({ repoId }: { repoId: string }) {
         <span className="text-xs text-muted">Local: user.name, user.email</span>
       </div>
     </form>
+  );
+}
+
+const MERGE_WORDS = {
+  default: "Git's default",
+  'no-ff': 'Always a merge commit',
+  'ff-only': 'Fast-forward only',
+} as const;
+const AUTO_WORDS = {
+  off: 'Off',
+  compare: 'When comparing',
+  list: 'Also in the branch list',
+} as const;
+
+// Protected names and prefix/* patterns, as removable tags with one field to add another.
+function ProtectedBranches({
+  value,
+  onChange,
+}: {
+  value: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState('');
+  const [error, setError] = useState<string>();
+  const add = () => {
+    const parsed = protectedPatternSchema.safeParse(draft);
+    if (!parsed.success) return setError(parsed.error.issues[0]?.message);
+    if (value.includes(parsed.data))
+      return setError('That one is already protected.');
+    if (value.length >= 20)
+      return setError('Protect at most 20 names or patterns.');
+    onChange([...value, parsed.data]);
+    setDraft('');
+    setError(undefined);
+  };
+  return (
+    <div className="grid w-full gap-1.5">
+      <div
+        role="group"
+        aria-label="Protected branches"
+        className="field flex min-h-9 w-full flex-wrap items-center gap-1.5 px-1.5 py-1"
+      >
+        {value.map((name) => (
+          <span
+            key={name}
+            className="inline-flex h-6 items-center gap-1 rounded-[4px] bg-control pr-0.5 pl-2 font-mono text-[0.75rem] text-ink"
+          >
+            {name}
+            <button
+              type="button"
+              aria-label={`Stop protecting ${name}`}
+              onClick={() => onChange(value.filter((v) => v !== name))}
+              className="grid size-5 place-items-center rounded-[4px] text-muted hover:text-ink"
+            >
+              <X aria-hidden className="size-3" />
+            </button>
+          </span>
+        ))}
+        <input
+          aria-label="Add a protected branch or pattern"
+          value={draft}
+          onChange={(event) => {
+            setDraft(event.target.value);
+            setError(undefined);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              add();
+            }
+          }}
+          placeholder="Add a name or pattern, then Enter"
+          spellCheck={false}
+          className="h-6 min-w-40 flex-1 bg-transparent px-1 font-mono text-[0.78125rem] text-ink outline-none placeholder:font-sans placeholder:text-muted"
+        />
+      </div>
+      {error && <p className="text-sm text-danger">{error}</p>}
+    </div>
+  );
+}
+
+function BranchRows({
+  repo,
+  own,
+  patch,
+}: {
+  repo: RepositorySummary;
+  own: RepoPreferences;
+  patch: (value: Partial<RepoPreferences>) => void;
+}) {
+  const { data: settings } = useSettings();
+  const overview = useBranchOverview(repo.id, repo.statusAt);
+  const list = overview.data;
+  const resolved =
+    list?.target && list.target.source !== 'setting' ? list.target.name : null;
+  return (
+    <SettingGroup title="Branches">
+      <SettingRow
+        id="repo-compare-against"
+        label="Compare against"
+        description="The branch that Merged, Unmerged, the Compare base and the automatic checks use. By default gitdesk reads it from the remote's default branch."
+        stacked
+      >
+        <select
+          aria-label="Compare against"
+          value={own.compareAgainst ?? ''}
+          onChange={(e) => patch({ compareAgainst: e.target.value || null })}
+          className="field h-9 max-w-full px-2.5 font-mono text-[0.78125rem]"
+        >
+          <option value="">
+            {resolved ? `Remote default · ${resolved}` : 'Remote default'}
+          </option>
+          {list?.local.map((b) => (
+            <option key={`l:${b.name}`} value={b.name}>
+              {b.name}
+            </option>
+          ))}
+          {list?.remote.map((b) => (
+            <option key={`r:${b.name}`} value={b.name}>
+              {b.name}
+            </option>
+          ))}
+        </select>
+      </SettingRow>
+      <SettingRow
+        id="repo-protected-branches"
+        label="Protected branches"
+        description="gitdesk won't rename or delete these, here or on a remote, and asks once more before merging into them. release/* covers every branch under release/. Git and the terminal aren't changed."
+        stacked
+      >
+        <ProtectedBranches
+          value={own.protectedBranches}
+          onChange={(protectedBranches) => patch({ protectedBranches })}
+        />
+      </SettingRow>
+      <SettingRow
+        id="repo-branch-start"
+        label="New branches start from"
+        description="What New branch picks first. You can still choose any branch or commit in it."
+        stacked
+      >
+        <Segmented
+          label="New branches start from"
+          value={own.branchStart}
+          onChange={(branchStart) => patch({ branchStart })}
+          options={[
+            { value: 'current', label: 'Current branch' },
+            { value: 'compare-against', label: 'Compare-against branch' },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow
+        id="repo-merge-method"
+        label="Merge method"
+        description={`What Merge on the Branches tab picks first; you can choose another for one merge. Global is ${MERGE_WORDS[settings?.branchMergeMethod ?? 'default']}.`}
+        stacked
+      >
+        <Segmented
+          label="Merge method"
+          value={own.mergeMethod}
+          onChange={(mergeMethod) => patch({ mergeMethod })}
+          options={[
+            { value: 'global', label: 'Follow global' },
+            { value: 'default', label: "Git's default" },
+            { value: 'no-ff', label: 'Always a merge commit' },
+            { value: 'ff-only', label: 'Fast-forward only' },
+          ]}
+        />
+      </SettingRow>
+      <SettingRow
+        id="repo-auto-mergeability"
+        label="Check mergeability automatically"
+        description={`Global is ${AUTO_WORDS[settings?.branchAutoMergeability ?? 'list']}. Turn it off for a very large repository where each check takes a while.`}
+        stacked
+      >
+        <Segmented
+          label="Check mergeability automatically"
+          value={own.autoMergeability}
+          onChange={(autoMergeability) => patch({ autoMergeability })}
+          options={[
+            { value: 'global', label: 'Follow global' },
+            { value: 'off', label: 'Off' },
+            { value: 'compare', label: 'When comparing' },
+            { value: 'list', label: 'Also in the branch list' },
+          ]}
+        />
+      </SettingRow>
+    </SettingGroup>
   );
 }
 
@@ -268,6 +461,10 @@ export function RepoSettingsTab({ repo }: { repo: RepositorySummary }) {
             />
           </SettingRow>
         </SettingGroup>
+      </div>
+
+      <div className="mt-12">
+        <BranchRows repo={repo} own={own} patch={patch} />
       </div>
 
       <div className="mt-12">

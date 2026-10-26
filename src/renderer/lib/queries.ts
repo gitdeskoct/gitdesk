@@ -753,7 +753,12 @@ export function useSetRepoPreferences(id: string) {
   return useMutation({
     mutationFn: (input: Omit<RepoPreferencesInput, 'id'>) =>
       workspace().setPreferences({ id, ...input }),
-    onSuccess: (prefs) => qc.setQueryData(workspaceKeys.preferences(id), prefs),
+    onSuccess: (prefs, input) => {
+      qc.setQueryData(workspaceKeys.preferences(id), prefs);
+      // Compare against and protected branches change what main reports about each branch.
+      if (input.compareAgainst !== undefined || input.protectedBranches)
+        void qc.invalidateQueries({ queryKey: ['ws-branches', id] });
+    },
   });
 }
 

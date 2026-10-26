@@ -45,6 +45,22 @@ import {
   viewedInputSchema,
   viewedQuerySchema,
 } from '../../shared/pulls';
+import {
+  BRANCHES_IPC as B,
+  branchFileDiffInputSchema,
+  checkRemoteInputSchema,
+  compareBranchesInputSchema,
+  createBranchInputSchema as newBranchInputSchema,
+  deleteBranchInputSchema,
+  deleteRemoteInputSchema,
+  listMergeabilityInputSchema,
+  mergeabilityInputSchema,
+  mergeBranchesInputSchema,
+  pushBranchInputSchema,
+  renameBranchInputSchema,
+  setUpstreamInputSchema as branchUpstreamInputSchema,
+} from '../../shared/branches';
+import type { BranchService } from '../branches/branch-service';
 import { settingsPatchSchema } from '../../shared/settings';
 import type { PullService } from '../pulls/pull-service';
 import type { MoveService } from '../sync/move-service';
@@ -142,6 +158,7 @@ export function registerIpc(
     sync: SyncService;
     source: SourceService;
     remoteSource: RemoteSource;
+    branches: BranchService;
   },
 ): void {
   const {
@@ -160,6 +177,73 @@ export function registerIpc(
     source,
     remoteSource,
   } = services;
+  const { branches } = services;
+  // Branches: names and refs are looked up in Git's own branch list in main before Git runs.
+  handle(
+    B.overview,
+    repoIdSchema,
+    userFacing((repoId) => branches.overview(repoId)),
+  );
+  handle(
+    B.create,
+    newBranchInputSchema,
+    userFacing((input) => branches.create(input)),
+  );
+  handle(
+    B.rename,
+    renameBranchInputSchema,
+    userFacing((input) => branches.rename(input)),
+  );
+  handle(
+    B.remove,
+    deleteBranchInputSchema,
+    userFacing((input) => branches.remove(input)),
+  );
+  handle(
+    B.setUpstream,
+    branchUpstreamInputSchema,
+    userFacing((input) => branches.setUpstream(input)),
+  );
+  handle(
+    B.push,
+    pushBranchInputSchema,
+    userFacing((input) => branches.push(input)),
+  );
+  handle(
+    B.deleteRemote,
+    deleteRemoteInputSchema,
+    userFacing((input) => branches.deleteRemote(input)),
+  );
+  handle(
+    B.checkRemote,
+    checkRemoteInputSchema,
+    userFacing((input) => branches.checkRemote(input)),
+  );
+  handle(
+    B.compare,
+    compareBranchesInputSchema,
+    userFacing((input) => branches.compare(input)),
+  );
+  handle(
+    B.fileDiff,
+    branchFileDiffInputSchema,
+    userFacing((input) => branches.fileDiff(input)),
+  );
+  handle(
+    B.mergeability,
+    mergeabilityInputSchema,
+    userFacing((input) => branches.mergeability(input)),
+  );
+  handle(
+    B.listMergeability,
+    listMergeabilityInputSchema,
+    userFacing((input) => branches.listMergeability(input)),
+  );
+  handle(
+    B.merge,
+    mergeBranchesInputSchema,
+    userFacing((input) => branches.merge(input)),
+  );
 
   // Files: every path is checked against the registered root on disk in main, and a commit is
   // only ever an id Git or the Worker resolved.

@@ -134,6 +134,18 @@ export const settingsSchema = z.object({
   pullPushAfterMerge: z.boolean(),
   pullOfferDeleteBranch: z.boolean(),
   pullWarnBeforeMerge: z.boolean(),
+  // Branches tab: what a merge and a new branch start with, and how much Git checks by itself.
+  branchAutoMergeability: z.enum(['off', 'compare', 'list']),
+  branchMergeMethod: z.enum(['default', 'no-ff', 'ff-only']),
+  branchPushAfterMerge: z.boolean(),
+  branchOfferDelete: z.boolean(),
+  branchSwitchNew: z.boolean(),
+  // git follows branch.autoSetupMerge; always and never pass --track and --no-track.
+  branchTrack: z.enum(['git', 'always', 'never']),
+  branchSort: z.enum(['recent', 'name']),
+  branchShowRemote: z.boolean(),
+  // Days without a commit before a branch reads as stale; 0 never does.
+  branchStaleDays: z.union([z.literal(0), z.literal(30), z.literal(90)]),
   // Git hosting: the remote name used when linking adds the account's Git URL, and how long a
   // token in a copied terminal command lasts, in seconds.
   hostingRemoteName: z.enum(['auto', 'gitdesk', 'none']),
@@ -220,6 +232,15 @@ export const DEFAULT_SETTINGS: Settings = {
   pullPushAfterMerge: true,
   pullOfferDeleteBranch: false,
   pullWarnBeforeMerge: true,
+  branchAutoMergeability: 'list',
+  branchMergeMethod: 'default',
+  branchPushAfterMerge: false,
+  branchOfferDelete: true,
+  branchSwitchNew: true,
+  branchTrack: 'git',
+  branchSort: 'recent',
+  branchShowRemote: true,
+  branchStaleDays: 90,
   hostingRemoteName: 'auto',
   autoHostedRemote: true,
   pullStrategy: 'ff-only',

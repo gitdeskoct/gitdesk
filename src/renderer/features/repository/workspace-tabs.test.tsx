@@ -214,6 +214,15 @@ function install(list: RepositorySummary[] = [repo()]) {
     git: { getIdentity: vi.fn(never) },
     repos,
     workspace,
+    branches: {
+      overview: vi.fn(async () => ({
+        ...(await (workspace.branches as () => Promise<object>)()),
+        target: null,
+        merged: [],
+        protected: [],
+      })),
+      listMergeability: vi.fn(async () => []),
+    },
   } as unknown as DesktopApi;
 }
 

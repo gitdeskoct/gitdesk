@@ -191,6 +191,30 @@ export type CommitResult =
 
 export const branchNameSchema = gitDefaultsSchema.shape.defaultBranch;
 
+// A protected entry is a branch name, or a prefix ending in /* that covers every branch under it.
+export const protectedPatternSchema = z
+  .string()
+  .trim()
+  .max(102)
+  .refine(
+    (value) =>
+      branchNameSchema.safeParse(
+        value.endsWith('/*') ? value.slice(0, -2) : value,
+      ).success,
+    'Use a branch name like main, or a prefix like release/*.',
+  );
+
+export function isProtected(
+  name: string,
+  patterns: readonly string[],
+): boolean {
+  return patterns.some((pattern) =>
+    pattern.endsWith('/*')
+      ? name.startsWith(pattern.slice(0, -1))
+      : name === pattern,
+  );
+}
+
 export type LocalBranch = {
   name: string;
   oid: string;
@@ -429,6 +453,13 @@ export type RepoPreferences = {
   defaultRemote: string | null;
   // Files opened in the Files tab, newest first.
   recentFiles: string[];
+  // Branches: null compares against <remote>/HEAD, else the default branch.
+  compareAgainst: string | null;
+  // Names or prefix/* patterns gitdesk won't rename or delete, here or on a remote.
+  protectedBranches: string[];
+  branchStart: 'current' | 'compare-against';
+  mergeMethod: 'global' | 'default' | 'no-ff' | 'ff-only';
+  autoMergeability: 'global' | 'off' | 'compare' | 'list';
 };
 export const DEFAULT_REPO_PREFERENCES: RepoPreferences = {
   layout: 'global',
@@ -438,6 +469,11 @@ export const DEFAULT_REPO_PREFERENCES: RepoPreferences = {
   autoFetch: 'global',
   defaultRemote: null,
   recentFiles: [],
+  compareAgainst: null,
+  protectedBranches: [],
+  branchStart: 'current',
+  mergeMethod: 'global',
+  autoMergeability: 'global',
 };
 export const repoPreferencesInputSchema = z
   .object({
@@ -457,6 +493,15 @@ export const repoPreferencesInputSchema = z
       ])
       .optional(),
     defaultRemote: z.string().min(1).max(255).nullable().optional(),
+    compareAgainst: z.string().min(1).max(255).nullable().optional(),
+    protectedBranches: z
+      .array(protectedPatternSchema)
+      .max(20)
+      .refine((list) => new Set(list).size === list.length, 'Each entry once.')
+      .optional(),
+    branchStart: z.enum(['current', 'compare-against']).optional(),
+    mergeMethod: z.enum(['global', 'default', 'no-ff', 'ff-only']).optional(),
+    autoMergeability: z.enum(['global', 'off', 'compare', 'list']).optional(),
   })
   .strict();
 export type RepoPreferencesInput = z.infer<typeof repoPreferencesInputSchema>;

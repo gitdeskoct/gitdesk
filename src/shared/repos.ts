@@ -110,7 +110,12 @@ export type LocalActivity = {
     | 'pulled'
     | 'pr-merged'
     | 'pr-reverted'
-    | 'branch-created';
+    | 'branch-created'
+    | 'branch-renamed'
+    | 'branch-deleted'
+    | 'branch-merged'
+    | 'remote-branch-deleted'
+    | 'upstream-set';
   at: number;
   detail: string | null;
 };
