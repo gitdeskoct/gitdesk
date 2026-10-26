@@ -1,0 +1,276 @@
+# Builds every installer for a version tag and leaves a draft release in the public releases
+# repository for a person to review and publish. Nothing here publishes a release.
+name: Release
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and check everything, but don't create the draft
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One release at a time per ref, and never cancelled halfway.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASES_REPO: BotCoder254/gitdesk-releases
+
+jobs:
+  verify:
+    name: Check the version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          API_ORIGIN: ${{ vars.API_ORIGIN }}
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "$REF_TYPE" = tag ]; then
+            if [ "$REF_NAME" != "v$version" ]; then
+              echo "::error::Tag $REF_NAME doesn't match package.json version $version. Tag v$version instead."
+              exit 1
+            fi
+            # fetch-depth 0 already brought origin/main; credentials aren't kept for a second fetch.
+            if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+              echo "::error::$REF_NAME points at a commit that isn't on main."
+              exit 1
+            fi
+          fi
+          case "$API_ORIGIN" in
+            https://*) ;;
+            *) echo "::error::Set the API_ORIGIN repository variable to the Worker's https origin."; exit 1 ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  quality:
+    name: Quality
+    uses: ./.github/workflows/quality.yml
+
+  build-windows:
+    name: Build Windows
+    needs: [verify, quality]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    environment: release
+    outputs:
+      signed: ${{ steps.signing.outputs.signed }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Build the installer
+        env:
+          VITE_API_ORIGIN: ${{ vars.API_ORIGIN }}
+          WIN_SIGNING: ${{ vars.WIN_SIGNING }}
+          WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}
+          WIN_CSC_LINK: ${{ vars.WIN_SIGNING == 'required' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ vars.WIN_SIGNING == 'required' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
+        run: |
+          if [ "$WIN_SIGNING" = required ]; then
+            if [ -z "$WIN_CSC_LINK" ] || [ -z "$WIN_CSC_KEY_PASSWORD" ] || [ -z "$WIN_PUBLISHER_NAME" ]; then
+              echo "::error::WIN_SIGNING is required but WIN_CSC_LINK, WIN_CSC_KEY_PASSWORD or WIN_PUBLISHER_NAME is missing."
+              exit 1
+            fi
+            # publisherName goes into app-update.yml, so installed copies refuse updates signed by anyone else.
+            npm run dist -- --win -c.forceCodeSigning=true "-c.win.signtoolOptions.publisherName=$WIN_PUBLISHER_NAME"
+          else
+            CSC_IDENTITY_AUTO_DISCOVERY=false npm run dist -- --win
+          fi
+      - id: signing
+        name: Check the signature
+        shell: pwsh
+        env:
+          WIN_SIGNING: ${{ vars.WIN_SIGNING }}
+        run: |
+          $files = @(Get-ChildItem dist\*.exe) + @(Get-Item dist\win-unpacked\gitdesk.exe)
+          $statuses = $files | ForEach-Object { (Get-AuthenticodeSignature $_.FullName).Status }
+          $signed = -not ($statuses | Where-Object { $_ -ne 'Valid' })
+          $files | ForEach-Object { "{0}: {1}" -f $_.Name, (Get-AuthenticodeSignature $_.FullName).Status }
+          if ($env:WIN_SIGNING -eq 'required' -and -not $signed) {
+            Write-Output '::error::Signing is required but a file is not validly signed.'
+            exit 1
+          }
+          "signed=$($signed.ToString().ToLower())" >> $env:GITHUB_OUTPUT
+      - name: Updater metadata is packaged
+        run: test -f dist/win-unpacked/resources/app-update.yml
+      - name: Launch the packaged app
+        shell: pwsh
+        run: .github/scripts/smoke-windows.ps1 -App dist\win-unpacked\gitdesk.exe
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: windows
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/*.exe
+            dist/*.exe.blockmap
+            dist/latest.yml
+
+  build-linux:
+    name: Build Linux
+    needs: [verify, quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      # bsdtar builds the pacman package; xvfb runs the smoke test.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libarchive-tools xvfb
+      - run: npm ci
+      - name: Build the packages
+        env:
+          VITE_API_ORIGIN: ${{ vars.API_ORIGIN }}
+        run: npm run dist -- --linux
+      - name: Updater metadata is packaged
+        run: test -f dist/linux-unpacked/resources/app-update.yml
+      - name: Launch the packaged app
+        run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/scripts/smoke-linux.sh dist/linux-unpacked/gitdesk
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: linux
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.pacman
+            dist/*.tar.gz
+            dist/latest-linux.yml
+
+  nix:
+    name: Nix expression
+    needs: [verify, build-linux]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: nix
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: linux
+          path: linux
+      - env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          archive=$(ls linux/*.tar.gz)
+          file=$(basename "$archive")
+          hash="sha256-$(openssl dgst -sha256 -binary "$archive" | base64 -w0)"
+          sed -e "s|^  version = \".*\";|  version = \"$VERSION\";|" \
+              -e "s|^  file = \".*\";|  file = \"$file\";|" \
+              -e "s|^  hash = .*;|  hash = \"$hash\";|" \
+              nix/package.nix > gitdesk.nix
+          grep -q "hash = \"$hash\"" gitdesk.nix
+          grep -q "file = \"$file\"" gitdesk.nix
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: nix
+          if-no-files-found: error
+          retention-days: 7
+          path: gitdesk.nix
+
+  draft:
+    name: Draft release
+    needs: [verify, build-windows, build-linux, nix]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: release
+          merge-multiple: true
+      - name: Check every file
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: node .github/scripts/verify-release.cjs release "$VERSION"
+      - name: Write the release notes
+        env:
+          VERSION: ${{ needs.verify.outputs.version }}
+          SIGNED: ${{ needs.build-windows.outputs.signed }}
+        run: |
+          previous=$(git describe --tags --abbrev=0 "$GITHUB_SHA^" 2>/dev/null || true)
+          {
+            echo "## What's new"
+            echo
+            if [ -n "$previous" ]; then
+              git log --no-merges --pretty='- %s' "$previous..$GITHUB_SHA"
+            else
+              git log --no-merges --pretty='- %s' -n 30 "$GITHUB_SHA"
+            fi
+            echo
+            echo "## Downloads"
+            echo
+            echo "- Windows: the \`.exe\` setup program. Installed copies update themselves from Settings › Updates."
+            echo "- Linux: the AppImage updates itself; \`.deb\` and pacman packages update through gitdesk with your administrator password; the \`.tar.gz\` archive and \`gitdesk.nix\` update the way you installed them."
+            echo "- \`SHA256SUMS.txt\` lists the SHA-256 of every file."
+            echo
+            if [ "$SIGNED" = true ]; then
+              echo "The Windows files are code-signed."
+            else
+              echo "The Windows files are not code-signed yet, so Windows SmartScreen may warn before the installer runs."
+            fi
+          } > notes.md
+          cat notes.md
+      - name: Create the draft
+        if: github.event_name == 'push' || !inputs.dry_run
+        env:
+          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          VERSION: ${{ needs.verify.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Add the RELEASES_TOKEN secret to this repository or its release environment: a fine-grained token with Contents read and write on $RELEASES_REPO only. README › Releasing has the steps."
+            exit 1
+          fi
+          if gh release view "v$VERSION" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
+            echo "::error::$RELEASES_REPO already has a release or draft for v$VERSION. Delete the draft or bump the version."
+            exit 1
+          fi
+          gh release create "v$VERSION" release/* \
+            --repo "$RELEASES_REPO" \
+            --draft \
+            --title "gitdesk $VERSION" \
+            --notes-file notes.md
+          echo "Draft created. Review it at https://github.com/$RELEASES_REPO/releases and publish it there."

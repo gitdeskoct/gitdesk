@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
 import { AppMenu } from './app-menu';
+import { UpdateIndicator } from './update-indicator';
 import {
   useMotionAllowed,
   useSettings,
@@ -38,11 +39,11 @@ export function TitleBar({
       {brand &&
         (collapsed && sidebarToggle ? (
           <span className="px-1.5 text-ink">
-            <LogoMark size={20} animate={motion} />
+            <LogoMark size={24} animate={motion} />
           </span>
         ) : (
           <Logo
-            size={20}
+            size={24}
             animate={motion}
             className="px-1.5"
             wordmarkClassName="text-[0.9375rem]"
@@ -66,6 +67,11 @@ export function TitleBar({
         </Tooltip>
       )}
       {!mac && <AppMenu inShell={inShell} />}
+      {inShell && (
+        <span className="ml-auto flex items-center">
+          <UpdateIndicator />
+        </span>
+      )}
     </header>
   );
 }

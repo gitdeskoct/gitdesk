@@ -14,7 +14,7 @@ This is the owner's design direction for the gitdesk renderer. `src/renderer/sty
 | ------ | ----- | ------------------------------------------------------------------------------ |
 | ENERGY | 1     | Neutral surfaces, one accent, color reserved for state and the primary action. |
 | RHYTHM | 2     | A steady 6px spacing scale with predictable section structure.                 |
-| MOTION | 1     | The logo draw-in, the sign-in tiles and state transitions. Nothing loops.      |
+| MOTION | 1     | The logo fade-in, the sign-in tiles and state transitions. Nothing loops.      |
 
 ## Palette
 
@@ -181,13 +181,13 @@ Hierarchy is **Page → Section → Component**. A page has one title. Sections 
 
 The `motion` setting has three levels, applied as `data-motion` on the root:
 
-- **Full.** Transitions on state changes, the logo draw-in and the sign-in tiles. When the OS asks for reduced motion, `globals.css` cuts Full's transitions to near-instant.
+- **Full.** Transitions on state changes, the logo fade-in and the sign-in tiles. When the OS asks for reduced motion, `globals.css` cuts Full's transitions to near-instant.
 - **Reduced.** Less motion than Full, for users who want it without changing the OS setting.
 - **Off.** All animations and transitions are disabled (`globals.css` forces `animation: none` and `transition: none`).
 
 Rules:
 
-- **The logo draws in once** when it first appears, and reacts to hover. It never loops or idles.
+- **The logo fades in once** when it first appears, and tilts once on hover. It never loops or idles.
 - **Sign-in wobble tiles follow the pointer only.** They are still when the pointer is still, with no autoplay and no ambient drift.
 - Nothing loops except a spinner while work is pending.
 
@@ -195,9 +195,23 @@ _Why: motion should confirm that something happened. Looping motion competes wit
 
 ## Logo
 
-- A line mark drawn in `currentColor`, so it takes the color of the text around it in both modes.
-- No fill, no background, no gradient.
-- Legible at 16px, so the same mark works at title bar and sidebar sizes.
+- **A real octopus**, the owner's choice: the octopus from Google's Noto Emoji, recoloured in gitdesk's blues (`assets/logo.svg`, `LogoMark` in `components/brand/logo.tsx`). Used under the SIL Open Font License 1.1, which ships in `resources/licenses` and is credited in Settings › About. _Why: the owner asked for a real octopus rather than a Git symbol._
+- **Fixed brand colours, not the accent tone**: `#4a6cf0` body, `#1f3fbf`/`#1d3ab0` shade, `#9fb3ff` underside, `#e3e9ff` suckers, `#14161a` eye. The body passes 3:1 on white, the canvas and both Windows taskbars (lowest 3.64:1). Recorded against "flat, one accent": the logo is the one coloured illustration, like the editor logos.
+- **Sizes**: 24px in the title bar, 56px in About, 44 to 48px on sign-in. The app icon is `build/icon.png` (1024) and the tray uses `assets/tray/tray.ico` on Windows and `tray.png` / `tray@2x.png` on Linux, all drawn from the SVG at their own size.
+- It fades in once and tilts once on hover. It never loops.
+
+## Updates
+
+- **One place**: Settings › Updates, with a status row in About and Help › Check for updates. Nothing downloads until the person chooses to, and nothing installs until they restart.
+- **Centered, then split.** Checking, up to date and the settings sit in the 760px column. When a release is available, downloading, ready or failed, the page widens to the release notes beside the status and actions; under 700px the status goes first. Later folds the release away for the visit.
+- **Release notes are text.** The GitHub body is parsed in an inert document and only headings, lists and paragraphs come out; no HTML is inserted.
+- **Install types speak for themselves**: the Windows installer and AppImage restart into the new version, deb and pacman say Linux asks for an administrator password, and the archive or Nix and development runs say they can't update themselves and offer the release page.
+- **Restart comes back.** Restart to update installs silently and reopens gitdesk. While a clone, push or move runs, a warning band offers Restart anyway or Restart when it's done. If gitdesk is still open 30 seconds later, a danger band says the installer didn't take over.
+- **Honest checks.** The page says the download is checked against the release's SHA-512 and that the Windows build isn't code-signed yet.
+
+## Title bar indicator
+
+Just left of the window controls, only while there is something to act on: Update x.y.z, a progress ring with the percent while downloading, a primary Restart to update when ready (with its spinner while restarting), and Update failed. Restart restarts; everything else opens Settings › Updates. Nothing shows while up to date or checking in the background.
 
 ## Empty states
 

@@ -150,8 +150,9 @@ npm start
 | `npm test`          | Run the desktop tests.                                                           |
 | `npm run typecheck` | Type-check with `tsc --noEmit`.                                                  |
 | `npm run lint`      | Lint with oxlint and check formatting with oxfmt. `npm run lint:fix` fixes both. |
-| `npm run package`   | Package the app for the current platform.                                        |
-| `npm run make`      | Build installers with the configured makers.                                     |
+| `npm run build`     | Build main, preload and the renderer into `.vite/` (`electron-forge package`).   |
+| `npm run dist`      | Build, then make this platform's installers in `dist/` with electron-builder.    |
+| `npm run dist:dir`  | Build, then package an unpacked app in `dist/` without installers.               |
 
 ### Worker commands
 
@@ -167,3 +168,44 @@ Run these in `backend/`.
 | `npm run db:migrate:local`  | Apply migrations to the local D1 database.                             |
 | `npm run db:migrate:remote` | Apply migrations to the remote D1 database.                            |
 | `npm run deploy`            | Deploy the Worker (`wrangler deploy --minify`).                        |
+
+## Releasing
+
+GitHub Actions builds every release; nothing is published until a person publishes the draft. The source repository is private, so installers and update metadata go to the public [BotCoder254/gitdesk-releases](https://github.com/BotCoder254/gitdesk-releases), which installed copies read without a token.
+
+1. Set `version` in `package.json` on `main`, commit it, and push a tag of the same version: `git tag v1.2.0` then `git push origin v1.2.0`.
+2. `release.yml` checks that the tag matches `package.json` and is on `main`, then runs Quality.
+3. It builds Windows (NSIS) and Linux (AppImage, deb, pacman, tar.gz) on their own runners and starts each packaged app once.
+4. It checks every file against `latest.yml` and `latest-linux.yml`, writes `SHA256SUMS.txt` and `gitdesk.nix`, and creates a **draft** in gitdesk-releases.
+5. Read the draft, edit its notes, and publish it there. Installed copies see it at their next check.
+
+To try the whole build without a draft, run Release from the Actions tab with **dry run** ticked.
+
+**What each install gets.** The Windows installer and the AppImage update themselves from Settings › Updates. `.deb` and pacman installs update through gitdesk too, and Linux asks for an administrator password. The `.tar.gz` archive and Nix can't update themselves; users install the new version the same way.
+
+**Nix.** Each release carries `gitdesk.nix`, `nix/package.nix` with that version's file and hash filled in. Build it with `nix-build -E 'with import <nixpkgs> {}; callPackage ./gitdesk.nix {}'`.
+
+**Settings it needs** (repository Settings › Secrets and variables › Actions):
+
+| Name                   | Kind                          | What it is                                                                        |
+| ---------------------- | ----------------------------- | --------------------------------------------------------------------------------- |
+| `API_ORIGIN`           | Variable                      | The production Worker's https origin, baked into packaged builds.                 |
+| `RELEASES_TOKEN`       | Secret, `release` environment | A fine-grained token with Contents read and write on gitdesk-releases only.       |
+| `WIN_SIGNING`          | Variable                      | `required` makes a release fail unless the Windows files are validly signed.      |
+| `WIN_PUBLISHER_NAME`   | Variable                      | The certificate's subject name. Installed copies refuse updates signed by others. |
+| `WIN_CSC_LINK`         | Secret, `release` environment | The signing certificate, as electron-builder reads it.                            |
+| `WIN_CSC_KEY_PASSWORD` | Secret, `release` environment | Its password.                                                                     |
+
+Secrets can also be repository secrets; jobs in the `release` environment read both. A repository secret is the only option until the `release` environment exists, which needs the repository owner.
+
+**The releases token.** GitHub has no command or API that creates a fine-grained token, so it is made in the browser, signed in as BotCoder254:
+
+1. Open [this pre-filled form](https://github.com/settings/personal-access-tokens/new?name=gitdesk+releases&description=Lets+shikki841%2Fgitdesk+create+draft+releases+in+BotCoder254%2Fgitdesk-releases&target_name=BotCoder254&expires_in=366&contents=write). It sets the name, the owner, a one-year expiry and Contents read and write.
+2. Under Repository access choose **Only select repositories** and pick `gitdesk-releases`. The form can't pre-fill that part, and an all-repositories token would let a leaked secret write anywhere.
+3. Generate it, then run `gh secret set RELEASES_TOKEN --repo shikki841/gitdesk` and paste it when asked. It never touches a file or the shell history.
+
+Renew it before it expires; the draft job fails with a message naming the secret when it's missing or expired.
+
+**Signing.** Windows builds are unsigned until `WIN_SIGNING` is `required`; the draft says which. Until then an update is checked only against the SHA-512 in the release metadata, fetched over HTTPS, and Windows SmartScreen warns before the installer runs. New code-signing certificates keep their key in hardware or a cloud HSM, so a `.pfx` secret only works for an older certificate; a cloud signing service needs electron-builder's own signing options instead.
+
+**Cost.** Actions minutes on a private repository are billed, and Windows runners count double.

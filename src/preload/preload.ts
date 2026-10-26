@@ -14,6 +14,7 @@ import { BRANCHES_IPC as B } from '../shared/branches';
 import { PULLS_IPC as P } from '../shared/pulls';
 import { SOURCE_IPC as F, type SourceChange } from '../shared/source';
 import { SYNC_IPC as S } from '../shared/sync';
+import { UPDATES_IPC as U, type UpdateStatus } from '../shared/updates';
 import { WORKSPACE_IPC as W } from '../shared/workspace';
 
 // Each method maps to one fixed channel. No generic invoke, no raw ipcRenderer, no token access.
@@ -242,6 +243,19 @@ const api: DesktopApi = {
     mergeability: (input) => ipcRenderer.invoke(B.mergeability, input),
     listMergeability: (input) => ipcRenderer.invoke(B.listMergeability, input),
     merge: (input) => ipcRenderer.invoke(B.merge, input),
+  },
+  updates: {
+    status: () => ipcRenderer.invoke(U.status),
+    check: () => ipcRenderer.invoke(U.check),
+    download: () => ipcRenderer.invoke(U.download),
+    install: (mode) => ipcRenderer.invoke(U.install, mode),
+    openReleasePage: () => ipcRenderer.invoke(U.openReleasePage),
+    onChanged(callback) {
+      const listener = (_event: IpcRendererEvent, status: UpdateStatus) =>
+        callback(status);
+      ipcRenderer.on(U.changed, listener);
+      return () => ipcRenderer.removeListener(U.changed, listener);
+    },
   },
 };
 

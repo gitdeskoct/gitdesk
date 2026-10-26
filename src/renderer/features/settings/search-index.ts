@@ -14,6 +14,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   hosting: 'Git hosting',
   sync: 'Sync',
   devices: 'Devices',
+  updates: 'Updates',
   about: 'About',
 };
 
@@ -608,6 +609,30 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Version',
     section: 'about',
     keywords: 'electron platform release logs diagnostics',
+  },
+  {
+    id: 'credits',
+    label: 'Credits',
+    section: 'about',
+    keywords: 'logo octopus noto emoji license licence attribution',
+  },
+  {
+    id: 'update-status',
+    label: 'Check for updates',
+    section: 'updates',
+    keywords: 'update upgrade new version download install restart release',
+  },
+  {
+    id: 'auto-check-updates',
+    label: 'Check for updates automatically',
+    section: 'updates',
+    keywords: 'update automatic background check startup',
+  },
+  {
+    id: 'update-channel',
+    label: 'Update channel',
+    section: 'updates',
+    keywords: 'stable channel beta preview release',
   },
 ];
 

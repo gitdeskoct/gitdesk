@@ -8,6 +8,7 @@ import { NavigationProvider } from '../../app/navigation';
 import { ToastProvider } from '../../components/ui/toast';
 import { authErrorMessages } from './messages';
 import { SignInScreen } from './sign-in-screen';
+import { idleUpdates } from '../../test/updates-stub';
 
 const pending = () => new Promise<never>(() => {});
 
@@ -41,7 +42,11 @@ describe('SignInScreen', () => {
         update: vi.fn(async (patch) => ({ ...DEFAULT_SETTINGS, ...patch })),
       },
     };
-    window.desktop = { platform: 'win32', ...desktop } as unknown as DesktopApi;
+    window.desktop = {
+      platform: 'win32',
+      updates: idleUpdates(),
+      ...desktop,
+    } as unknown as DesktopApi;
   });
 
   it('starts sign-in and shows the pending label while the browser opens', async () => {

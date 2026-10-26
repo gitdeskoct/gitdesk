@@ -2,18 +2,22 @@ import { LogoMark } from '../../components/brand/logo';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
 import { Loading } from '../../components/ui/status';
 import { PLATFORM_NAMES } from '../../lib/format';
-import { Copy, FolderOpen } from 'lucide-react';
+import { ArrowDownToLine, Copy, FolderOpen } from 'lucide-react';
 import { GitMissingArt } from '../../components/illustrations';
 import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { InlineStatus } from '../../components/ui/status';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { useAppInfo, useCopyDiagnostics, useOpenLogs } from '../../lib/queries';
+import { useUpdateStatus } from '../../lib/update-queries';
+import { useNavigation } from '../../app/navigation';
 
 export function AboutSection() {
   const info = useAppInfo();
   const openLogs = useOpenLogs();
   const copy = useCopyDiagnostics();
+  const update = useUpdateStatus();
+  const { navigate } = useNavigation();
   if (info.isPending) return <Loading label="Reading version details…" />;
   if (info.isError)
     return (
@@ -36,7 +40,7 @@ export function AboutSection() {
         id="version"
         className="mb-7 flex scroll-mt-6 items-center gap-3.5 text-ink"
       >
-        <LogoMark size={48} />
+        <LogoMark size={56} />
         <div>
           <h1 className="text-xl font-semibold tracking-[-0.03em]">gitdesk</h1>
           <p className="mt-0.5 text-sm text-muted">
@@ -45,6 +49,27 @@ export function AboutSection() {
         </div>
       </div>
       <SettingGroup>
+        <SettingRow
+          id="about-updates"
+          label="Updates"
+          description={
+            !update.data
+              ? 'Reading the update status…'
+              : 'release' in update.data && update.data.release
+                ? `Version ${update.data.release.version} is available.`
+                : update.data.lastCheck?.ok
+                  ? `Up to date. Checked ${new Date(update.data.lastCheck.at).toLocaleString()}.`
+                  : 'Check, download and install new versions.'
+          }
+        >
+          <Button
+            size="sm"
+            onClick={() => navigate({ name: 'settings', section: 'updates' })}
+          >
+            <ArrowDownToLine />
+            Open Updates
+          </Button>
+        </SettingRow>
         <SettingRow
           label="Electron"
           description="The desktop runtime gitdesk is built on."
@@ -87,6 +112,11 @@ export function AboutSection() {
             {copy.isSuccess ? 'Copied' : 'Copy'}
           </Button>
         </SettingRow>
+        <SettingRow
+          id="credits"
+          label="Credits"
+          description="The octopus logo is the octopus from Google's Noto Emoji, recoloured in gitdesk's blues. It is used under the SIL Open Font License 1.1; the licence ships with gitdesk in its resources/licenses folder."
+        />
       </SettingGroup>
       {openLogs.isError && (
         <InlineStatus tone="danger" className="mt-4">

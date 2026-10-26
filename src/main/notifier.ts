@@ -8,7 +8,7 @@ export type NotificationSink = {
   show(notice: { title: string; body: string }, onClick: () => void): void;
 };
 
-export type NoticeKind = 'clone' | 'problem' | 'test';
+export type NoticeKind = 'clone' | 'problem' | 'update' | 'test';
 
 const REPEAT_GAP_MS = 60_000;
 // Windows and macOS truncate long notifications; keep both lines short and whole.
@@ -34,6 +34,7 @@ export function createNotifier(deps: {
     const s = deps.settings();
     if (kind === 'test') return true;
     if (!s.notifications) return false;
+    if (kind === 'update') return true;
     return kind === 'clone' ? s.notifyClone : s.notifyProblems;
   }
 

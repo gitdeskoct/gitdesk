@@ -1,0 +1,103 @@
+# Checks every change. No secrets: pull requests from anyone run this.
+name: Quality
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  app:
+    name: App (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      # The main-process tests run real Git; some commit in temp folders.
+      - run: |
+          git config --global user.name "gitdesk CI"
+          git config --global user.email "ci@users.noreply.github.com"
+          git config --global init.defaultBranch main
+      - run: npm ci
+      - if: runner.os == 'Linux'
+        run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  backend:
+    name: Worker
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  scripts:
+    name: Repository scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: node --test ".github/scripts/*.test.cjs"
+
+  package:
+    name: Package smoke test (Linux)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # Packaged builds refuse a non-https API origin, so the smoke build needs a real one baked in.
+      - run: npm run dist:dir -- --linux
+        env:
+          VITE_API_ORIGIN: ${{ vars.API_ORIGIN || 'https://gitdesk-api.telvinteum.workers.dev' }}
+      - name: Updater metadata is packaged
+        run: test -f dist/linux-unpacked/resources/app-update.yml
+      - name: Launch the packaged app
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb
+          # Ubuntu 24.04 blocks the unprivileged user namespaces Chromium's sandbox uses.
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          bash .github/scripts/smoke-linux.sh dist/linux-unpacked/gitdesk

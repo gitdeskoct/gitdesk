@@ -52,9 +52,11 @@ export function createMainWindow(
   });
 
   win.once('ready-to-show', () => win.show());
-  win.webContents.on('did-finish-load', () =>
-    win.webContents.setZoomLevel(zoomLevel()),
-  );
+  win.webContents.on('did-finish-load', () => {
+    win.webContents.setZoomLevel(zoomLevel());
+    // The release smoke tests wait for this line.
+    log.info('window ready');
+  });
   // Packaged builds have no DevTools; this is where CSP violations and renderer errors surface.
   win.webContents.on(
     'console-message',

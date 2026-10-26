@@ -1,5 +1,6 @@
 import {
   AppWindow,
+  ArrowDownToLine,
   ArrowLeft,
   Braces,
   Cloud,
@@ -38,6 +39,7 @@ import { HostingSection } from './hosting-section';
 import { PullsSection } from './pulls-section';
 import { SyncSection } from './sync-section';
 import { ShortcutsSection } from './shortcuts-section';
+import { UpdatesSection } from './updates-section';
 import { WorkspaceSection } from './workspace-section';
 import { SECTION_LABELS, searchSettings } from './search-index';
 
@@ -68,7 +70,13 @@ const GROUPS: {
       { id: 'devices', icon: Laptop },
     ],
   },
-  { label: 'gitdesk', items: [{ id: 'about', icon: Info }] },
+  {
+    label: 'gitdesk',
+    items: [
+      { id: 'updates', icon: ArrowDownToLine },
+      { id: 'about', icon: Info },
+    ],
+  },
 ];
 
 function SearchResults({
@@ -143,6 +151,7 @@ export function SettingsLayout({
     account: <AccountSection status={status} />,
     hosting: <HostingSection status={status} />,
     devices: <DevicesSection status={status} />,
+    updates: <UpdatesSection />,
     about: <AboutSection />,
   };
 
@@ -193,7 +202,8 @@ export function SettingsLayout({
         ))}
       </nav>
       <Page
-        width="narrow"
+        // The release notes and install steps sit side by side, so Updates gets the wider column.
+        width={section === 'updates' && !searching ? 'page' : 'narrow'}
         crumbs={[
           {
             label: 'Settings',

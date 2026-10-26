@@ -14,6 +14,7 @@ import {
   Plus,
   Power,
   Redo2,
+  RefreshCw,
   Scissors,
   Search,
   Settings,
@@ -25,6 +26,7 @@ import { useRef, type ReactNode } from 'react';
 import type { WindowCommand } from '../../../shared/ipc';
 import { useAppActions, windowCommand } from '../../app/use-app-actions';
 import { useNavigation } from '../../app/navigation';
+import { useCheckForUpdates } from '../../lib/update-queries';
 import {
   useAuthStatus,
   useOpenLogs,
@@ -117,6 +119,7 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
   const signIn = useSignIn();
   const signOut = useSignOut();
   const openLogs = useOpenLogs();
+  const checkUpdates = useCheckForUpdates();
   const toast = useToast();
   // Menu items close on select, so a failure has to be reported somewhere that stays.
   const failed = (title: string) => (err: unknown) =>
@@ -263,6 +266,15 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
         {inShell && (
           <>
             <Separator />
+            <Item
+              icon={RefreshCw}
+              label="Check for updates"
+              onSelect={() => {
+                // The page shows the result; a failure lands there as a band.
+                navigate({ name: 'settings', section: 'updates' });
+                checkUpdates.mutate(undefined);
+              }}
+            />
             <Item
               icon={Info}
               label="About gitdesk"
