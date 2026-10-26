@@ -242,6 +242,7 @@ export function MoveSection({ repo }: { repo: RepositorySummary }) {
           <Button
             size="sm"
             variant="ghost"
+            pending={cancel.isPending}
             onClick={() => cancel.mutate(jobId)}
           >
             Cancel

@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ToastProvider, useToast } from '../components/ui/toast';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { keys, repoKeys, useSettings } from '../lib/queries';
+import { useUpdateSync } from '../lib/update-queries';
 import { NavigationProvider, useNavigation } from './navigation';
 import { useAppearance } from './use-appearance';
 import { WorkspaceUiProvider } from './workspace-ui';
@@ -39,6 +40,11 @@ function RepoSync() {
       }),
     [qc],
   );
+  return null;
+}
+
+function UpdateSync() {
+  useUpdateSync(useQueryClient());
   return null;
 }
 
@@ -103,6 +109,7 @@ export function Providers({ children }: { children: ReactNode }) {
     <QueryClientProvider client={client}>
       <AuthSync />
       <RepoSync />
+      <UpdateSync />
       <Appearance>
         <TooltipProvider delayDuration={300}>
           <ToastProvider>

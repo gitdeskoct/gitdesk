@@ -1,0 +1,98 @@
+# Installers, update metadata and fuses. `npm run build` fills .vite/ first; every package is
+# bundled there, so no node_modules ship. Releases are drafted by .github/workflows/release.yml.
+appId: io.github.shikki841.gitdesk
+productName: gitdesk
+copyright: Copyright © 2026 TELVIN TEUM
+directories:
+  output: dist
+  buildResources: build
+files:
+  - .vite/build/**
+  - .vite/renderer/**
+  - package.json
+asar: true
+npmRebuild: false
+# Tray icons, the full-size icon Linux packages and Nix use, and the logo's licence.
+extraResources:
+  - from: assets/tray
+    to: tray
+  - from: build/icon.png
+    to: icon.png
+  - from: assets/brand
+    to: licenses
+artifactName: gitdesk-${version}-${os}-${arch}.${ext}
+
+# The same fuses Forge set before: no ELECTRON_RUN_AS_NODE, NODE_OPTIONS or --inspect in a
+# packaged app, encrypted cookies, and only the integrity-checked app.asar is ever loaded.
+electronFuses:
+  runAsNode: false
+  enableCookieEncryption: true
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
+
+win:
+  target: nsis
+  executableName: gitdesk
+
+nsis:
+  oneClick: true
+  perMachine: false
+  # The updater runs the installer silently and reopens gitdesk itself.
+  runAfterFinish: true
+  deleteAppDataOnUninstall: false
+
+linux:
+  target:
+    - AppImage
+    - deb
+    - pacman
+    - tar.gz
+  executableName: gitdesk
+  category: Development
+  synopsis: Desktop Git client
+  maintainer: TELVIN TEUM <telvinteum@ubunifucollege.com>
+  vendor: TELVIN TEUM
+  desktop:
+    entry:
+      StartupWMClass: gitdesk
+
+# electron-builder's own defaults (app-builder-lib FpmTarget) plus Git, which gitdesk drives.
+# Setting `depends` replaces the defaults, so they are repeated here.
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+    - git
+pacman:
+  depends:
+    - c-ares
+    - ffmpeg
+    - gtk3
+    - http-parser
+    - libevent
+    - libvpx
+    - libxslt
+    - libxss
+    - minizip
+    - nss
+    - re2
+    - snappy
+    - libnotify
+    - libappindicator-gtk3
+    - git
+
+publish:
+  provider: github
+  owner: BotCoder254
+  repo: gitdesk-releases
+  releaseType: draft

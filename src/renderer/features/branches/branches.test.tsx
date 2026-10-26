@@ -21,6 +21,7 @@ import {
 } from '../../../shared/workspace';
 import { Providers } from '../../app/providers';
 import { AppShell } from '../shell/app-shell';
+import { idleUpdates } from '../../test/updates-stub';
 
 vi.mock('../repository/highlight', async (original) => ({
   ...(await original<typeof import('../repository/highlight')>()),
@@ -273,6 +274,7 @@ function install() {
     checkRemote: vi.fn(never),
   };
   window.desktop = {
+    updates: idleUpdates(),
     platform: 'win32',
     app: {
       getInfo: vi.fn(never),
@@ -627,9 +629,7 @@ describe('compare and merge', () => {
     await userEvent.click(
       await screen.findByRole('button', { name: 'Merge into main…' }),
     );
-    await userEvent.click(
-      screen.getByRole('button', { name: /^Merge$/ }),
-    );
+    await userEvent.click(screen.getByRole('button', { name: /^Merge$/ }));
     expect(await screen.findByText(/Git fast-forwarded/)).toBeInTheDocument();
   });
 });

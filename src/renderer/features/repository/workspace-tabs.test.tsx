@@ -18,6 +18,7 @@ import {
 } from '../../../shared/workspace';
 import { Providers } from '../../app/providers';
 import { AppShell } from '../shell/app-shell';
+import { idleUpdates } from '../../test/updates-stub';
 
 // Shiki is exercised in highlight.test.ts; here the diff renders as plain text.
 vi.mock('./highlight', async (original) => ({
@@ -200,6 +201,7 @@ function install(list: RepositorySummary[] = [repo()]) {
     log: vi.fn(),
   };
   window.desktop = {
+    updates: idleUpdates(),
     platform: 'win32',
     app: {
       getInfo: vi.fn(never),

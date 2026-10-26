@@ -1,0 +1,53 @@
+name: An update failed
+description: Checking for, downloading or installing a new version went wrong.
+labels: [updater, triage]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: Installed version
+      description: Settings › Updates shows it.
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: input
+    id: target
+    attributes:
+      label: Version it was updating to
+      placeholder: 1.1.0
+  - type: dropdown
+    id: installer
+    attributes:
+      label: Install type
+      options:
+        - Windows setup program (NSIS)
+        - AppImage
+        - Debian package (.deb)
+        - Arch package (pacman)
+        - Archive (.tar.gz) or Nix
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where it failed
+      options:
+        - Checking for updates
+        - Downloading
+        - Checking the download (SHA-512 or signature)
+        - Installing or restarting
+    validations:
+      required: true
+  - type: textarea
+    id: message
+    attributes:
+      label: What gitdesk said
+      description: The message in Settings › Updates, word for word.
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Settings › About › Open logs folder, then the lines from `main.log` around the failure.
+      render: text

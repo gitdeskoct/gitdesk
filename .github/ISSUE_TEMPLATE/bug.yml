@@ -1,0 +1,63 @@
+name: Something doesn't work
+description: A fault in gitdesk on Windows or Linux.
+labels: [bug, triage]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: gitdesk version
+      description: Settings › About › Version details has it.
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows
+        - Linux
+        - NixOS
+    validations:
+      required: true
+  - type: dropdown
+    id: installer
+    attributes:
+      label: How you installed it
+      options:
+        - Windows setup program (.exe)
+        - AppImage
+        - Debian package (.deb)
+        - Arch package (pacman)
+        - Archive (.tar.gz) or Nix
+        - Built from source
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened
+      description: Include the exact message gitdesk showed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open a repository
+        2. …
+    validations:
+      required: true
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Settings › About › Open logs folder, then `main.log`. Logs never contain tokens, but remove repository names or paths you don't want to share.
+      render: text

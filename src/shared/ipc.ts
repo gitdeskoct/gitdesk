@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { BranchesApi } from './branches';
 import type { SyncApi } from './sync';
+import type { UpdatesApi } from './updates';
 import type { PullsApi } from './pulls';
 import type { ReposApi } from './repos';
 import type { Settings, SettingsPatch } from './settings';
@@ -182,4 +183,5 @@ export interface DesktopApi {
   sync: SyncApi;
   source: SourceApi;
   branches: BranchesApi;
+  updates: UpdatesApi;
 }

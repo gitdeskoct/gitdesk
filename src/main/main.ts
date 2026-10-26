@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,10 +15,11 @@ import {
   shell,
 } from 'electron';
 import log from 'electron-log/main';
-import started from 'electron-squirrel-startup';
+import { autoUpdater } from 'electron-updater';
 import { accountSummarySchema, IPC, type AuthStatus } from '../shared/ipc';
-import { REPOS_IPC } from '../shared/repos';
+import { REPOS_IPC, type ProgressEvent } from '../shared/repos';
 import { SOURCE_IPC } from '../shared/source';
+import { UPDATES_IPC } from '../shared/updates';
 import { createAppService } from './app/app-service';
 import { createApiClient } from './auth/api-client';
 import { AuthService } from './auth/auth-service';
@@ -62,6 +64,11 @@ import { UserError } from './errors';
 import { createRepositoryService } from './repos/repository-service';
 import { createRepositoryStore } from './repos/repository-store';
 import { hardenApp } from './security';
+import { createTray } from './tray';
+import {
+  createUpdateService,
+  detectInstallKind,
+} from './updates/update-service';
 import { SettingsService } from './settings/settings-service';
 import { applyChromeColors, createMainWindow } from './window';
 
@@ -86,19 +93,19 @@ function focusMainWindow() {
 if (!app.isPackaged && process.env.GITDESK_USER_DATA)
   app.setPath('userData', process.env.GITDESK_USER_DATA);
 
-// Windows shows notifications only for an app with an AppUserModelID. The Squirrel installer sets
-// it for packaged builds; a development run uses the Electron binary's path.
-if (process.platform === 'win32' && !app.isPackaged)
-  app.setAppUserModelId(process.execPath);
+// Windows shows notifications only for an app with an AppUserModelID. Packaged builds use the
+// appId the NSIS installer registers (electron-builder.yml); a development run uses its binary.
+if (process.platform === 'win32')
+  app.setAppUserModelId(
+    app.isPackaged ? 'io.github.shikki841.gitdesk' : process.execPath,
+  );
 
 const formatBytes = (bytes: number) =>
   bytes >= 1024 ** 2
     ? `${(bytes / 1024 ** 2).toFixed(1)} MB`
     : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
-if (started) {
-  app.quit();
-} else if (!app.requestSingleInstanceLock()) {
+if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   // Sandbox every renderer, including any future window, not only the ones that opt in.
@@ -235,6 +242,17 @@ async function start() {
     },
   });
 
+  // Clones, pushes and moves report progress here; restarting to update waits for them.
+  // shortcut: a job that hasn't reported for 15 s counts as finished, since jobs send no end event.
+  const activeJobs = new Map<string, number>();
+  const sendProgress = (event: ProgressEvent) => {
+    if (event.percent >= 100) activeJobs.delete(event.jobId);
+    else activeJobs.set(event.jobId, Date.now());
+    mainWindow?.webContents.send(REPOS_IPC.progress, event);
+  };
+  const busy = () =>
+    [...activeJobs.values()].some((at) => Date.now() - at < 15_000);
+
   const store = createRepositoryStore(db);
   const journal = createJournal(db);
   remote = createRemoteService({
@@ -264,8 +282,7 @@ async function start() {
     settings: () => settings.get(),
     signedIn: () => auth.getStatus().status === 'authenticated',
     emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
-    emitProgress: (event) =>
-      mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    emitProgress: sendProgress,
     // A conflict gitdesk's own pull just stopped on is already on screen, so it isn't news.
     onProblem: (repo, kind) =>
       !(kind === 'conflict' && journal.pending(repo.id)?.kind === 'pull') &&
@@ -349,8 +366,7 @@ async function start() {
       },
       onGone: (id) => void repos.refresh(id).catch(() => undefined),
     }),
-    emitProgress: (event) =>
-      mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    emitProgress: sendProgress,
     log,
     desktop: {
       trashItem: (target) => shell.trashItem(target),
@@ -415,6 +431,8 @@ async function start() {
   });
   await gitInstall.restore();
   app.on('before-quit', () => {
+    updates.dispose();
+    tray?.destroy();
     move.dispose();
     ws.dispose();
     repos.dispose();
@@ -426,8 +444,7 @@ async function start() {
     workspace: ws,
     hostedUrl: (remoteId) => account.hostedUrl(remoteId),
     gitAuth: (remoteId, url, scope) => tokens.envFor(remoteId, url, scope),
-    emitProgress: (event) =>
-      mainWindow?.webContents.send(REPOS_IPC.progress, event),
+    emitProgress: sendProgress,
     addActivity: (id, type, detail) =>
       store.addActivity(id, type, detail, Date.now()),
     refresh: (id) => repos.refresh(id),
@@ -524,6 +541,50 @@ async function start() {
     refresh: (id) => repos.refresh(id),
   });
 
+  const installKind = detectInstallKind({
+    packaged: app.isPackaged,
+    platform: process.platform,
+    appImage: process.env.APPIMAGE,
+    resourcesPath: process.resourcesPath,
+  });
+  autoUpdater.logger = log;
+  // Set once the window exists; every status change also rebuilds the tray menu.
+  let tray: ReturnType<typeof createTray> | null = null;
+  const lastCheckSchema = z.object({ at: z.number(), ok: z.boolean() });
+  const updates = createUpdateService({
+    updater: ['nsis', 'appimage', 'deb', 'pacman'].includes(installKind)
+      ? autoUpdater
+      : null,
+    installKind,
+    currentVersion: app.getVersion(),
+    autoCheck: () => settings.get().autoCheckUpdates,
+    isOnline: () => net.isOnline(),
+    busy,
+    lastCheck: {
+      get: () => {
+        const parsed = lastCheckSchema.safeParse(
+          readState(db, 'updates.lastCheck'),
+        );
+        return parsed.success ? parsed.data : null;
+      },
+      set: (value) => writeState(db, 'updates.lastCheck', value),
+    },
+    emit: (status) => {
+      mainWindow?.webContents.send(UPDATES_IPC.changed, status);
+      tray?.update(status);
+    },
+    downloaded: (release) =>
+      notifier.notify('update', {
+        title: `gitdesk ${release.version} is ready to install`,
+        body: 'Restart gitdesk to install it. Your repositories stay as they are.',
+        tone: 'success',
+        repositoryId: null,
+      }),
+    // Only ever the fixed releases page main builds itself.
+    openExternal: (url) => shell.openExternal(url),
+    log,
+  });
+
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
     {
@@ -542,6 +603,7 @@ async function start() {
       source: localSource,
       remoteSource,
       branches,
+      updates,
     },
   );
 
@@ -553,6 +615,20 @@ async function start() {
     });
   };
   openWindow();
+  tray = createTray({
+    open: () => {
+      if (!mainWindow) openWindow();
+      focusMainWindow();
+    },
+    check: () => void updates.check(),
+    install: () => {
+      // While a clone or push runs, the window's Updates band asks what to do.
+      if (updates.install('now').phase === 'busy') focusMainWindow();
+    },
+    quit: () => app.quit(),
+  });
+  tray.update(updates.status());
+  updates.start();
   void auth.restore();
   repos.start();
 

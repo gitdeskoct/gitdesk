@@ -28,6 +28,7 @@ import {
 } from '../../shared/workspace';
 import { Providers } from '../app/providers';
 import { AppShell } from './shell/app-shell';
+import { idleUpdates } from '../test/updates-stub';
 
 // Radix menus measure and capture pointers; jsdom has none of that.
 beforeAll(() => {
@@ -156,6 +157,7 @@ function install(list: () => Promise<RepositorySummary[]>) {
     diff: vi.fn(never),
   };
   window.desktop = {
+    updates: idleUpdates(),
     platform: 'win32',
     app: {
       getInfo: vi.fn(never),

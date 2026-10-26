@@ -1,0 +1,134 @@
+{
+  "labels": {
+    "bug": {
+      "color": "c4322b",
+      "description": "Something doesn't work as it should"
+    },
+    "question": {
+      "color": "5b6270",
+      "description": "A question rather than a fault"
+    },
+    "windows": { "color": "2f5bea", "description": "Happens on Windows" },
+    "linux": { "color": "2f5bea", "description": "Happens on Linux or NixOS" },
+    "installer": {
+      "color": "a86a12",
+      "description": "Installing or packaging"
+    },
+    "updater": {
+      "color": "a86a12",
+      "description": "Checking for, downloading or installing updates"
+    },
+    "backend": {
+      "color": "1f8a4c",
+      "description": "The account Worker: sign-in, sync, hosting"
+    },
+    "security": {
+      "color": "c4322b",
+      "description": "Could expose data or credentials"
+    },
+    "needs-reproduction": {
+      "color": "dde1e7",
+      "description": "Steps to reproduce are missing"
+    },
+    "possible-duplicate": {
+      "color": "dde1e7",
+      "description": "Looks like an existing issue; a person decides"
+    },
+    "triage": {
+      "color": "eceef2",
+      "description": "Not looked at by a person yet"
+    }
+  },
+  "rules": [
+    {
+      "label": "windows",
+      "any": ["windows", "win10", "win11", "nsis", "setup.exe", "smartscreen"]
+    },
+    {
+      "label": "linux",
+      "any": [
+        "linux",
+        "ubuntu",
+        "debian",
+        "fedora",
+        "arch linux",
+        "appimage",
+        ".deb",
+        "pacman",
+        "nixos",
+        "wayland"
+      ]
+    },
+    {
+      "label": "installer",
+      "any": [
+        "installer",
+        "install fails",
+        "installation",
+        "nsis",
+        "appimage",
+        ".deb",
+        "pacman",
+        "tar.gz",
+        "nix package"
+      ]
+    },
+    {
+      "label": "updater",
+      "any": [
+        "update",
+        "updater",
+        "latest.yml",
+        "sha512",
+        "restart to update",
+        "download update"
+      ]
+    },
+    {
+      "label": "backend",
+      "any": [
+        "sign in",
+        "sign-in",
+        "signin",
+        "login",
+        "account",
+        "git hosting",
+        "worker",
+        "sync activity",
+        "401",
+        "403",
+        "500",
+        "502"
+      ]
+    },
+    {
+      "label": "security",
+      "any": [
+        "security",
+        "vulnerability",
+        "token",
+        "credential",
+        "password",
+        "xss",
+        "injection",
+        "cve"
+      ]
+    },
+    {
+      "label": "question",
+      "any": ["how do i", "how to", "is it possible", "question"]
+    }
+  ],
+  "assignees": {
+    "security": ["shikki841"],
+    "updater": ["shikki841"],
+    "installer": ["shikki841"],
+    "default": ["shikki841"]
+  },
+  "duplicates": {
+    "threshold": 0.6,
+    "closedWithinDays": 90,
+    "maxCandidates": 300,
+    "maxListed": 3
+  }
+}

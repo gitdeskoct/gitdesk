@@ -121,6 +121,8 @@ import type { AuthService } from '../auth/auth-service';
 import type { createGitIdentity } from '../git/git-identity';
 import type { SettingsService } from '../settings/settings-service';
 import type { Notifier } from '../notifier';
+import { installModeSchema, UPDATES_IPC as U } from '../../shared/updates';
+import type { UpdateService } from '../updates/update-service';
 import type { Handle } from './handle';
 
 const none = z.undefined();
@@ -160,6 +162,7 @@ export function registerIpc(
     source: SourceService;
     remoteSource: RemoteSource;
     branches: BranchService;
+    updates: UpdateService;
   },
 ): void {
   const {
@@ -178,7 +181,13 @@ export function registerIpc(
     source,
     remoteSource,
   } = services;
-  const { branches } = services;
+  const { branches, updates } = services;
+  // Updates: no input carries a URL or path; the release page is built in main.
+  handle(U.status, none, () => updates.status());
+  handle(U.check, none, () => updates.check());
+  handle(U.download, none, () => updates.download());
+  handle(U.install, installModeSchema, (mode) => updates.install(mode));
+  handle(U.openReleasePage, none, () => updates.openReleasePage());
   // Branches: names and refs are looked up in Git's own branch list in main before Git runs.
   handle(
     B.overview,

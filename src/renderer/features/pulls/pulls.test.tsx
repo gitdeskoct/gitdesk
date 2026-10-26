@@ -20,6 +20,7 @@ import { DEFAULT_SETTINGS, type Settings } from '../../../shared/settings';
 import { DEFAULT_REPO_PREFERENCES } from '../../../shared/workspace';
 import { Providers } from '../../app/providers';
 import { AppShell } from '../shell/app-shell';
+import { idleUpdates } from '../../test/updates-stub';
 
 vi.mock('../repository/highlight', async (original) => ({
   ...(await original<typeof import('../repository/highlight')>()),
@@ -210,6 +211,7 @@ function install(list: PullRequest[]) {
     stats: vi.fn(never),
   };
   window.desktop = {
+    updates: idleUpdates(),
     platform: 'win32',
     app: {
       getInfo: vi.fn(never),

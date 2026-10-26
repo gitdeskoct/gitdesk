@@ -27,6 +27,7 @@ import { DEFAULT_REPO_PREFERENCES } from '../../../shared/workspace';
 import { Providers } from '../../app/providers';
 import { AppShell } from '../shell/app-shell';
 import { SourceExplorer } from './source-explorer';
+import { idleUpdates } from '../../test/updates-stub';
 
 // Shiki is exercised in highlight.test.tsx; here code renders as plain text.
 vi.mock('../repository/highlight', async (original) => ({
@@ -176,6 +177,7 @@ function install() {
     onChanged: vi.fn(() => () => {}),
   };
   window.desktop = {
+    updates: idleUpdates(),
     platform: 'win32',
     app: {
       getInfo: vi.fn(never),
