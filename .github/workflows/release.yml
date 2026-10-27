@@ -55,11 +55,11 @@ jobs:
           EVENT: ${{ github.event_name }}
           DRY_RUN: ${{ inputs.dry_run }}
           REF: ${{ github.ref }}
-          API_ORIGIN: ${{ vars.API_ORIGIN }}
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
         run: |
           case "$API_ORIGIN" in
             https://*) ;;
-            *) echo "::error::Set the API_ORIGIN repository variable to the Worker's https origin."; exit 1 ;;
+            *) echo "::error::Set the API_ORIGIN repository secret to the Worker's https origin."; exit 1 ;;
           esac
           publish=true
           if [ "$EVENT" = workflow_dispatch ] && [ "$DRY_RUN" = true ]; then publish=false; fi
@@ -110,6 +110,8 @@ jobs:
     uses: ./.github/workflows/quality.yml
     with:
       ref: ${{ needs.plan.outputs.sha }}
+    secrets:
+      API_ORIGIN: ${{ secrets.API_ORIGIN }}
 
   tag:
     name: Commit and tag the version
@@ -187,7 +189,7 @@ jobs:
       - run: npm ci
       - name: Build the installer
         env:
-          VITE_API_ORIGIN: ${{ vars.API_ORIGIN }}
+          VITE_API_ORIGIN: ${{ secrets.API_ORIGIN }}
           WIN_SIGNING: ${{ vars.WIN_SIGNING }}
           WIN_PUBLISHER_NAME: ${{ vars.WIN_PUBLISHER_NAME }}
           WIN_CSC_LINK: ${{ vars.WIN_SIGNING == 'required' && secrets.WIN_CSC_LINK || '' }}
@@ -257,7 +259,7 @@ jobs:
       - run: npm ci
       - name: Build the packages
         env:
-          VITE_API_ORIGIN: ${{ vars.API_ORIGIN }}
+          VITE_API_ORIGIN: ${{ secrets.API_ORIGIN }}
         run: npm run dist -- --linux
       - name: Updater metadata is packaged
         run: test -f dist/linux-unpacked/resources/app-update.yml

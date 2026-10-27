@@ -10,6 +10,9 @@ on:
         description: The commit to check; empty checks the one that started the run.
         type: string
         default: ''
+    secrets:
+      API_ORIGIN:
+        required: false
 
 permissions:
   contents: read
@@ -86,6 +89,8 @@ jobs:
     name: Package smoke test (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      API_ORIGIN: ${{ secrets.API_ORIGIN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -96,13 +101,25 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      - name: Packaged smoke test unavailable without API_ORIGIN
+        if: ${{ env.API_ORIGIN == '' }}
+        run: echo "::notice::Skipping packaged-app smoke test because API_ORIGIN is unavailable to this workflow."
       # Packaged builds refuse a non-https API origin, so the smoke build needs a real one baked in.
-      - run: npm run dist:dir -- --linux
+      - if: ${{ env.API_ORIGIN != '' }}
+        run: |
+          case "$API_ORIGIN" in
+            https://*) ;;
+            *) echo "::error::Set the API_ORIGIN repository secret to the Worker's https origin."; exit 1 ;;
+          esac
+          npm run dist:dir -- --linux
         env:
-          VITE_API_ORIGIN: ${{ vars.API_ORIGIN || 'https://gitdesk-api-dev.telvinteum.workers.dev' }}
+          API_ORIGIN: ${{ secrets.API_ORIGIN }}
+          VITE_API_ORIGIN: ${{ secrets.API_ORIGIN }}
       - name: Updater metadata is packaged
+        if: ${{ env.API_ORIGIN != '' }}
         run: test -f dist/linux-unpacked/resources/app-update.yml
       - name: Launch the packaged app
+        if: ${{ env.API_ORIGIN != '' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
