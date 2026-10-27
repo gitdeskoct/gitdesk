@@ -120,10 +120,10 @@
     }
   ],
   "assignees": {
-    "security": ["shikki841"],
-    "updater": ["shikki841"],
-    "installer": ["shikki841"],
-    "default": ["shikki841"]
+    "security": ["BotCoder254"],
+    "updater": ["BotCoder254"],
+    "installer": ["BotCoder254"],
+    "default": ["BotCoder254"]
   },
   "duplicates": {
     "threshold": 0.6,
