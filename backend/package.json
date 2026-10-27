@@ -31,7 +31,7 @@
     "@cloudflare/vitest-plugin": "1.4.0",
     "@cloudflare/workers-types": "^5.20261019.1",
     "@eslint/js": "^10.0.1",
-    "@vitest/coverage-v8": "~4.1.12",
+    "@vitest/coverage-v8": "~5.0.5",
     "drizzle-kit": "^0.31.11",
     "eslint": "^10.13.0",
     "prettier": "^3.9.10",
