@@ -43,6 +43,8 @@ export function useAppearance(settings: Settings | undefined): void {
     root.fontSize = settings.fontSize;
     root.contentWidth = settings.contentWidth;
     root.motion = settings.motion;
+    root.contrast = settings.contrast;
+    root.underlineLinks = settings.underlineLinks ? 'on' : 'off';
     root.codeSize = String(settings.codeSize);
     root.codeLine = settings.codeLineHeight;
     root.codeTab = String(settings.codeTabWidth);

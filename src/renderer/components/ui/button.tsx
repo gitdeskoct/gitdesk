@@ -16,7 +16,8 @@ export const buttonVariants = cva(
         ghost: 'text-muted hover:bg-control hover:text-ink',
         danger:
           'bg-danger-soft text-danger hover:bg-danger hover:text-on-accent',
-        link: 'h-auto px-0 text-accent underline-offset-4 hover:underline',
+        // `link` is the hook for Settings › Appearance › Always underline links.
+        link: 'link h-auto px-0 text-accent underline-offset-4 hover:underline',
       },
       size: {
         sm: 'h-8 px-3',

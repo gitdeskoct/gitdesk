@@ -115,7 +115,7 @@ function Section({
     // min-w-0 and wrapping keep a narrow side column from being pushed wider than its track.
     <section aria-labelledby={id} className="min-w-0">
       <div className="mb-2 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <h2 id={id} className="text-[0.9375rem] font-semibold text-ink">
+        <h2 id={id} className="text-base font-semibold text-ink">
           {title}
         </h2>
         {meta && <span className="text-xs text-muted">{meta}</span>}
@@ -208,6 +208,7 @@ export function HomePage({ status }: { status: AuthStatus }) {
         eyebrow={formatDay(now)}
         title={firstName ? `Good to see you, ${firstName}` : 'Your workspace'}
         actions={actions}
+        size="large"
       >
         {repos.isPending
           ? 'Reading your repositories…'

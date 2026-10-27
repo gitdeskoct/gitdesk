@@ -46,6 +46,54 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     keywords: 'startup start launch boot',
   },
   {
+    id: 'start-page',
+    label: 'Open on start',
+    section: 'general',
+    keywords: 'startup launch first page home repositories last repository',
+  },
+  {
+    id: 'sidebar-recent',
+    label: 'Repositories in the sidebar',
+    section: 'general',
+    keywords: 'sidebar recent pinned navigation quick',
+  },
+  {
+    id: 'repositories-expand',
+    label: "Open every row's details",
+    section: 'general',
+    keywords: 'repositories list rows expand collapse details branch path',
+  },
+  {
+    id: 'repositories-stats',
+    label: 'Show statistics',
+    section: 'general',
+    keywords: 'repositories counts stats local remote linked',
+  },
+  {
+    id: 'repositories-sort',
+    label: 'Sort repositories by',
+    section: 'general',
+    keywords: 'repositories order sort name recent changes sync',
+  },
+  {
+    id: 'contrast',
+    label: 'Contrast',
+    section: 'appearance',
+    keywords: 'accessibility high contrast lines borders text readability',
+  },
+  {
+    id: 'underline-links',
+    label: 'Always underline links',
+    section: 'appearance',
+    keywords: 'accessibility links underline',
+  },
+  {
+    id: 'tooltip-delay',
+    label: 'Tooltips',
+    section: 'appearance',
+    keywords: 'tooltip delay hover hint instant',
+  },
+  {
     id: 'theme',
     label: 'Theme',
     section: 'appearance',
@@ -446,7 +494,8 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     id: 'shortcuts',
     label: 'Keyboard shortcuts',
     section: 'shortcuts',
-    keywords: 'keys hotkeys keyboard',
+    keywords:
+      'keys hotkeys keyboard push pull fetch clone new open repository tabs',
   },
   {
     id: 'session-storage',

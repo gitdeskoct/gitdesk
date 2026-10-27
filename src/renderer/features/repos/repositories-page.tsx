@@ -11,21 +11,31 @@ import {
   type SortingState,
 } from '@tanstack/react-table';
 import {
-  ArrowDown,
-  ArrowUp,
+  ChartColumn,
+  ChevronRight,
+  ChevronsDownUp,
+  ChevronsUpDown,
   CircleAlert,
   CircleCheck,
   Clock,
   CloudDownload,
+  Pin,
   Plus,
   RefreshCw,
   Search,
 } from 'lucide-react';
-import { useEffect, useMemo, useState, type KeyboardEvent } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useState,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import type {
   RemoteRepository,
   RepositorySummary,
 } from '../../../shared/repos';
+import type { Settings } from '../../../shared/settings';
 import {
   NoResultsArt,
   OfflineArt,
@@ -35,7 +45,7 @@ import {
 import { Button } from '../../components/ui/button';
 import { Checkbox } from '../../components/ui/checkbox';
 import { EmptyState } from '../../components/ui/empty-state';
-import { MiddleTruncate } from '../../components/ui/long-value';
+import { LongValue } from '../../components/ui/long-value';
 import { Pager, usePage } from '../../components/ui/pager';
 import { Segmented } from '../../components/ui/segmented';
 import { Spinner } from '../../components/ui/spinner';
@@ -56,6 +66,7 @@ import {
 } from '../../lib/repo-status';
 import {
   useAuthStatus,
+  useCopyRepositoryPath,
   usePinRepository,
   useRefreshRepositories,
   useRemoteList,
@@ -64,6 +75,7 @@ import {
   useRepositories,
   useSettings,
   useSignIn,
+  useUpdateSettings,
 } from '../../lib/queries';
 import {
   useNavigation,
@@ -224,168 +236,259 @@ function RemoteStatus({ remote }: { remote: RemoteRepository }) {
   );
 }
 
+// A repository row is its name; branch, state and path wait behind the disclosure until asked for.
+function Disclosure({
+  open,
+  controls,
+  name,
+  onToggle,
+}: {
+  open: boolean;
+  controls: string;
+  name: string;
+  onToggle: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-expanded={open}
+      aria-controls={controls}
+      aria-label={`${open ? 'Hide' : 'Show'} details for ${name}`}
+      onClick={onToggle}
+      className="grid size-7 place-items-center rounded-sm text-muted transition-colors hover:bg-control hover:text-ink"
+    >
+      <ChevronRight
+        aria-hidden
+        className={cn('size-4 transition-transform', open && 'rotate-90')}
+      />
+    </button>
+  );
+}
+
+// Label and value pairs under an open row, lined up with the name above them.
+function DetailList({ id, children }: { id: string; children: ReactNode }) {
+  return (
+    <dl
+      id={id}
+      className="grid grid-cols-[minmax(7rem,auto)_minmax(0,1fr)] gap-x-6 gap-y-2 pt-0.5 pr-3 pb-3.5 pl-[4.75rem] text-[0.8125rem] @min-[640px]:grid-cols-[minmax(7rem,auto)_minmax(0,1fr)_minmax(7rem,auto)_minmax(0,1fr)]"
+    >
+      {children}
+    </dl>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <>
+      <dt className="text-muted">{label}</dt>
+      <dd className="flex min-w-0 items-center gap-2 text-ink">{children}</dd>
+    </>
+  );
+}
+
+const rowGrid =
+  'grid grid-cols-[2rem_1.75rem_minmax(0,1fr)_auto_2.25rem] items-center gap-x-2 py-2 pr-1';
+
 function LocalRow({
   repo,
   remote,
   selected,
   onSelect,
+  open,
+  onToggle,
 }: {
   repo: RepositorySummary;
   remote: RemoteRepository | null;
   selected: boolean;
   onSelect: (selected: boolean) => void;
+  open: boolean;
+  onToggle: () => void;
 }) {
   const openRepo = useOpenRepo();
+  const copyPath = useCopyRepositoryPath();
   const [mode, setMode] = useState<ManageMode | null>(null);
   const { actions, busy } = useRepoActions(repo, setMode, remote);
   const missing = repo.availability !== 'available';
+  const details = `repo-details-${repo.id}`;
   return (
-    <>
+    <li
+      className={cn(
+        '@container border-b border-line transition-colors',
+        selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
+      )}
+    >
       <RepoContextMenu actions={actions} onOpen={() => openRepo(repo.id)}>
-        <tr
-          className={cn(
-            'border-b border-line transition-colors',
-            selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
-          )}
-        >
-          <td className="w-10 py-3 pl-3">
+        <div className={rowGrid}>
+          <span className="grid place-items-center">
             <Checkbox
               checked={selected}
               onCheckedChange={(next) => onSelect(next === true)}
               aria-label={`Select ${repo.name}`}
             />
-          </td>
-          <td className="w-[34%] max-w-0 py-3 pr-4">
-            <button
-              type="button"
-              onClick={() => openRepo(repo.id)}
-              className="block max-w-full rounded-sm text-left"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <span
-                  className={cn(
-                    'truncate text-sm font-semibold hover:underline',
-                    missing ? 'text-muted' : 'text-ink',
-                  )}
-                >
-                  {repo.name}
-                </span>
-                <RepoTags local remote={!!repo.remoteId} compact />
+          </span>
+          <Disclosure
+            open={open}
+            controls={details}
+            name={repo.name}
+            onToggle={onToggle}
+          />
+          <button
+            type="button"
+            onClick={() => openRepo(repo.id)}
+            className="block min-w-0 rounded-sm py-1 text-left"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span
+                className={cn(
+                  'truncate text-sm font-semibold hover:underline',
+                  missing ? 'text-muted' : 'text-ink',
+                )}
+              >
+                {repo.name}
               </span>
-              <MiddleTruncate
-                value={repo.displayPath}
-                className="font-mono text-xs text-muted"
-              />
-            </button>
-          </td>
-          <td className="max-w-0 py-3 pr-4">
-            <BranchLabel repo={repo} />
-          </td>
-          {busy ? (
-            <td colSpan={2} className="py-3 pr-4">
-              <span className="inline-flex items-center gap-1.5 text-[0.8125rem] text-muted">
-                <Spinner className="size-3.5" />
-                {busy}
-              </span>
-            </td>
-          ) : (
-            <>
-              <td className="py-3 pr-4">
-                <TreeChip repo={repo} />
-              </td>
-              <td className="py-3 pr-4">
-                <SyncChip repo={repo} />
-              </td>
-            </>
-          )}
-          <td className="py-3 pr-4 text-[0.8125rem] whitespace-nowrap text-muted">
-            {relativeTime(repo.lastOpenedAt ?? repo.addedAt)}
-          </td>
-          <td className="w-10 py-3 pr-2">
-            <RepoMenuButton name={repo.name} actions={actions} />
-          </td>
-        </tr>
-      </RepoContextMenu>
-      {mode && (
-        <tr>
-          <td colSpan={7} className="p-0">
-            <ManageBand
-              mode={mode}
-              repo={repo}
-              remote={remote}
-              onClose={() => setMode(null)}
-            />
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
-
-function RemoteRow({ remote }: { remote: RemoteRepository }) {
-  const { navigate } = useNavigation();
-  const [mode, setMode] = useState<ManageMode | null>(null);
-  const { actions, busy } = useRemoteActions(remote, setMode);
-  const open = () => navigate({ name: 'remote-repository', id: remote.id });
-  return (
-    <>
-      <RepoContextMenu actions={actions} onOpen={open}>
-        <tr className="border-b border-line transition-colors hover:bg-row-hover">
-          {/* Bulk actions act on registrations on this computer; there is none here. */}
-          <td className="w-10 py-3 pl-3" />
-          <td className="w-[34%] max-w-0 py-3 pr-4">
-            <button
-              type="button"
-              onClick={open}
-              className="block max-w-full rounded-sm text-left"
-            >
-              <span className="flex min-w-0 items-center gap-2">
-                <span className="truncate text-sm font-semibold text-ink hover:underline">
-                  {remote.name}
-                </span>
-                <RepoTags local={false} remote compact />
-              </span>
-              <span className="block truncate text-xs text-muted">
-                Not on this computer · Private
-              </span>
-            </button>
-          </td>
-          <td className="max-w-0 py-3 pr-4">
-            <span className="block truncate font-mono text-[0.78125rem] text-muted">
-              {remote.defaultBranch}
+              {repo.pinned && (
+                <Pin
+                  aria-label="Pinned"
+                  className="size-3.5 shrink-0 text-muted"
+                />
+              )}
+              <RepoTags local remote={!!repo.remoteId} compact />
             </span>
-          </td>
-          <td className="py-3 pr-4 text-[0.8125rem] text-muted">Not cloned</td>
-          <td className="py-3 pr-4">
+            {repo.description && (
+              <span className="mt-0.5 block truncate text-xs text-muted">
+                {repo.description}
+              </span>
+            )}
+          </button>
+          <span className="flex justify-end">
             {busy ? (
               <span className="inline-flex items-center gap-1.5 text-[0.8125rem] text-muted">
                 <Spinner className="size-3.5" />
                 {busy}
               </span>
             ) : (
-              <RemoteStatus remote={remote} />
+              // A broken folder or a conflict can't wait to be noticed, so it shows on a closed row.
+              isProblem(repo) && <TreeChip repo={repo} />
             )}
-          </td>
-          <td className="py-3 pr-4 text-[0.8125rem] whitespace-nowrap text-muted">
-            Updated {relativeTime(remote.updatedAt)}
-          </td>
-          <td className="w-10 py-3 pr-2">
-            <RepoMenuButton name={remote.name} actions={actions} />
-          </td>
-        </tr>
+          </span>
+          <RepoMenuButton name={repo.name} actions={actions} />
+        </div>
       </RepoContextMenu>
-      {mode && (
-        <tr>
-          <td colSpan={7} className="p-0">
-            <ManageBand
-              mode={mode}
-              remote={remote}
-              onClose={() => setMode(null)}
+      {open && (
+        <DetailList id={details}>
+          <Detail label="Branch">
+            <BranchLabel repo={repo} />
+          </Detail>
+          <Detail label="Working tree">
+            <TreeChip repo={repo} />
+          </Detail>
+          <Detail label="Sync">
+            {syncState(repo) === 'unknown' ? (
+              <span className="text-muted">Not checked yet</span>
+            ) : (
+              <SyncChip repo={repo} />
+            )}
+          </Detail>
+          <Detail label={repo.lastOpenedAt ? 'Last opened' : 'Added'}>
+            {relativeTime(repo.lastOpenedAt ?? repo.addedAt)}
+          </Detail>
+          <dt className="text-muted">Folder</dt>
+          <dd className="flex min-w-0 items-center font-mono text-xs text-ink @min-[640px]:col-span-3">
+            <LongValue
+              value={repo.displayPath}
+              label="path"
+              copy={() => copyPath.mutateAsync(repo.id)}
             />
-          </td>
-        </tr>
+          </dd>
+        </DetailList>
       )}
-    </>
+      {mode && (
+        <ManageBand
+          mode={mode}
+          repo={repo}
+          remote={remote}
+          onClose={() => setMode(null)}
+        />
+      )}
+    </li>
+  );
+}
+
+function RemoteRow({
+  remote,
+  open,
+  onToggle,
+}: {
+  remote: RemoteRepository;
+  open: boolean;
+  onToggle: () => void;
+}) {
+  const { navigate } = useNavigation();
+  const [mode, setMode] = useState<ManageMode | null>(null);
+  const { actions, busy } = useRemoteActions(remote, setMode);
+  const show = () => navigate({ name: 'remote-repository', id: remote.id });
+  const details = `repo-details-${remote.id}`;
+  return (
+    <li className="@container border-b border-line transition-colors hover:bg-row-hover">
+      <RepoContextMenu actions={actions} onOpen={show}>
+        <div className={rowGrid}>
+          {/* Bulk actions act on registrations on this computer; there is none here. */}
+          <span />
+          <Disclosure
+            open={open}
+            controls={details}
+            name={remote.name}
+            onToggle={onToggle}
+          />
+          <button
+            type="button"
+            onClick={show}
+            className="block min-w-0 rounded-sm py-1 text-left"
+          >
+            <span className="flex min-w-0 items-center gap-2">
+              <span className="truncate text-sm font-semibold text-ink hover:underline">
+                {remote.name}
+              </span>
+              <RepoTags local={false} remote compact />
+            </span>
+            {remote.description && (
+              <span className="mt-0.5 block truncate text-xs text-muted">
+                {remote.description}
+              </span>
+            )}
+          </button>
+          <span className="flex justify-end">
+            {busy ? (
+              <span className="inline-flex items-center gap-1.5 text-[0.8125rem] text-muted">
+                <Spinner className="size-3.5" />
+                {busy}
+              </span>
+            ) : (
+              remote.status !== 'ready' && <RemoteStatus remote={remote} />
+            )}
+          </span>
+          <RepoMenuButton name={remote.name} actions={actions} />
+        </div>
+      </RepoContextMenu>
+      {open && (
+        <DetailList id={details}>
+          <Detail label="Default branch">
+            <span className="truncate font-mono text-[0.78125rem]">
+              {remote.defaultBranch}
+            </span>
+          </Detail>
+          <Detail label="Storage">
+            <RemoteStatus remote={remote} />
+          </Detail>
+          <Detail label="On this computer">Not cloned</Detail>
+          <Detail label="Updated">{relativeTime(remote.updatedAt)}</Detail>
+          <Detail label="Visibility">Private to your account</Detail>
+        </DetailList>
+      )}
+      {mode && (
+        <ManageBand mode={mode} remote={remote} onClose={() => setMode(null)} />
+      )}
+    </li>
   );
 }
 
@@ -512,18 +615,35 @@ function BulkBar({
   );
 }
 
-function RepoTable({
+export const SORTS: {
+  value: Settings['repositoriesSort'];
+  label: string;
+}[] = [
+  { value: 'opened', label: 'Recent' },
+  { value: 'name', label: 'Name' },
+  { value: 'tree', label: 'Changes' },
+  { value: 'sync', label: 'Sync' },
+];
+
+// The centered layout: one list in the saved order. Each row opens its details by itself;
+// Expand all and Collapse all set every row, and a row toggled after that keeps its own state
+// until the filter changes.
+function RepoRows({
   items,
   resetKey,
+  sort,
+  expandByDefault,
 }: {
   items: RepoItem[];
   // Changes when the filter or search does.
   resetKey: string;
+  sort: Settings['repositoriesSort'];
+  expandByDefault: boolean;
 }) {
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: 'opened', desc: true },
-  ]);
+  const sorting: SortingState = [{ id: sort, desc: sort !== 'name' }];
   const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [allOpen, setAllOpen] = useState<boolean | null>(null);
+  const [toggled, setToggled] = useState<Set<string>>(() => new Set());
   const table = useTable(
     {
       features,
@@ -532,7 +652,6 @@ function RepoTable({
       getRowId: (item) => item.key,
       enableRowSelection: (row) => row.original.kind === 'local',
       state: { sorting, rowSelection },
-      onSortingChange: setSorting,
       onRowSelectionChange: setRowSelection,
       enableSortingRemoval: false,
     },
@@ -541,11 +660,22 @@ function RepoTable({
   const rows = table.getRowModel().rows;
   const paged = usePage(rows, PAGE_SIZE);
   const { setPage } = paged;
-  // A new filter starts on its first page, and rows it hides must not stay selected for a bulk action.
+  // A new filter starts on its first page with rows as the setting says, and rows it hides must
+  // not stay selected for a bulk action.
   useEffect(() => {
     setPage(1);
     setRowSelection({});
+    setToggled(new Set());
+    setAllOpen(null);
   }, [resetKey, setPage]);
+  const base = allOpen ?? expandByDefault;
+  const isOpen = (key: string) => (toggled.has(key) ? !base : base);
+  const toggle = (key: string) =>
+    setToggled((current) => {
+      const next = new Set(current);
+      if (!next.delete(key)) next.add(key);
+      return next;
+    });
   // Selection can span pages; "Select all shown" means the page on screen.
   const selected = rows
     .filter((row) => row.getIsSelected())
@@ -555,84 +685,61 @@ function RepoTable({
   const allShown =
     shown.length > 0 && shown.every((row) => row.getIsSelected());
   const someShown = shown.some((row) => row.getIsSelected());
+  const everyOpen = paged.items.every((row) => isOpen(row.id));
 
   return (
     <>
       {selected.length > 0 && (
         <BulkBar selected={selected} onDone={() => setRowSelection({})} />
       )}
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[760px] border-collapse text-sm">
-          <thead>
-            <tr className="border-b border-line">
-              <th scope="col" className="w-10 py-2.5 pl-3 text-left">
-                <Checkbox
-                  aria-label="Select all shown"
-                  aria-disabled={!shown.length || undefined}
-                  checked={
-                    allShown ? true : someShown ? 'indeterminate' : false
-                  }
-                  onCheckedChange={(next) =>
-                    shown.forEach((row) => row.toggleSelected(next === true))
-                  }
-                />
-              </th>
-              {table.getHeaderGroups()[0]!.headers.map((header) => {
-                const sorted = header.column.getIsSorted();
-                return (
-                  <th
-                    key={header.id}
-                    scope="col"
-                    aria-sort={
-                      sorted === 'asc'
-                        ? 'ascending'
-                        : sorted === 'desc'
-                          ? 'descending'
-                          : 'none'
-                    }
-                    className="py-2.5 pr-4 text-left text-xs font-medium whitespace-nowrap text-muted"
-                  >
-                    <button
-                      type="button"
-                      onClick={header.column.getToggleSortingHandler()}
-                      className={cn(
-                        'inline-flex items-center gap-1 rounded-sm hover:text-ink',
-                        sorted && 'text-ink',
-                      )}
-                    >
-                      <table.FlexRender header={header} />
-                      {sorted === 'asc' && (
-                        <ArrowUp aria-hidden className="size-3.5" />
-                      )}
-                      {sorted === 'desc' && (
-                        <ArrowDown aria-hidden className="size-3.5" />
-                      )}
-                    </button>
-                  </th>
-                );
-              })}
-              <th scope="col" className="w-10">
-                <span className="sr-only">Actions</span>
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {paged.items.map((row) =>
-              row.original.kind === 'local' ? (
-                <LocalRow
-                  key={row.id}
-                  repo={row.original.repo}
-                  remote={row.original.remote}
-                  selected={row.getIsSelected()}
-                  onSelect={(next) => row.toggleSelected(next)}
-                />
-              ) : (
-                <RemoteRow key={row.id} remote={row.original.remote} />
-              ),
-            )}
-          </tbody>
-        </table>
+      <div className="flex items-center gap-2 border-y border-line py-1.5 pr-1">
+        <span className="grid w-8 place-items-center">
+          <Checkbox
+            aria-label="Select all shown"
+            aria-disabled={!shown.length || undefined}
+            checked={allShown ? true : someShown ? 'indeterminate' : false}
+            onCheckedChange={(next) =>
+              shown.forEach((row) => row.toggleSelected(next === true))
+            }
+          />
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => {
+            setToggled(new Set());
+            setAllOpen(!everyOpen);
+          }}
+        >
+          {everyOpen ? <ChevronsDownUp /> : <ChevronsUpDown />}
+          {everyOpen ? 'Collapse all' : 'Expand all'}
+        </Button>
+        <span className="ml-auto text-xs text-muted">
+          {rows.length} {rows.length === 1 ? 'repository' : 'repositories'}
+        </span>
       </div>
+      <ul aria-label="Repositories">
+        {paged.items.map((row) =>
+          row.original.kind === 'local' ? (
+            <LocalRow
+              key={row.id}
+              repo={row.original.repo}
+              remote={row.original.remote}
+              selected={row.getIsSelected()}
+              onSelect={(next) => row.toggleSelected(next)}
+              open={isOpen(row.id)}
+              onToggle={() => toggle(row.id)}
+            />
+          ) : (
+            <RemoteRow
+              key={row.id}
+              remote={row.original.remote}
+              open={isOpen(row.id)}
+              onToggle={() => toggle(row.id)}
+            />
+          ),
+        )}
+      </ul>
       <Pager label="Repository pages" onPage={setPage} {...paged} />
     </>
   );
@@ -699,7 +806,7 @@ function RepoList({
               onDoubleClick={() => onOpen(item)}
               onKeyDown={(event) => event.key === 'Enter' && onOpen(item)}
               className={cn(
-                'grid min-h-14 cursor-default gap-1 border-b border-line py-2.5 pr-3 pl-3 outline-offset-[-2px] transition-colors',
+                'grid min-h-12 cursor-default content-center gap-1 border-b border-line py-2.5 pr-3 pl-3 outline-offset-[-2px] transition-colors',
                 selected ? 'bg-accent-soft' : 'hover:bg-row-hover',
               )}
             >
@@ -720,22 +827,18 @@ function RepoList({
                   compact
                 />
               </span>
-              <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1">
-                {item.kind === 'local' ? (
-                  <>
-                    <BranchLabel repo={item.repo} />
-                    <TreeChip repo={item.repo} />
-                    <SyncChip repo={item.repo} />
-                  </>
-                ) : (
-                  <>
-                    <span className="font-mono text-[0.78125rem] text-muted">
-                      {item.remote.defaultBranch}
-                    </span>
-                    <RemoteStatus remote={item.remote} />
-                  </>
-                )}
-              </span>
+              {/* The selected repository's details are beside the list; a row says only what can't wait. */}
+              {repo && isProblem(repo) ? (
+                <TreeChip repo={repo} />
+              ) : item.kind === 'remote' && item.remote.status !== 'ready' ? (
+                <RemoteStatus remote={item.remote} />
+              ) : (
+                (repo?.description ?? item.remote?.description) && (
+                  <span className="truncate text-xs text-muted">
+                    {repo?.description ?? item.remote?.description}
+                  </span>
+                )
+              )}
             </li>
           );
         })}
@@ -762,6 +865,7 @@ export function RepositoriesPage({
   const { data: auth } = useAuthStatus();
   const { data: settings } = useSettings();
   const signIn = useSignIn();
+  const update = useUpdateSettings();
   const signedIn = auth?.status === 'authenticated' && !settings?.localOnly;
   const overview = useRemoteOverview();
   const remoteList = useRemoteList('updated', signedIn);
@@ -802,6 +906,9 @@ export function RepositoriesPage({
     shown.find((item) => item.key === selectedKey) ?? shown[0] ?? null;
   const more = signedIn && remoteList.hasNextPage;
   const remoteStat = remoteContext(overview.data, overview.isError);
+  const linked = all.filter((repo) => repo.remoteId).length;
+  const showStats = settings?.repositoriesShowStats ?? false;
+  const sort = settings?.repositoriesSort ?? 'opened';
   const pickScope = (next: RepoScope) => {
     setScope(next);
     setSelectedKey(null);
@@ -968,7 +1075,14 @@ export function RepositoriesPage({
           </p>
         </>
       );
-    return <RepoTable items={shown} resetKey={resetKey} />;
+    return (
+      <RepoRows
+        items={shown}
+        resetKey={resetKey}
+        sort={sort}
+        expandByDefault={settings?.repositoriesExpandRows ?? false}
+      />
+    );
   };
 
   return (
@@ -985,45 +1099,99 @@ export function RepositoriesPage({
             Folders on this computer and repositories in your gitdesk account. A
             linked repository counts as both local and remote.
           </PageTitle>
-          <div
-            role="group"
-            aria-label="Show repositories"
-            className="mb-6 grid grid-cols-2 border-y border-line @min-[640px]:grid-cols-4 [&>button:nth-child(-n+2)]:border-b @min-[640px]:[&>button:nth-child(-n+2)]:border-b-0 [&>button:nth-child(3)]:border-l-0 [&>button:nth-child(3)]:pl-0 @min-[640px]:[&>button:nth-child(3)]:border-l @min-[640px]:[&>button:nth-child(3)]:pl-5"
-          >
-            <Stat
-              value={`${items.length}${more ? '+' : ''}`}
-              label="All"
-              context={
-                signedIn && remoteList.isPending
-                  ? 'Loading remote repositories…'
-                  : 'Each repository once'
-              }
-              pressed={scope === 'all'}
-              onSelect={() => pickScope('all')}
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <Segmented
+              label="Where"
+              value={scope}
+              onChange={pickScope}
+              options={[
+                {
+                  value: 'all',
+                  label: `All ${items.length}${more ? '+' : ''}`,
+                },
+                { value: 'local', label: `Local ${all.length}` },
+                {
+                  value: 'remote',
+                  label: remoteStat.muted
+                    ? 'Remote'
+                    : `Remote ${remoteStat.value}`,
+                },
+                { value: 'linked', label: `Linked ${linked}` },
+              ]}
             />
-            <Stat
-              value={String(all.length)}
-              label="Local"
-              context="Registered on this computer"
-              pressed={scope === 'local'}
-              onSelect={() => pickScope('local')}
-            />
-            <Stat
-              value={remoteStat.value}
-              label="Remote"
-              muted={remoteStat.muted}
-              context={remoteStat.context}
-              pressed={scope === 'remote'}
-              onSelect={() => pickScope('remote')}
-            />
-            <Stat
-              value={String(all.filter((repo) => repo.remoteId).length)}
-              label="Linked"
-              context="Local folder with a gitdesk remote"
-              pressed={scope === 'linked'}
-              onSelect={() => pickScope('linked')}
-            />
+            <span className="flex flex-wrap items-center gap-1">
+              {items.length > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  pending={refreshAll.isPending || remoteList.isRefetching}
+                  onClick={() => {
+                    refreshAll.mutate(null);
+                    if (signedIn) void remoteList.refetch();
+                  }}
+                >
+                  {!(refreshAll.isPending || remoteList.isRefetching) && (
+                    <RefreshCw />
+                  )}
+                  Refresh all
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                aria-expanded={showStats}
+                aria-controls="repo-stats"
+                onClick={() =>
+                  update.mutate({ repositoriesShowStats: !showStats })
+                }
+              >
+                <ChartColumn />
+                {showStats ? 'Hide statistics' : 'Show statistics'}
+              </Button>
+            </span>
           </div>
+          {showStats && (
+            <div
+              id="repo-stats"
+              role="group"
+              aria-label="Repository statistics"
+              className="mb-6 grid grid-cols-2 border-y border-line @min-[640px]:grid-cols-4 [&>button:nth-child(-n+2)]:border-b @min-[640px]:[&>button:nth-child(-n+2)]:border-b-0 [&>button:nth-child(3)]:border-l-0 [&>button:nth-child(3)]:pl-0 @min-[640px]:[&>button:nth-child(3)]:border-l @min-[640px]:[&>button:nth-child(3)]:pl-5"
+            >
+              <Stat
+                value={`${items.length}${more ? '+' : ''}`}
+                label="All"
+                context={
+                  signedIn && remoteList.isPending
+                    ? 'Loading remote repositories…'
+                    : 'Each repository once'
+                }
+                pressed={scope === 'all'}
+                onSelect={() => pickScope('all')}
+              />
+              <Stat
+                value={String(all.length)}
+                label="Local"
+                context="Registered on this computer"
+                pressed={scope === 'local'}
+                onSelect={() => pickScope('local')}
+              />
+              <Stat
+                value={remoteStat.value}
+                label="Remote"
+                muted={remoteStat.muted}
+                context={remoteStat.context}
+                pressed={scope === 'remote'}
+                onSelect={() => pickScope('remote')}
+              />
+              <Stat
+                value={String(linked)}
+                label="Linked"
+                context="Local folder with a gitdesk remote"
+                pressed={scope === 'linked'}
+                onSelect={() => pickScope('linked')}
+              />
+            </div>
+          )}
 
           {items.length > 0 && (
             <div className="mb-4 flex flex-wrap items-center gap-3">
@@ -1051,21 +1219,16 @@ export function RepositoriesPage({
                   { value: 'problems', label: `Problems ${counts.problems}` },
                 ]}
               />
-              <Button
-                variant="ghost"
-                size="sm"
-                className="ml-auto"
-                pending={refreshAll.isPending || remoteList.isRefetching}
-                onClick={() => {
-                  refreshAll.mutate(null);
-                  if (signedIn) void remoteList.refetch();
-                }}
-              >
-                {!(refreshAll.isPending || remoteList.isRefetching) && (
-                  <RefreshCw />
-                )}
-                Refresh all
-              </Button>
+              {!split && !narrowSplit && (
+                <Segmented
+                  label="Sort by"
+                  value={sort}
+                  onChange={(repositoriesSort) =>
+                    update.mutate({ repositoriesSort })
+                  }
+                  options={SORTS}
+                />
+              )}
             </div>
           )}
 

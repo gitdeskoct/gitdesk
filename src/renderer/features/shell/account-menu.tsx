@@ -1,5 +1,6 @@
 import { ChevronsUpDown, Laptop, Lock, LogOut, User } from 'lucide-react';
 import type { AccountSummary, AuthStatus } from '../../../shared/ipc';
+import { GoogleG } from '../../components/brand/google-g';
 import { Avatar } from '../../components/ui/avatar';
 import { Button } from '../../components/ui/button';
 import {
@@ -46,17 +47,19 @@ export function AccountMenu({
   const account = accountOf(status);
 
   if (!account) {
+    // Google's guidelines keep the "G" inside a button; collapsed, the tooltip carries the words.
     return (
       <div className="mt-1.5 border-t border-line pt-2.5">
-        <Tooltip label="Sign in" disabled={!collapsed}>
+        <Tooltip label="Sign in with Google" disabled={!collapsed}>
           <Button
             size={collapsed ? 'icon' : 'sm'}
             className={cn(!collapsed && 'w-full')}
             pending={signIn.isPending}
-            aria-label={collapsed ? 'Sign in' : undefined}
+            aria-label={collapsed ? 'Sign in with Google' : undefined}
             onClick={() => signIn.mutate()}
           >
-            {collapsed ? !signIn.isPending && <User /> : 'Sign in'}
+            {!signIn.isPending && <GoogleG className="size-4" />}
+            {!collapsed && 'Sign in with Google'}
           </Button>
         </Tooltip>
       </div>

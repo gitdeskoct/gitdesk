@@ -100,24 +100,52 @@ export function PageTitle({
   title,
   eyebrow,
   actions,
+  size = 'default',
   children,
 }: {
   title: string;
   eyebrow?: ReactNode;
   actions?: ReactNode;
+  /** Large is the welcome on Home: the one page that opens the app. */
+  size?: 'default' | 'large';
   children?: ReactNode;
 }) {
+  const large = size === 'large';
   return (
-    <div className="mb-7 flex flex-wrap items-end justify-between gap-x-6 gap-y-4">
+    <div
+      className={cn(
+        'flex flex-wrap items-end justify-between gap-x-6 gap-y-4',
+        large ? 'mb-9' : 'mb-7',
+      )}
+    >
       <div className="min-w-0">
         {eyebrow && (
-          <p className="mb-1.5 text-[0.8125rem] text-muted">{eyebrow}</p>
+          <p
+            className={cn(
+              'text-muted',
+              large ? 'mb-2 text-sm' : 'mb-1.5 text-[0.8125rem]',
+            )}
+          >
+            {eyebrow}
+          </p>
         )}
-        <h1 className="text-xl font-semibold tracking-[-0.02em] text-ink">
+        <h1
+          className={cn(
+            'font-semibold tracking-[-0.02em] text-ink',
+            large ? 'text-[2rem] leading-tight' : 'text-xl',
+          )}
+        >
           {title}
         </h1>
         {children && (
-          <p className="mt-1 text-sm leading-relaxed text-muted">{children}</p>
+          <p
+            className={cn(
+              'leading-relaxed text-muted',
+              large ? 'mt-2 text-[0.9375rem]' : 'mt-1 text-sm',
+            )}
+          >
+            {children}
+          </p>
         )}
       </div>
       {actions && <div className="flex flex-wrap gap-2">{actions}</div>}

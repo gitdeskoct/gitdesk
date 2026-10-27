@@ -49,6 +49,7 @@ import {
   useWatchRepository,
 } from '../../lib/queries';
 import { useWidth } from '../../lib/use-width';
+import { useShortcut } from '../../app/use-app-actions';
 import {
   useNavigation,
   type RepoTab,
@@ -190,11 +191,33 @@ function Details({
   remote: RemoteRepository | null;
 }) {
   const link = useLinkRemote();
+  const copyPath = useCopyRepositoryPath();
   const { data: auth } = useAuthStatus();
   const status = repo.status!;
   const commit = status.lastCommit;
   return (
     <dl className="grid grid-cols-[9rem_minmax(0,1fr)] gap-x-4 gap-y-2.5 border-t border-line py-3 text-sm">
+      <dt className="text-muted">Folder</dt>
+      <dd className="flex min-w-0 items-center font-mono text-[0.78125rem] text-ink">
+        <LongValue
+          value={repo.displayPath}
+          label="path"
+          copy={() => copyPath.mutateAsync(repo.id)}
+        />
+      </dd>
+      {repo.description && (
+        <>
+          <dt className="text-muted">Description</dt>
+          <dd className="min-w-0 text-ink">{repo.description}</dd>
+        </>
+      )}
+      <dt className="text-muted">Where</dt>
+      <dd className="flex min-w-0 items-center gap-2 text-ink">
+        <RepoTags local remote={!!repo.remoteId} />
+        {repo.remoteId
+          ? 'On this computer and in your account'
+          : 'On this computer only'}
+      </dd>
       <dt className="text-muted">Last commit</dt>
       <dd className="min-w-0 truncate text-ink">
         {commit ? (
@@ -211,12 +234,19 @@ function Details({
       <dt className="text-muted">Upstream</dt>
       <dd className="min-w-0 truncate text-ink">{upstreamText(repo)}</dd>
       <dt className="text-muted">Last fetch</dt>
-      <dd className="text-ink">
+      <dd className="flex flex-wrap items-center gap-x-3 gap-y-1 text-ink">
         {status.fetchedAt
           ? relativeTime(status.fetchedAt)
           : status.hasRemotes
             ? 'Not fetched yet'
             : 'No remote to fetch from'}
+        {status.fetchedAt && (
+          <StaleChip
+            repo={repo}
+            now={Date.now()}
+            label="Ahead and behind may be out of date"
+          />
+        )}
       </dd>
       <dt className="text-muted">Remote</dt>
       <dd className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-ink">
@@ -639,7 +669,9 @@ function FetchButton({ repo }: { repo: RepositorySummary }) {
       : names.includes('origin')
         ? 'origin'
         : names[0]) ?? null;
-  if (!repo.status?.hasRemotes || !remote) return null;
+  const usable = !!repo.status?.hasRemotes && !!remote;
+  useShortcut('fetch', () => remote && action.start(remote), usable);
+  if (!usable) return null;
   return action.running ? (
     <>
       <Button size="sm" pending>
@@ -655,7 +687,15 @@ function FetchButton({ repo }: { repo: RepositorySummary }) {
       </Button>
     </>
   ) : (
-    <Button size="sm" onClick={() => action.start(remote)}>
+    <Button
+      size="sm"
+      onClick={() => action.start(remote)}
+      title={
+        repo.status?.fetchedAt
+          ? `Fetched ${relativeTime(repo.status.fetchedAt)}`
+          : 'Not fetched yet'
+      }
+    >
       <CloudDownload />
       Fetch {remote}
     </Button>
@@ -666,7 +706,9 @@ function FetchButton({ repo }: { repo: RepositorySummary }) {
 function PushButton({ repo }: { repo: RepositorySummary }) {
   const action = usePushAction(repo.id);
   const status = repo.status;
-  if (!status?.hasRemotes || !status.branch) return null;
+  const usable = !!status?.hasRemotes && !!status.branch;
+  useShortcut('push', action.start, usable);
+  if (!status || !usable) return null;
   const ahead = status.upstream ? (status.ahead ?? 0) : null;
   if (action.running)
     return (
@@ -707,18 +749,21 @@ function PullButton({ repo }: { repo: RepositorySummary }) {
   const { data: settings } = useSettings();
   const { navigate } = useNavigation();
   const status = repo.status;
-  if (!status?.upstream || !status.behind || status.operation) return null;
+  // Diverged histories need a choice of method, which the Sync tab asks for.
+  const pull = () =>
+    !action.running &&
+    (status?.ahead
+      ? navigate({ name: 'repository', id: repo.id, tab: 'sync' })
+      : action.start(settings?.pullStrategy ?? 'ff-only'));
+  const usable = !!status?.upstream && !!status.behind && !status.operation;
+  useShortcut('pull', pull, usable);
+  if (!status || !usable) return null;
   return (
     <Button
       size="sm"
       pending={action.running}
       title={`${status.behind} ${status.behind === 1 ? 'commit' : 'commits'} to pull`}
-      onClick={() =>
-        !action.running &&
-        (status.ahead
-          ? navigate({ name: 'repository', id: repo.id, tab: 'sync' })
-          : action.start(settings?.pullStrategy ?? 'ff-only'))
-      }
+      onClick={pull}
     >
       {!action.running && <ArrowDownToLine />}
       Pull {status.behind}
@@ -753,7 +798,6 @@ function RepositoryView({
   const refresh = useRefreshRepositories();
   const reveal = useRevealRepository();
   const locate = useLocateRepository();
-  const copyPath = useCopyRepositoryPath();
   const remoteQuery = useRemoteRepository(
     repo.remoteId ?? '',
     !!repo.remoteId && auth?.status === 'authenticated',
@@ -787,6 +831,15 @@ function RepositoryView({
   };
   const { actions, busy } = useRepoActions(repo, openMode, remote);
   const [measure, width] = useWidth();
+  useShortcut('repoTab', (event) => {
+    const next = TABS[Number(event.key) - 1];
+    if (next) navigate({ name: 'repository', id: repo.id, tab: next.value });
+  });
+  useShortcut(
+    'reveal',
+    () => reveal.mutate(repo.id),
+    repo.availability === 'available',
+  );
   const gone = () => navigate({ name: 'repositories' });
 
   const present = repo.availability === 'available';
@@ -819,7 +872,11 @@ function RepositoryView({
             {!checking && <RefreshCw />}
             Refresh
           </Button>
-          <OpenInEditorButton repoId={repo.id} path={null} />
+          <OpenInEditorButton
+            repoId={repo.id}
+            path={null}
+            shortcut="openEditor"
+          />
           <Button
             size="sm"
             pending={reveal.isPending}
@@ -978,50 +1035,24 @@ function RepositoryView({
     <Page crumbs={crumbs} actions={header} fill>
       <div ref={measure} className="flex min-h-0 flex-1 flex-col">
         <div className={cn('flex-none pt-3', column)}>
-          {/* One row: identity on the left, branch and sync on the right; it wraps on narrow windows. */}
+          {/* Four details: the name, the branch, the working tree and sync. Path, description and
+              fetch times are on Overview; the actions sit on the right and wrap on narrow windows. */}
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-            <div className="flex min-w-0 flex-[1_1_22rem] items-baseline gap-2.5">
-              <h1 className="shrink-0 truncate text-[1.0625rem] font-semibold tracking-[-0.015em] text-ink">
-                {repo.name}
-              </h1>
-              <RepoTags local remote={!!repo.remoteId} />
-              <span className="flex min-w-0 items-center gap-1 text-xs text-muted">
-                {repo.description && (
-                  <span className="max-w-[40%] shrink-0 truncate">
-                    {repo.description} ·
-                  </span>
-                )}
-                <LongValue
-                  value={repo.displayPath}
-                  label="path"
-                  copy={() => copyPath.mutateAsync(repo.id)}
-                />
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
-              <BranchPicker
-                repo={repo}
-                onOutcome={(next) => setOutcome(keepNotice(next))}
-              />
-              <TreeChip repo={repo} />
-              <SyncChip repo={repo} />
-              {status?.fetchedAt && (
-                <StaleChip
-                  repo={repo}
-                  now={Date.now()}
-                  label={`Checked ${relativeTime(status.fetchedAt)}`}
-                />
+            <h1 className="min-w-0 shrink truncate text-[1.0625rem] font-semibold tracking-[-0.015em] text-ink">
+              {repo.name}
+            </h1>
+            <BranchPicker
+              repo={repo}
+              onOutcome={(next) => setOutcome(keepNotice(next))}
+            />
+            <TreeChip repo={repo} />
+            <SyncChip repo={repo} />
+            <div className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              {busy && (
+                <span className="text-xs whitespace-nowrap text-muted">
+                  {busy}
+                </span>
               )}
-              <span className="text-xs whitespace-nowrap text-muted">
-                {busy ??
-                  (status?.fetchedAt
-                    ? `Fetched ${relativeTime(status.fetchedAt)}`
-                    : status?.hasRemotes
-                      ? 'Not fetched yet'
-                      : repo.statusAt
-                        ? `Status from ${relativeTime(repo.statusAt)}`
-                        : '')}
-              </span>
               <FetchButton repo={repo} />
               <PullButton repo={repo} />
               <PushButton repo={repo} />

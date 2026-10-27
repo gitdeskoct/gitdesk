@@ -2,6 +2,7 @@ import * as RadioGroup from '@radix-ui/react-radio-group';
 import type { Settings } from '../../../shared/settings';
 import { Segmented } from '../../components/ui/segmented';
 import { SettingGroup, SettingRow } from '../../components/ui/setting-row';
+import { Switch } from '../../components/ui/switch';
 import { Check, Minus, Plus } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/cn';
@@ -197,6 +198,49 @@ export function AppearanceSection() {
               </RadioGroup.Item>
             ))}
           </RadioGroup.Root>
+        </SettingRow>
+        <SettingRow
+          id="contrast"
+          label="Contrast"
+          description="More darkens dividers and secondary text in light mode and brightens them in dark mode. The accent stays as it is."
+        >
+          <Segmented
+            label="Contrast"
+            value={settings.contrast}
+            onChange={(contrast) => update.mutate({ contrast })}
+            options={[
+              { value: 'standard', label: 'Standard' },
+              { value: 'more', label: 'More' },
+            ]}
+          />
+        </SettingRow>
+        <SettingRow
+          id="underline-links"
+          label="Always underline links"
+          description="Off underlines a link only under the pointer."
+        >
+          <Switch
+            aria-label="Always underline links"
+            checked={settings.underlineLinks}
+            onCheckedChange={(underlineLinks) =>
+              update.mutate({ underlineLinks })
+            }
+          />
+        </SettingRow>
+        <SettingRow
+          id="tooltip-delay"
+          label="Tooltips"
+          description="How soon names appear over icon buttons and the collapsed sidebar."
+        >
+          <Segmented
+            label="Tooltips"
+            value={settings.tooltipDelay}
+            onChange={(tooltipDelay) => update.mutate({ tooltipDelay })}
+            options={[
+              { value: 'standard', label: 'After a moment' },
+              { value: 'instant', label: 'Right away' },
+            ]}
+          />
         </SettingRow>
         <SettingRow
           id="text-size"

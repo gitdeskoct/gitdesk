@@ -16,6 +16,7 @@ import vscodeLogo from '../../assets/editors/vscode.svg';
 import vscodiumLogo from '../../assets/editors/vscodium.svg';
 import webstormLogo from '../../assets/editors/webstorm.svg';
 import zedLogo from '../../assets/editors/zed.svg';
+import { useShortcut } from '../../app/use-app-actions';
 import { Button } from '../../components/ui/button';
 import { cn } from '../../lib/cn';
 import { useToast } from '../../components/ui/toast';
@@ -98,6 +99,7 @@ export function OpenInEditorButton({
   line = null,
   size = 'sm',
   variant = 'secondary',
+  shortcut,
   ...rest
 }: {
   repoId: string;
@@ -105,33 +107,36 @@ export function OpenInEditorButton({
   line?: number | null;
   size?: 'sm' | 'md';
   variant?: 'secondary' | 'ghost';
+  // Only the repository header's button answers the key, so one press opens one editor.
+  shortcut?: 'openEditor';
   // Toolbar.Button asChild hands its focus and key handling through here.
 } & Omit<ComponentProps<'button'>, 'onClick' | 'children'>) {
   const open = useOpenInEditor(repoId);
   const toast = useToast();
   const editor = useEditorName(repoId);
+  const run = () =>
+    open.mutate(
+      { path, line },
+      {
+        onError: (err) =>
+          toast({
+            tone: 'danger',
+            title: "Couldn't open it",
+            description: ipcErrorMessage(
+              err,
+              'Try another editor in Settings, Code editor.',
+            ),
+          }),
+      },
+    );
+  useShortcut('openEditor', run, shortcut === 'openEditor');
   return (
     <Button
       {...rest}
       size={size}
       variant={variant}
       pending={open.isPending}
-      onClick={() =>
-        open.mutate(
-          { path, line },
-          {
-            onError: (err) =>
-              toast({
-                tone: 'danger',
-                title: "Couldn't open it",
-                description: ipcErrorMessage(
-                  err,
-                  'Try another editor in Settings, Code editor.',
-                ),
-              }),
-          },
-        )
-      }
+      onClick={run}
     >
       {!open.isPending &&
         (hasEditorLogo(editor.id, editor.icon) ? (

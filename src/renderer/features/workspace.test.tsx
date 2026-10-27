@@ -233,7 +233,9 @@ describe('workspace', () => {
     await userEvent.click(
       await screen.findByRole('button', { name: 'Repositories' }),
     );
-    expect(await screen.findByRole('table')).toBeInTheDocument();
+    expect(
+      await screen.findByRole('list', { name: 'Repositories' }),
+    ).toBeInTheDocument();
   });
 
   it('shows a load error as an error, never as the first-run screen', async () => {
@@ -267,9 +269,9 @@ describe('workspace', () => {
     await userEvent.click(
       await screen.findByRole('button', { name: /with changes/i }),
     );
-    const table = await screen.findByRole('table');
-    expect(within(table).getByText('desktop-git')).toBeInTheDocument();
-    expect(within(table).queryByText('clean-one')).not.toBeInTheDocument();
+    const list = await screen.findByRole('list', { name: 'Repositories' });
+    expect(within(list).getByText('desktop-git')).toBeInTheDocument();
+    expect(within(list).queryByText('clean-one')).not.toBeInTheDocument();
     expect(screen.getByRole('radio', { name: /changed 1/i })).toBeChecked();
   });
 
@@ -427,13 +429,14 @@ function installManaged() {
 const openRepositories = async () =>
   userEvent.click(await screen.findByRole('button', { name: 'Repositories' }));
 
+// Each row's disclosure names its repository, whatever else the row shows.
 const rowNames = () =>
-  within(screen.getByRole('table'))
-    .getAllByRole('row')
-    .slice(1)
-    .map(
-      (row) =>
-        row.querySelector('td:nth-child(2) button > span > span')?.textContent,
+  within(screen.getByRole('list', { name: 'Repositories' }))
+    .getAllByRole('button', { name: /^(Show|Hide) details for / })
+    .map((button) =>
+      button
+        .getAttribute('aria-label')!
+        .replace(/^(Show|Hide) details for /, ''),
     );
 
 describe('repository management', () => {
@@ -446,8 +449,22 @@ describe('repository management', () => {
   it('counts local, remote and linked repositories as overlapping sets and filters by them', async () => {
     renderApp();
     await openRepositories();
+    const where = await screen.findByRole('radiogroup', { name: 'Where' });
+    expect(
+      await within(where).findByRole('radio', { name: 'All 3' }),
+    ).toBeChecked();
+    expect(
+      within(where).getByRole('radio', { name: 'Remote 2' }),
+    ).toBeInTheDocument();
+    // The statistics strip waits until asked for, then filters the same way.
+    expect(
+      screen.queryByRole('group', { name: 'Repository statistics' }),
+    ).toBeNull();
+    await userEvent.click(
+      screen.getByRole('button', { name: 'Show statistics' }),
+    );
     const strip = await screen.findByRole('group', {
-      name: 'Show repositories',
+      name: 'Repository statistics',
     });
     expect(
       await within(strip).findByRole('button', { name: /^3\s*All/ }),
@@ -474,6 +491,33 @@ describe('repository management', () => {
       within(strip).getByRole('button', { name: /^1\s*Linked/ }),
     );
     expect(rowNames()).toEqual(['linked-api']);
+  });
+
+  it('lists names only until a row, or every row, opens its details', async () => {
+    renderApp();
+    await openRepositories();
+    const list = await screen.findByRole('list', { name: 'Repositories' });
+    await within(list).findByText('local-only');
+    expect(within(list).queryByText('Working tree')).toBeNull();
+
+    const disclosure = within(list).getByRole('button', {
+      name: 'Show details for local-only',
+    });
+    await userEvent.click(disclosure);
+    expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    const details = document.getElementById(
+      disclosure.getAttribute('aria-controls')!,
+    )!;
+    expect(within(details).getByText('Working tree')).toBeInTheDocument();
+    expect(within(details).getByText('Folder')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole('button', { name: 'Expand all' }));
+    for (const button of within(list).getAllByRole('button', {
+      name: /^Hide details for /,
+    }))
+      expect(button).toHaveAttribute('aria-expanded', 'true');
+    await userEvent.click(screen.getByRole('button', { name: 'Collapse all' }));
+    expect(within(list).queryByText('Working tree')).toBeNull();
   });
 
   it('offers only the actions a remote-only repository can take', async () => {
@@ -643,9 +687,7 @@ describe('repository management', () => {
       name: 'Repository pages',
     });
     expect(within(pager).getByText('1–20 of 25')).toBeInTheDocument();
-    expect(within(screen.getByRole('table')).getAllByRole('row')).toHaveLength(
-      21,
-    );
+    expect(rowNames()).toHaveLength(20);
 
     await userEvent.click(
       screen.getByRole('checkbox', { name: 'Select all shown' }),

@@ -2,17 +2,27 @@ import { motion } from 'framer-motion';
 import {
   CircleDot,
   Folder,
+  FolderGit2,
+  FolderX,
   GitPullRequest,
   House,
+  Pin,
   RefreshCw,
   Settings,
   type LucideIcon,
 } from 'lucide-react';
+import { useMemo } from 'react';
 import type { AuthStatus } from '../../../shared/ipc';
 import { Tooltip } from '../../components/ui/tooltip';
 import { cn } from '../../lib/cn';
-import { useMotionAllowed } from '../../lib/queries';
+import {
+  useMotionAllowed,
+  useRepositories,
+  useSettings,
+} from '../../lib/queries';
+import { byRecent, changeCount } from '../../lib/repo-status';
 import { useNavigation, type Route } from '../../app/navigation';
+import { useOpenRepo } from '../repos/repo-row';
 import { AccountMenu } from './account-menu';
 
 type Item = {
@@ -69,6 +79,81 @@ export function NavItem({
   );
 }
 
+// Pinned first, then the most recently opened: the repositories you'd otherwise reach through
+// Repositories. The count is Git's own, from the last status check; nothing is shown before one.
+function RecentRepositories() {
+  const { route } = useNavigation();
+  const openRepo = useOpenRepo();
+  const { data: settings } = useSettings();
+  const repos = useRepositories();
+  const limit = settings?.sidebarRecent ?? 5;
+  const list = useMemo(
+    () =>
+      [...(repos.data ?? [])]
+        .sort(byRecent)
+        .sort((a, b) => Number(b.pinned) - Number(a.pinned))
+        .slice(0, limit),
+    [repos.data, limit],
+  );
+  if (!list.length) return <div className="flex-1" />;
+  const pinned = list.some((repo) => repo.pinned);
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div
+        id="sidebar-recent"
+        className="px-2.5 pt-3.5 pb-1 text-xs font-medium text-muted"
+      >
+        {pinned ? 'Pinned and recent' : 'Recent'}
+      </div>
+      <ul
+        aria-labelledby="sidebar-recent"
+        className="-mx-1 grid min-h-0 content-start gap-0.5 overflow-y-auto px-1 pb-2"
+      >
+        {list.map((repo) => {
+          const changes = changeCount(repo.status);
+          const missing = repo.availability !== 'available';
+          const Icon = missing ? FolderX : repo.pinned ? Pin : FolderGit2;
+          const active = route.name === 'repository' && route.id === repo.id;
+          return (
+            <li key={repo.id}>
+              <button
+                type="button"
+                onClick={() => openRepo(repo.id)}
+                aria-current={active ? 'page' : undefined}
+                title={repo.name}
+                className={cn(
+                  'flex h-8 w-full items-center gap-2.5 rounded-sm px-2.5 text-[0.84375rem] text-muted transition-colors hover:bg-hover hover:text-ink',
+                  active && 'bg-raised font-medium text-ink hover:bg-raised',
+                )}
+              >
+                <Icon
+                  aria-hidden
+                  className={cn(
+                    'size-4 shrink-0',
+                    missing && 'text-danger',
+                    active && !missing && 'text-accent',
+                  )}
+                />
+                <span className="truncate">{repo.name}</span>
+                {missing ? (
+                  <span className="sr-only">, folder missing</span>
+                ) : (
+                  changes > 0 && (
+                    <span className="ml-auto text-xs text-muted tabular-nums">
+                      {changes}
+                      <span className="sr-only"> changed</span>
+                    </span>
+                  )
+                )}
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 export function Sidebar({
   status,
   collapsed,
@@ -121,7 +206,7 @@ export function Sidebar({
           onSelect={() => navigate({ name: item.route } as Route)}
         />
       ))}
-      <div className="flex-1" />
+      {collapsed ? <div className="flex-1" /> : <RecentRepositories />}
       <NavItem
         label="Settings"
         icon={Settings}
