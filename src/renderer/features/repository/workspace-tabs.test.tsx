@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
   afterEach,
@@ -729,9 +729,8 @@ describe('changes', () => {
       screen.getByRole('button', { name: /Commit 1 file/ }),
     );
     expect(workspace.commit).not.toHaveBeenCalled();
-    expect(
-      await screen.findByRole('textbox', { name: /Summary/ }),
-    ).toHaveFocus();
+    const summary = await screen.findByRole('textbox', { name: /Summary/ });
+    await waitFor(() => expect(summary).toHaveFocus());
     localStorage.removeItem('gitdesk.commit-form-open');
   });
 });
