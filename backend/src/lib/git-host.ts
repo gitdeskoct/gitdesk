@@ -81,7 +81,9 @@ export function artifactsHost(artifacts: Artifacts): GitHost {
     },
     tip(name, ref) {
       // log() follows first parents from the ref and returns nothing for a ref it can't resolve.
-      return withRepo(artifacts, name, async (repo) => (await repo.log({ ref, limit: 1 }))[0]?.hash ?? null);
+      // It resolves short branch names only: "refs/heads/main" finds nothing (checked 27 Oct 2026).
+      const branch = ref.startsWith('refs/heads/') ? ref.slice('refs/heads/'.length) : ref;
+      return withRepo(artifacts, name, async (repo) => (await repo.log({ ref: branch, limit: 1 }))[0]?.hash ?? null);
     },
     revokeAll(name) {
       return withRepo(artifacts, name, async (repo) => {
@@ -189,8 +191,8 @@ const isLoopback = (url: string): boolean => {
   }
 };
 
-type HostingEnv = CloudflareBindings & {
-  // Bound only once the account is on Workers Paid (see wrangler.jsonc), so it may be absent.
+type HostingEnv = Omit<CloudflareBindings, 'ARTIFACTS'> & {
+  // Bound in both deployed environments (Workers Paid only); absent where wrangler.jsonc omits it.
   ARTIFACTS?: Artifacts;
   // .dev.vars only, for GIT_HOSTING=local.
   LOCAL_GIT_HOST?: string;

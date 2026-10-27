@@ -255,6 +255,24 @@ describe('artifacts host', () => {
     expect(assertRemote(`${REMOTE}r1.git`)).toBe(`${REMOTE}r1.git`);
   });
 
+  it('asks Artifacts for a branch tip by its short name', async () => {
+    const asked: (string | undefined)[] = [];
+    const { host, disposed } = binding({
+      get: async (name: string) => ({
+        // Like the real service: a short name resolves, refs/heads/... finds nothing.
+        log: async ({ ref }: { ref?: string }) => {
+          asked.push(ref);
+          return ref === 'main' ? [{ hash: 'a'.repeat(40) }] : [];
+        },
+        [Symbol.dispose]: () => disposed.push(name),
+      }),
+    });
+    expect(await host.tip('r1', 'refs/heads/main')).toBe('a'.repeat(40));
+    expect(await host.tip('r1', 'refs/heads/gone')).toBeNull();
+    expect(asked).toEqual(['main', 'gone']);
+    expect(disposed).toEqual(['r1', 'r1']);
+  });
+
   it('mints tokens and revokes them, releasing each handle', async () => {
     const { host, disposed } = binding();
     const token = await host.token('r1', 'read', 900);
@@ -277,7 +295,7 @@ describe('choosing the git host', () => {
 
   it('stays off without a setting, and without the Artifacts binding', () => {
     expect(gitHostFor({ ...env, GIT_HOSTING: 'off' })).toBeNull();
-    expect(gitHostFor({ ...env, GIT_HOSTING: 'artifacts' })).toBeNull();
+    expect(gitHostFor({ ...env, GIT_HOSTING: 'artifacts', ARTIFACTS: undefined })).toBeNull();
   });
 
   it('reads tree entries and blobs from the local host in the same shape as Artifacts', async () => {
