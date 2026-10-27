@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "wrangler dev --local",
+    "dev": "wrangler dev --local --var GIT_HOSTING:off",
     "dev:remote": "wrangler dev --var GIT_HOSTING:artifacts",
     "dev:hosted": "node scripts/dev-hosted.mjs",
     "git-host:local": "node scripts/local-git-host.mjs .wrangler/local-git-host",
