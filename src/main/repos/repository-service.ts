@@ -809,10 +809,14 @@ export function createRepositoryService(deps: {
         );
       const target = path.resolve(row.rootPath);
       const key = pathKey(target);
-      const guarded = deps.desktop
-        .protectedPaths()
-        .map((p) => path.resolve(p))
-        .some((p) => pathKey(p) === key || isInside(p, target));
+      const protectedPaths = await Promise.all(
+        deps.desktop
+          .protectedPaths()
+          .map((p) => canonicalPath(p).catch(() => path.resolve(p))),
+      );
+      const guarded = protectedPaths.some(
+        (p) => pathKey(p) === key || isInside(p, target),
+      );
       if (path.parse(target).root === target || guarded)
         throw new RepoError(
           "gitdesk won't move that folder to the trash. Remove it from gitdesk instead.",

@@ -216,7 +216,7 @@ function buildRows(
       return;
     }
     // Side by side: removed lines pair with the added lines that follow them.
-    for (let i = 0; i < hunk.lines.length; ) {
+    for (let i = 0; i < hunk.lines.length;) {
       const line = hunk.lines[i]!;
       if (line.kind === 'context' || line.kind === 'conflict') {
         rows.push({

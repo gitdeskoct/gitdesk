@@ -1,1 +1,8 @@
-blank_issues_enabled: true
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/gitdeskoct/gitdesk/security/advisories/new
+    about: Report vulnerabilities privately instead of opening a public issue.
+  - name: Contribution guide
+    url: https://github.com/gitdeskoct/gitdesk/blob/main/CONTRIBUTING.md
+    about: Read the contribution and local validation requirements before opening an issue or pull request.

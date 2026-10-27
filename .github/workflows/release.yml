@@ -1,5 +1,5 @@
 # Every push to main is a release: it picks the next version (.github/scripts/next-version.cjs),
-# runs Quality on that commit, commits the version to package.json and package-lock.json, tags it,
+# runs Quality on that commit, creates a versioned tag,
 # builds every installer from the tag and publishes the release in the public releases repository,
 # where installed copies find it at their next update check.
 name: Release
@@ -137,9 +137,9 @@ jobs:
             git commit -am "Release v$VERSION" -m '[skip ci]'
           fi
           git tag -a "v$VERSION" -m "gitdesk $VERSION"
-          # Both or neither. Pushes made with this job's token start no other workflow.
-          if ! git push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"; then
-            echo "::error::main moved while this run was checking it. The run for the newer push releases it."
+          # Push only the release tag. The protected main branch must never be mutated by release automation.
+          if ! git push origin "refs/tags/v$VERSION"; then
+            echo "::error::The release tag could not be pushed. The run for the newer push can retry it."
             exit 1
           fi
           echo "ref=v$VERSION" >> "$GITHUB_OUTPUT"

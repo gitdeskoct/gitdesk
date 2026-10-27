@@ -47,9 +47,9 @@ function fakeApi() {
     refresh: vi.fn(async () => tokens(2)),
     logout: vi.fn(async () => undefined),
     me: vi.fn(async () => ({ account })),
-    sessions: vi.fn(
-      async (): Promise<{ sessions: SessionInfo[] }> => ({ sessions: [] }),
-    ),
+    sessions: vi.fn(async (): Promise<{ sessions: SessionInfo[] }> => ({
+      sessions: [],
+    })),
     revokeSession: vi.fn(async () => undefined),
   };
 }

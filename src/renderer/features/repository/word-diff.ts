@@ -24,7 +24,7 @@ export function changedRanges(a: string, b: string): [Range[], Range[]] {
           : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
   const keepLeft = new Set<number>();
   const keepRight = new Set<number>();
-  for (let i = 0, j = 0; i < left.length && j < right.length; ) {
+  for (let i = 0, j = 0; i < left.length && j < right.length;) {
     if (left[i] === right[j]) {
       keepLeft.add(i++);
       keepRight.add(j++);
@@ -52,7 +52,7 @@ export function changedRanges(a: string, b: string): [Range[], Range[]] {
 // the changed-word ranges keyed by the line's index in the hunk.
 export function wordRanges(lines: DiffLine[]): Map<number, Range[]> {
   const result = new Map<number, Range[]>();
-  for (let i = 0; i < lines.length; ) {
+  for (let i = 0; i < lines.length;) {
     if (lines[i]!.kind !== 'del') {
       i++;
       continue;

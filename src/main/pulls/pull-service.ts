@@ -1175,12 +1175,10 @@ export function createPullService(deps: {
         const records = deps.recordsFor(input.repoId);
         const pull = await pullOf(records, input.id);
         const latest = pull.latest?.version ?? 0;
-        return (await records.reviews(input.id)).map(
-          (review): PullReview => ({
-            ...review,
-            stale: review.version < latest,
-          }),
-        );
+        return (await records.reviews(input.id)).map((review): PullReview => ({
+          ...review,
+          stale: review.version < latest,
+        }));
       }),
 
     // A review is about exactly the commits on screen; if they moved on, it is refused.

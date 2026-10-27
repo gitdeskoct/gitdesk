@@ -68,7 +68,7 @@ export function analyticsBuckets(
   const starts: number[] = [];
   if (range === '4w' || range === '12w') {
     const count = range === '4w' ? 4 : 12;
-    for (let start = weekStart(now); starts.length < count; ) {
+    for (let start = weekStart(now); starts.length < count;) {
       starts.unshift(start);
       const previous = new Date(start);
       previous.setDate(previous.getDate() - 7);
