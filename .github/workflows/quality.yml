@@ -99,7 +99,7 @@ jobs:
       # Packaged builds refuse a non-https API origin, so the smoke build needs a real one baked in.
       - run: npm run dist:dir -- --linux
         env:
-          VITE_API_ORIGIN: ${{ vars.API_ORIGIN || 'https://gitdesk-api.telvinteum.workers.dev' }}
+          VITE_API_ORIGIN: ${{ vars.API_ORIGIN || 'https://gitdesk-api-dev.telvinteum.workers.dev' }}
       - name: Updater metadata is packaged
         run: test -f dist/linux-unpacked/resources/app-update.yml
       - name: Launch the packaged app

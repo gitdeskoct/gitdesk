@@ -275,7 +275,7 @@ On in both environments since 27 October 2026: the `artifacts` binding and `GIT_
 
 ### Pointing the desktop app at a Worker
 
-Set `VITE_API_ORIGIN` in the root `.env`: production by default, the dev URL to try backend changes from the app. Packaged builds accept only an https origin.
+Set `VITE_API_ORIGIN` in the root `.env`. Released builds use `gitdesk-api-dev` (the GitHub variable `API_ORIGIN`): it is the only deployed Worker, so it serves real users; the `gitdesk-api` Worker for the top-level environment isn't deployed. Packaged builds accept only an https origin.
 
 ### Setting up a new account from scratch
 
