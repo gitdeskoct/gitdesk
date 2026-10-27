@@ -91,7 +91,7 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 - **The URL** is the `remote` Artifacts returns, `https://<ACCOUNT_ID>.artifacts.cloudflare.net/git/gitdesk/<id>.git`. It is stored in `repositories.git_remote` only after it is checked to be plain https with no user, password, query or fragment, and it is sent to clients as `gitUrl`.
 - **Tokens.** Git authenticates with a repository-scoped bearer token from `POST /repositories/:id/git-credentials`: `read` for fetch and clone, `write` for push, 15 minutes for the desktop's own commands, 1 or 8 hours for a command copied to a terminal. The token is returned once, is never stored, logged or recorded as activity, and the response is `Cache-Control: no-store`.
 - **Git traffic never passes through the Worker.** Git talks to Artifacts directly, so Worker body and CPU limits don't apply to packs.
-- **Turning it on.** `GIT_HOSTING` must be `artifacts` and the `ARTIFACTS` binding present. Artifacts needs the Workers Paid plan and has no local simulator (Miniflare only proxies it to the real service), so `npm run dev` runs with `--local` and hosting off; `npm run dev:remote` sets `GIT_HOSTING=artifacts` and uses the real service. `.dev.vars` must not set `GIT_HOSTING`, because it would override the scripts' `--var`. Tests pass a fake host to `createApp`.
+- **Turning it on.** `GIT_HOSTING` must be `artifacts` and the `ARTIFACTS` binding present. Artifacts needs the Workers Paid plan and has no local simulator (Miniflare only proxies it to the real service), so `npm run dev` runs with `--local` and `--var GIT_HOSTING:off`; `npm run dev:remote` sets `GIT_HOSTING=artifacts` and uses the real service. `.dev.vars` must not set `GIT_HOSTING`, because it would override the scripts' `--var`. Tests pass a fake host to `createApp`.
 - **Hosting on this machine.** `GIT_HOSTING=local` points the Worker at `scripts/local-git-host.mjs`, a development stand-in for Artifacts: real Git smart HTTP over HTTPS through `git http-backend`, the same read and write bearer tokens, revoke and the commit checks. The Worker accepts it only at a loopback admin URL with `LOCAL_GIT_SECRET`, so a deployed Worker can't use it. See [Git hosting on this machine](#git-hosting-on-this-machine).
 - **Limits** (Artifacts, October 2026): 1 GB per repository, push over Git protocol v1, billed from 14 October 2026 at $0.15 per 1,000 operations after 10,000 a month and $0.50 per GB-month after 1 GB.
 
@@ -117,9 +117,9 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 | Name | Kind | Where it is set | Used for |
 | --- | --- | --- | --- |
 | `PUBLIC_ORIGIN` | var | `wrangler.jsonc`: `https://gitdesk-api.telvinteum.workers.dev` (production), `https://gitdesk-api-dev.telvinteum.workers.dev` (`env.dev`); `http://localhost:8787` in `.dev.vars` and `vitest.config.ts` | Google redirect URI and JWT issuer |
-| `GIT_HOSTING` | var | `wrangler.jsonc` (`off`, because the account is on the free plan); the dev scripts set it with `--var`, never `.dev.vars` | Whether repositories get a Git URL: `off`, `artifacts`, or `local` for the development Git host |
+| `GIT_HOSTING` | var | `wrangler.jsonc` (`artifacts` in production and `env.dev`); the dev scripts and `vitest.config.ts` override it (`off` or `local`), never `.dev.vars` | Whether repositories get a Git URL: `off`, `artifacts`, or `local` for the development Git host |
 | `SYNC_LIMITER` | Rate limit binding | `wrangler.jsonc`, namespace 4107 (production) or 5107 (`env.dev`), 60 a minute per account | Push reports |
-| `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, commented out until the account is on Workers Paid (a free-plan deploy with it is refused, code 10403) | Git repositories and their tokens |
+| `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, namespace `gitdesk` (production) or `gitdesk-dev` (`env.dev`); Workers Paid only (a free-plan deploy with it is refused, code 10403) | Git repositories and their tokens |
 | `GOOGLE_CLIENT_ID` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
 | `GOOGLE_CLIENT_SECRET` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google OAuth client |
 | `JWT_SIGNING_KEY` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Signing access tokens. At least 32 bytes, base64url; production, dev and local each use their own 64-byte key. |
@@ -269,13 +269,13 @@ The Google client must list every callback as an authorized redirect URI, or Goo
 
 Both log every request (query strings redacted, because the Google callback carries a one-time code), persist logs and traces, and have [Workers Issues](https://developers.cloudflare.com/workers/observability/issues/) on. Issues groups uncaught exceptions and the `console.error` the error handler writes for unhandled errors, which carries the error itself so it is grouped by its stack. Find them in the dashboard under each Worker's Observability and Issues tabs.
 
-### Turning on Git hosting
+### Git hosting
 
-Artifacts needs Workers Paid. After upgrading: uncomment the `artifacts` binding in `wrangler.jsonc` (and add it to `env.dev`), set `GIT_HOSTING` to `artifacts` in both, run `npm run cf-typegen` and deploy both. Repositories created while hosting was off get their Git URL from the backfill on their next read.
+On in both environments since 27 October 2026: the `artifacts` binding and `GIT_HOSTING: "artifacts"` in `wrangler.jsonc`. Artifacts needs Workers Paid. To turn it off, set `GIT_HOSTING` to `off` in both and deploy both. Repositories created while hosting was off get their Git URL from the backfill on their next read.
 
 ### Pointing the desktop app at a Worker
 
-Set `VITE_API_ORIGIN` in the root `.env`: production by default, the dev URL to try backend changes from the app. Packaged builds accept only an https origin.
+Set `VITE_API_ORIGIN` in the root `.env`. Released builds use `gitdesk-api-dev` (the GitHub variable `API_ORIGIN`): it is the only deployed Worker, so it serves real users; the `gitdesk-api` Worker for the top-level environment isn't deployed. Packaged builds accept only an https origin.
 
 ### Setting up a new account from scratch
 

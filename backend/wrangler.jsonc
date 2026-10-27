@@ -19,13 +19,11 @@
   // GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and JWT_SIGNING_KEY are secrets (`wrangler secret put`,
   // with --env dev for dev), never vars. Each environment has its own JWT_SIGNING_KEY.
   // GIT_HOSTING "artifacts" gives linked repositories a Git URL through the ARTIFACTS binding,
-  // which needs Workers Paid. "off" keeps them metadata only (and is what .dev.vars sets locally).
-  // Off until the account is on Workers Paid: a deploy with the binding is refused (code 10403).
-  // To turn it on: uncomment both "artifacts" lines, set "artifacts" here and in env.dev, run
-  // `npm run cf-typegen`, then deploy dev before production.
+  // which needs Workers Paid. "off" keeps them metadata only (and is what `npm run dev` and the tests use).
+  // To turn it off: set "off" here and in env.dev; the "artifacts" lines can stay.
   "vars": {
     "PUBLIC_ORIGIN": "https://gitdesk-api.telvinteum.workers.dev",
-    "GIT_HOSTING": "off"
+    "GIT_HOSTING": "artifacts"
   },
   "secrets": {
     "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
@@ -41,7 +39,7 @@
   // One Git repository per account repository, named by its id; the namespace is created with the
   // first repository. No local simulator exists, so `npm run dev` (--local) leaves it unreachable.
   // Workers Paid only (deploys on the free plan are refused with code 10403).
-  // "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
+  "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
   // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
   "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
   // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.
@@ -88,10 +86,10 @@
       "name": "gitdesk-api-dev",
       "vars": {
         "PUBLIC_ORIGIN": "https://gitdesk-api-dev.telvinteum.workers.dev",
-        "GIT_HOSTING": "off"
+        "GIT_HOSTING": "artifacts"
       },
       // Its own namespace, so dev repositories never sit beside production ones.
-      // "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk-dev", "remote": true }],
+      "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk-dev", "remote": true }],
       "secrets": {
         "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
       },
