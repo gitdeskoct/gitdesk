@@ -8,8 +8,11 @@ import type {
   UpdateStatus,
 } from '../../shared/updates';
 
-// Must match `publish` in electron-builder.yml: the public repository installed copies read.
-export const RELEASES_URL = 'https://github.com/BotCoder254/gitdesk-releases';
+export const RELEASE_REPOSITORIES = {
+  stable: 'gitdeskoct/gitdesk',
+  beta: 'BotCoder254/gitdesk-releases',
+} as const;
+export type UpdateChannel = keyof typeof RELEASE_REPOSITORIES;
 
 const STARTUP_DELAY_MS = 10_000;
 const CHECK_EVERY_MS = 6 * 60 * 60 * 1000;
@@ -23,6 +26,12 @@ export type Updater = {
   autoInstallOnAppQuit: boolean;
   allowPrerelease: boolean;
   allowDowngrade: boolean;
+  setFeedURL(options: {
+    provider: 'github';
+    owner: string;
+    repo: string;
+    releaseType: 'release' | 'prerelease';
+  }): void;
   // Matches EventEmitter's own signature, which electron-updater's events go through.
   on(event: string, listener: (...args: any[]) => void): unknown;
   checkForUpdates(): Promise<unknown>;
@@ -89,6 +98,7 @@ export function createUpdateService(deps: {
   installKind: InstallKind;
   currentVersion: string;
   autoCheck: () => boolean;
+  updateChannel: () => UpdateChannel;
   isOnline: () => boolean;
   // A clone, push or move is running, which a restart would stop.
   busy: () => boolean;
@@ -116,9 +126,13 @@ export function createUpdateService(deps: {
     currentVersion: deps.currentVersion,
     lastCheck: deps.lastCheck.get(),
     releasePage: release
-      ? `${RELEASES_URL}/releases/tag/v${release.version}`
-      : `${RELEASES_URL}/releases`,
+      ? `${releaseUrl(deps.updateChannel())}/releases/tag/v${release.version}`
+      : `${releaseUrl(deps.updateChannel())}/releases`,
   });
+
+  function releaseUrl(channel: UpdateChannel) {
+    return `https://github.com/${RELEASE_REPOSITORIES[channel]}`;
+  }
 
   function set(phase: UpdatePhase): UpdateStatus {
     current = phase;
@@ -207,6 +221,16 @@ export function createUpdateService(deps: {
     if (current.phase === 'error' && current.stage !== 'check') return status();
     set({ phase: 'checking' });
     try {
+      const [owner, repo] =
+        RELEASE_REPOSITORIES[deps.updateChannel()].split('/');
+      if (!owner || !repo) throw new Error('Invalid update repository');
+      updater.setFeedURL({
+        provider: 'github',
+        owner,
+        repo,
+        releaseType: deps.updateChannel() === 'beta' ? 'prerelease' : 'release',
+      });
+      updater.allowPrerelease = deps.updateChannel() === 'beta';
       await updater.checkForUpdates();
     } catch (err) {
       // The 'error' event usually got here first; this covers a rejection without one.

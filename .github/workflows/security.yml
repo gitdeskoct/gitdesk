@@ -1,13 +1,9 @@
-# Known-vulnerability check of both lockfiles. CodeQL needs GitHub Code Security on a private
-# repository, so it is not set up here.
+# Known-vulnerability check of both lockfiles. Repository-level CodeQL and secret scanning are
+# enabled in GitHub settings for this public repository.
 name: Security
 
 on:
   pull_request:
-    paths:
-      - package-lock.json
-      - backend/package-lock.json
-      - .github/workflows/security.yml
   push:
     branches: [main]
   schedule:

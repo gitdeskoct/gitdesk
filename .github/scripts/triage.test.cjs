@@ -137,7 +137,7 @@ test('main labels, assigns and comments once on a new issue', async () => {
     'windows',
   ]);
   assert.deepEqual(calls.find(([n]) => n === 'addAssignees')[1].assignees, [
-    'shikki841',
+    'BotCoder254',
   ]);
   assert.equal(names.filter((n) => n === 'createComment').length, 1);
 });

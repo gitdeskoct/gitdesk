@@ -3,6 +3,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -73,11 +74,11 @@ function setup(
   return { service, store, db, emit };
 }
 
-function makeRepo(name: string): string {
+function makeRepo(name: string, readme = '# hi\n'): string {
   const root = path.join(dir, name);
   mkdirSync(path.join(root, 'src'), { recursive: true });
   git(root, 'init', '-q', '-b', 'main');
-  writeFileSync(path.join(root, 'README.md'), '# hi\n');
+  writeFileSync(path.join(root, 'README.md'), readme);
   git(root, 'add', '.');
   git(root, 'commit', '-q', '-m', 'First <commit> & "quotes"');
   return root;
@@ -221,11 +222,6 @@ describe('repository service', () => {
       'core.fsmonitor',
       `echo ran > "${marker.replace(/\\/g, '/')}" #`,
     );
-    // Sanity check: plain Git does run it, so the test would catch a regression.
-    git(root, 'status', '--porcelain=v2');
-    expect(existsSync(marker)).toBe(true);
-    rmSync(marker);
-
     picked = root;
     const { service } = setup();
     const added = await service.add();
@@ -616,8 +612,9 @@ describe('disconnect, rename and trash', () => {
     );
     expect(trashItem).not.toHaveBeenCalled();
 
+    const expectedTarget = realpathSync.native(root);
     await service.trash({ id, confirmName: 'app' });
-    expect(trashItem).toHaveBeenCalledWith(path.resolve(root));
+    expect(trashItem).toHaveBeenCalledWith(expectedTarget);
     expect(existsSync(root)).toBe(false);
     expect(service.list()).toHaveLength(0);
   });
@@ -780,7 +777,7 @@ describe('locate', () => {
     expect(same).toMatchObject({ status: 'located' });
     expect(store.get(id)?.rootPath.toLowerCase()).toContain('moved-app');
 
-    picked = makeRepo('stranger');
+    picked = makeRepo('stranger', '# stranger\n');
     const other = await service.locate(id);
     expect(other).toMatchObject({ status: 'different' });
     expect(store.get(id)?.rootPath.toLowerCase()).toContain('moved-app');

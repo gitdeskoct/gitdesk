@@ -497,7 +497,7 @@ export function bucketWeeks(
   count = HISTORY_WEEKS,
 ): RepositoryHistory['weeks'] {
   const weeks: RepositoryHistory['weeks'] = [];
-  for (let start = weekStart(now); weeks.length < count; ) {
+  for (let start = weekStart(now); weeks.length < count;) {
     weeks.unshift({ start, commits: 0 });
     const previous = new Date(start);
     previous.setDate(previous.getDate() - 7);

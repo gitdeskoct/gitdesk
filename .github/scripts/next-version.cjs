@@ -10,10 +10,31 @@ const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 
 const parse = (text) => {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(text.trim());
-  return match ? match.slice(1).map(Number) : null;
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(
+    text.trim(),
+  );
+  return match
+    ? {
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3]),
+        prerelease: match[4] ?? null,
+      }
+    : null;
 };
-const compare = (a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+const compareBase = (a, b) =>
+  a.major - b.major || a.minor - b.minor || a.patch - b.patch;
+const compare = (a, b) =>
+  compareBase(a, b) ||
+  (a.prerelease === b.prerelease
+    ? 0
+    : a.prerelease === null
+      ? 1
+      : b.prerelease === null
+        ? -1
+        : a.prerelease.localeCompare(b.prerelease, undefined, {
+            numeric: true,
+          }));
 
 // The highest version tag as written, or null.
 function newest(tags) {
@@ -25,12 +46,21 @@ function newest(tags) {
   );
 }
 
+function newestStable(tags) {
+  return newest(tags.filter((tag) => parse(tag)?.prerelease === null));
+}
+
 function bumpOf(messages) {
   if (messages.some((m) => /#major\b|BREAKING[ -]CHANGE/.test(m)))
     return 'major';
   if (messages.some((m) => /#minor\b/.test(m))) return 'minor';
   return 'patch';
 }
+
+// Versions with a prerelease suffix are beta releases. Stable versions keep the existing
+// automatic bump behavior; a beta version is raised explicitly in package.json.
+const versionText = (version) =>
+  `${version.major}.${version.minor}.${version.patch}${version.prerelease ? `-${version.prerelease}` : ''}`;
 
 // tag: whether the release still needs its tag; false when the commit already has one.
 function nextVersion({
@@ -42,11 +72,13 @@ function nextVersion({
 }) {
   const pkg = parse(packageVersion);
   if (!pkg)
-    throw new Error(`package.json version ${packageVersion} isn't x.y.z`);
+    throw new Error(
+      `package.json version ${packageVersion} isn't x.y.z or x.y.z-prerelease`,
+    );
   const tagged = newest(headTags);
   if (tagged)
     return {
-      version: parse(tagged).join('.'),
+      version: versionText(parse(tagged)),
       tag: false,
       reason: `this commit is already ${tagged}`,
     };
@@ -56,25 +88,32 @@ function nextVersion({
       tag: false,
       reason: 'the commit says [skip release]',
     };
-  const last = newest(tags);
+  const last = newestStable(tags);
   if (!last)
-    return { version: pkg.join('.'), tag: true, reason: 'first release' };
-  if (compare(pkg, parse(last)) > 0)
+    return { version: versionText(pkg), tag: true, reason: 'first release' };
+  const lastVersion = parse(last);
+  if (pkg.prerelease && compareBase(pkg, lastVersion) >= 0)
     return {
-      version: pkg.join('.'),
+      version: versionText(pkg),
+      tag: true,
+      reason: `package.json beta version is based on ${last}`,
+    };
+  if (!pkg.prerelease && compare(pkg, lastVersion) > 0)
+    return {
+      version: versionText(pkg),
       tag: true,
       reason: `package.json was raised above ${last} by hand`,
     };
-  const [major, minor, patch] = parse(last);
+  const { major, minor, patch } = lastVersion;
   const bump = bumpOf(messages);
   const next =
     bump === 'major'
-      ? [major + 1, 0, 0]
+      ? { major: major + 1, minor: 0, patch: 0 }
       : bump === 'minor'
-        ? [major, minor + 1, 0]
-        : [major, minor, patch + 1];
+        ? { major, minor: minor + 1, patch: 0 }
+        : { major, minor, patch: patch + 1 };
   return {
-    version: next.join('.'),
+    version: versionText(next),
     tag: true,
     reason: `${bump} after ${last}`,
   };
@@ -84,7 +123,7 @@ if (require.main === module) {
   const git = (...args) =>
     execFileSync('git', args, { encoding: 'utf8' }).split('\n').filter(Boolean);
   const tags = git('tag', '--list', 'v*');
-  const last = newest(tags);
+  const last = newestStable(tags);
   const result = nextVersion({
     packageVersion: JSON.parse(fs.readFileSync('package.json', 'utf8')).version,
     tags,

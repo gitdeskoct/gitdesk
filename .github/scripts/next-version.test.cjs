@@ -75,10 +75,21 @@ test('[skip release] in the newest commit releases nothing', () => {
   assert.equal(result.version, null);
 });
 
-test('a package.json version that is not x.y.z is refused', () => {
+test('a package.json beta version is released as a prerelease', () => {
+  assert.equal(
+    nextVersion({
+      ...base,
+      packageVersion: '1.0.0-beta.1',
+      tags: ['v1.0.0'],
+    }).version,
+    '1.0.0-beta.1',
+  );
+});
+
+test('a package.json version outside semver is refused', () => {
   assert.throws(
-    () => nextVersion({ ...base, packageVersion: '1.0.0-beta.1' }),
-    /isn't x\.y\.z/,
+    () => nextVersion({ ...base, packageVersion: '1.0' }),
+    /isn't x\.y\.z or x\.y\.z-prerelease/,
   );
 });
 

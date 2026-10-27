@@ -131,13 +131,11 @@ function install(list: RepositorySummary[], view: SyncOverview) {
     checkPush: vi.fn(never),
     cancel: vi.fn(async () => undefined),
     fileDiff: vi.fn(never),
-    activity: vi.fn(
-      async (): Promise<SyncActivityPage> => ({
-        items: [],
-        total: 0,
-        weeks: [],
-      }),
-    ),
+    activity: vi.fn(async (): Promise<SyncActivityPage> => ({
+      items: [],
+      total: 0,
+      weeks: [],
+    })),
   };
   pulls = {
     conflicts: vi.fn(never),

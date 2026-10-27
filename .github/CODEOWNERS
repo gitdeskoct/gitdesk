@@ -1,0 +1,9 @@
+# Default review ownership
+* @BotCoder254
+
+# High-impact surfaces
+/.github/ @BotCoder254
+/backend/ @BotCoder254
+/src/main/ @BotCoder254
+/src/preload/ @BotCoder254
+/electron-builder.yml @BotCoder254

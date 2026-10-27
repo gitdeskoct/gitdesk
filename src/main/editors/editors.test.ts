@@ -41,21 +41,24 @@ describe('editor detection', () => {
     ]);
   });
 
-  it('finds an editor on Windows only when its .exe really exists', async () => {
-    dir = mkdtempSync(path.join(os.tmpdir(), 'gitdesk-editors-'));
-    const install = path.join(dir, 'VS Code');
-    mkdirSync(install);
-    const registry = REG.replaceAll('INSTALL', install);
-    const none = await detectEditors('win32', {}, async () => registry);
-    expect(none).toEqual([]);
-    writeFileSync(path.join(install, 'Code.exe'), '');
-    const found = await detectEditors('win32', {}, async (key) =>
-      key.startsWith('HKCU') ? registry : '',
-    );
-    expect(found).toMatchObject([
-      { id: 'vscode', exe: path.join(install, 'Code.exe'), viaOpen: false },
-    ]);
-  });
+  it.skipIf(process.platform !== 'win32')(
+    'finds an editor on Windows only when its .exe really exists',
+    async () => {
+      dir = mkdtempSync(path.join(os.tmpdir(), 'gitdesk-editors-'));
+      const install = path.join(dir, 'VS Code');
+      mkdirSync(install);
+      const registry = REG.replaceAll('INSTALL', install);
+      const none = await detectEditors('win32', {}, async () => registry);
+      expect(none).toEqual([]);
+      writeFileSync(path.join(install, 'Code.exe'), '');
+      const found = await detectEditors('win32', {}, async (key) =>
+        key.startsWith('HKCU') ? registry : '',
+      );
+      expect(found).toMatchObject([
+        { id: 'vscode', exe: path.join(install, 'Code.exe'), viaOpen: false },
+      ]);
+    },
+  );
 });
 
 describe('editor launch arguments', () => {

@@ -1,6 +1,6 @@
 # Every push to main is a release: it picks the next version (.github/scripts/next-version.cjs),
-# runs Quality on that commit, commits the version to package.json and package-lock.json, tags it,
-# builds every installer from the tag and publishes the release in the public releases repository,
+# runs Quality on that commit, creates a versioned tag,
+# builds every installer from the tag and publishes stable or beta to its channel repository,
 # where installed copies find it at their next update check.
 name: Release
 
@@ -24,7 +24,8 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  RELEASES_REPO: BotCoder254/gitdesk-releases
+  STABLE_REPO: gitdeskoct/gitdesk
+  BETA_REPO: BotCoder254/gitdesk-releases
 
 jobs:
   plan:
@@ -37,6 +38,8 @@ jobs:
       skip: ${{ steps.check.outputs.skip }}
       sha: ${{ steps.sha.outputs.sha }}
       publish: ${{ steps.mode.outputs.publish }}
+      channel: ${{ steps.destination.outputs.channel }}
+      releases_repo: ${{ steps.destination.outputs.releases_repo }}
     steps:
       # The branch's tip when this run starts, not the pushed commit: a run that waited behind
       # another release starts from that release's version commit.
@@ -67,6 +70,19 @@ jobs:
           echo "publish=$publish" >> "$GITHUB_OUTPUT"
       - id: version
         run: node .github/scripts/next-version.cjs
+      - id: destination
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          STABLE_REPO: ${{ env.STABLE_REPO }}
+          BETA_REPO: ${{ env.BETA_REPO }}
+        run: |
+          if [[ "$VERSION" == *-* ]]; then
+            echo "channel=beta" >> "$GITHUB_OUTPUT"
+            echo "releases_repo=$BETA_REPO" >> "$GITHUB_OUTPUT"
+          else
+            echo "channel=stable" >> "$GITHUB_OUTPUT"
+            echo "releases_repo=$STABLE_REPO" >> "$GITHUB_OUTPUT"
+          fi
       - id: check
         name: Not released before
         env:
@@ -74,6 +90,7 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
           NEEDS_TAG: ${{ steps.version.outputs.tag }}
           SKIP: ${{ steps.version.outputs.skip }}
+          RELEASES_REPO: ${{ steps.destination.outputs.releases_repo }}
         run: |
           skip=$SKIP
           if [ "$SKIP" != true ] && gh release view "v$VERSION" --repo "$RELEASES_REPO" >/dev/null 2>&1; then
@@ -137,9 +154,9 @@ jobs:
             git commit -am "Release v$VERSION" -m '[skip ci]'
           fi
           git tag -a "v$VERSION" -m "gitdesk $VERSION"
-          # Both or neither. Pushes made with this job's token start no other workflow.
-          if ! git push --atomic origin "HEAD:refs/heads/main" "refs/tags/v$VERSION"; then
-            echo "::error::main moved while this run was checking it. The run for the newer push releases it."
+          # Push only the release tag. The protected main branch must never be mutated by release automation.
+          if ! git push origin "refs/tags/v$VERSION"; then
+            echo "::error::The release tag could not be pushed. The run for the newer push can retry it."
             exit 1
           fi
           echo "ref=v$VERSION" >> "$GITHUB_OUTPUT"
@@ -299,6 +316,8 @@ jobs:
     needs: [plan, tag, build-windows, build-linux, nix]
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -344,8 +363,10 @@ jobs:
       - name: Publish
         if: needs.plan.outputs.publish == 'true'
         env:
-          GH_TOKEN: ${{ secrets.RELEASES_TOKEN }}
+          GH_TOKEN: ${{ needs.plan.outputs.channel == 'stable' && github.token || secrets.RELEASES_TOKEN }}
           VERSION: ${{ needs.plan.outputs.version }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+          RELEASES_REPO: ${{ needs.plan.outputs.releases_repo }}
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::Add the RELEASES_TOKEN secret to this repository: a token that can write releases in $RELEASES_REPO. README › Releasing has the steps."
@@ -355,10 +376,14 @@ jobs:
             echo "::error::$RELEASES_REPO already has a release for v$VERSION. Raise the version in package.json above it."
             exit 1
           fi
-          # Published and marked latest: electron-updater reads only the latest published release.
+          if [ "$CHANNEL" = beta ]; then
+            release_flags=(--prerelease)
+          else
+            release_flags=(--latest)
+          fi
           gh release create "v$VERSION" release/* \
             --repo "$RELEASES_REPO" \
-            --latest \
+            "${release_flags[@]}" \
             --title "gitdesk $VERSION" \
             --notes-file notes.md
           echo "Published https://github.com/$RELEASES_REPO/releases/tag/v$VERSION"
