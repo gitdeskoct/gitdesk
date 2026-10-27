@@ -7,6 +7,7 @@ type LogFields = {
   path?: string;
   status?: number;
   error?: string;
+  stage?: 'exchange' | 'verify' | 'account' | 'desktop_code';
   // Which kind of Git token was issued, never the token itself.
   scope?: 'read' | 'write';
   lifetime?: number;

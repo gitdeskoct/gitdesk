@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { verifyGoogleIdToken } from '../src/modules/auth/google';
+import { buildAuthorizeUrl, verifyGoogleIdToken } from '../src/modules/auth/google';
 import { CLIENT_ID, googleKeys } from './helpers';
 
 const claims = {
@@ -17,6 +17,25 @@ describe('verifyGoogleIdToken', async () => {
 
   it('accepts a valid token', async () => {
     await expect(verify(await sign(claims))).resolves.toMatchObject({ subject: 'subject' });
+  });
+
+  describe('buildAuthorizeUrl', () => {
+    it('normalizes OAuth client and callback values', () => {
+      const url = new URL(
+        buildAuthorizeUrl({
+          clientId: ' client.apps.googleusercontent.com ',
+          redirectUri: ' https://gitdesk.app/api/v1/auth/google/callback ',
+          state: 'state',
+          nonce: 'nonce',
+          codeChallenge: 'challenge',
+        }),
+      );
+
+      expect(url.searchParams.get('client_id')).toBe('client.apps.googleusercontent.com');
+      expect(url.searchParams.get('redirect_uri')).toBe(
+        'https://gitdesk.app/api/v1/auth/google/callback',
+      );
+    });
   });
 
   it('accepts the issuer without scheme', async () => {
