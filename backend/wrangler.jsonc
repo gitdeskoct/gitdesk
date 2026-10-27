@@ -1,8 +1,8 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   // Two deployed environments, one config:
-  //   production  top level, `npm run deploy`      https://gitdesk-api.telvinteum.workers.dev
-  //   dev         env.dev,   `npm run deploy:dev`  https://gitdesk-api-dev.telvinteum.workers.dev
+  //   production  top level, `npm run deploy`
+  //   dev         env.dev,   `npm run deploy:dev`
   // `npm run dev` runs the top level locally, with .dev.vars overriding vars and secrets.
   // Bindings and vars are not inherited by environments, so env.dev restates each one with its own
   // database, bucket and rate-limit namespaces: dev traffic never touches production data.
@@ -22,11 +22,15 @@
   // which needs Workers Paid. "off" keeps them metadata only (and is what `npm run dev` and the tests use).
   // To turn it off: set "off" here and in env.dev; the "artifacts" lines can stay.
   "vars": {
-    "PUBLIC_ORIGIN": "https://gitdesk-api.telvinteum.workers.dev",
     "GIT_HOSTING": "artifacts"
   },
   "secrets": {
-    "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
+    "required": [
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "JWT_SIGNING_KEY",
+      "PUBLIC_ORIGIN"
+    ]
   },
   "d1_databases": [
     {
@@ -85,13 +89,17 @@
     "dev": {
       "name": "gitdesk-api-dev",
       "vars": {
-        "PUBLIC_ORIGIN": "https://gitdesk-api-dev.telvinteum.workers.dev",
         "GIT_HOSTING": "artifacts"
       },
       // Its own namespace, so dev repositories never sit beside production ones.
       "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk-dev", "remote": true }],
       "secrets": {
-        "required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "JWT_SIGNING_KEY"]
+        "required": [
+          "GOOGLE_CLIENT_ID",
+          "GOOGLE_CLIENT_SECRET",
+          "JWT_SIGNING_KEY",
+          "PUBLIC_ORIGIN"
+        ]
       },
       "d1_databases": [
         {

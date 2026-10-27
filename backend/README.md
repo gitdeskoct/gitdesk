@@ -116,7 +116,7 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 
 | Name | Kind | Where it is set | Used for |
 | --- | --- | --- | --- |
-| `PUBLIC_ORIGIN` | var | `wrangler.jsonc`: `https://gitdesk-api.telvinteum.workers.dev` (production), `https://gitdesk-api-dev.telvinteum.workers.dev` (`env.dev`); `http://localhost:8787` in `.dev.vars` and `vitest.config.ts` | Google redirect URI and JWT issuer |
+| `PUBLIC_ORIGIN` | secret | `.dev.vars` locally, `wrangler secret put` remotely | Google redirect URI and JWT issuer |
 | `GIT_HOSTING` | var | `wrangler.jsonc` (`artifacts` in production and `env.dev`); the dev scripts and `vitest.config.ts` override it (`off` or `local`), never `.dev.vars` | Whether repositories get a Git URL: `off`, `artifacts`, or `local` for the development Git host |
 | `SYNC_LIMITER` | Rate limit binding | `wrangler.jsonc`, namespace 4107 (production) or 5107 (`env.dev`), 60 a minute per account | Push reports |
 | `ARTIFACTS` | Artifacts binding | `wrangler.jsonc`, namespace `gitdesk` (production) or `gitdesk-dev` (`env.dev`); Workers Paid only (a free-plan deploy with it is refused, code 10403) | Git repositories and their tokens |
@@ -209,7 +209,7 @@ Two Workers on account `5b14dbcfcd4e8acdb4bad6aff07ce149`, from one `wrangler.js
 
 | | Production (top level) | Dev (`env.dev`) |
 | --- | --- | --- |
-| URL | `https://gitdesk-api.telvinteum.workers.dev` | `https://gitdesk-api-dev.telvinteum.workers.dev` |
+| URL | configured by `PUBLIC_ORIGIN` | configured by `PUBLIC_ORIGIN` |
 | Worker | `gitdesk-api` | `gitdesk-api-dev` |
 | D1 | `gitdesk-db` | `gitdesk-db-dev` |
 | R2 | `gitdesk-repositories` | `gitdesk-repositories-dev` |
@@ -246,6 +246,14 @@ npm run deploy
 Both environments share the Google OAuth client, and each has its own random 64-byte `JWT_SIGNING_KEY`, so a token from one is worthless on the other. Secrets can be replaced but never read back. Each command prompts for the value; use `--env dev` for dev:
 
 ```bash
+npx wrangler secret put PUBLIC_ORIGIN --env=
+```
+
+```bash
+npx wrangler secret put PUBLIC_ORIGIN --env dev
+```
+
+```bash
 npx wrangler secret put GOOGLE_CLIENT_ID --env=
 ```
 
@@ -261,9 +269,7 @@ npx wrangler secret put JWT_SIGNING_KEY --env=
 
 The Google client must list every callback as an authorized redirect URI, or Google stops sign-in with `redirect_uri_mismatch`:
 
-- `https://gitdesk-api.telvinteum.workers.dev/api/v1/auth/google/callback`
-- `https://gitdesk-api-dev.telvinteum.workers.dev/api/v1/auth/google/callback`
-- `http://localhost:8787/api/v1/auth/google/callback`
+- `<PUBLIC_ORIGIN>/api/v1/auth/google/callback`
 
 ### Observability
 
@@ -275,15 +281,15 @@ On in both environments since 27 October 2026: the `artifacts` binding and `GIT_
 
 ### Pointing the desktop app at a Worker
 
-Set `VITE_API_ORIGIN` in the root `.env`. Released builds use `gitdesk-api-dev` (the GitHub variable `API_ORIGIN`): it is the only deployed Worker, so it serves real users; the `gitdesk-api` Worker for the top-level environment isn't deployed. Packaged builds accept only an https origin.
+Set `VITE_API_ORIGIN` in the root `.env` for local development. Released development builds receive the HTTPS origin from the GitHub secret `API_ORIGIN`. Packaged builds accept only an https origin.
 
 ### Setting up a new account from scratch
 
 1. `npx wrangler d1 create gitdesk-db` and `npx wrangler d1 create gitdesk-db-dev`, and put each `database_id` in `wrangler.jsonc`.
 2. `npx wrangler r2 bucket create gitdesk-repositories` and `npx wrangler r2 bucket create gitdesk-repositories-dev`.
-3. Set both `PUBLIC_ORIGIN` values to your `workers.dev` subdomain.
+3. Set `PUBLIC_ORIGIN` as a secret in each deployed environment.
 4. `npm run db:migrate:remote` and `npm run db:migrate:dev`.
-5. Deploy each once with its three secrets, so the required-secrets check passes: `npx wrangler deploy --minify --env= --secrets-file <file>` and the same with `--env dev`, each with a JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` and `JWT_SIGNING_KEY`. Delete the files afterwards.
+5. Deploy each once with its four secrets, so the required-secrets check passes: `npx wrangler deploy --minify --env= --secrets-file <file>` and the same with `--env dev`, each with a JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SIGNING_KEY` and `PUBLIC_ORIGIN`. Delete the files afterwards.
 
 ## Changing the schema
 

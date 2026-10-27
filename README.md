@@ -81,7 +81,7 @@ Required Actions configuration:
 
 | Name                   | Type     | Purpose                                                                                                |
 | ---------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
-| `API_ORIGIN`           | Variable | HTTPS origin baked into packaged builds                                                                |
+| `API_ORIGIN`           | Secret   | Development HTTPS origin baked into packaged builds                                  |
 | `RELEASES_TOKEN`       | Secret   | Fine-grained token with Contents write access only to `BotCoder254/gitdesk-releases` for beta releases |
 | `WIN_SIGNING`          | Variable | Set to `required` to enforce Windows signing                                                           |
 | `WIN_PUBLISHER_NAME`   | Variable | Expected Windows certificate subject                                                                   |
