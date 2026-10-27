@@ -1,7 +1,7 @@
 {
   "name": "gitdesk",
   "productName": "gitdesk",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "private": true,
   "description": "A local-first desktop Git client with pull request reviews and a Cloudflare Worker backend.",
   "keywords": [
