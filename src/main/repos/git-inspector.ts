@@ -292,7 +292,9 @@ export async function approveGitCredential(
 ): Promise<void> {
   const parsed = new URL(url);
   if (parsed.protocol !== 'https:' || parsed.username || parsed.password)
-    throw new GitError('The hosted Git URL is not safe for credential storage.');
+    throw new GitError(
+      'The hosted Git URL is not safe for credential storage.',
+    );
   const helpers = (
     await Promise.all(
       (['--system', '--global'] as const).map(async (scope) => {
