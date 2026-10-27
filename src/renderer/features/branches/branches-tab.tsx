@@ -339,7 +339,9 @@ function Overview({
   }, [focusName, list]);
 
   const q = query.trim().toLowerCase();
-  const sortRows = <T extends { name: string; at: number | null }>(rows: T[]) =>
+  const sortRows = <T extends { name: string; at: number | null }>(
+    rows: T[],
+  ) =>
     settings?.branchSort === 'name'
       ? [...rows].sort((a, b) => a.name.localeCompare(b.name))
       : rows;

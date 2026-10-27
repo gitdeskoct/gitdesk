@@ -104,7 +104,7 @@ export function parseNameStatus(
 ): Omit<PullFile, 'added' | 'removed' | 'binary'>[] {
   const fields = output.split('\0');
   const files: Omit<PullFile, 'added' | 'removed' | 'binary'>[] = [];
-  for (let i = 0; i < fields.length; ) {
+  for (let i = 0; i < fields.length;) {
     const code = fields[i]?.trim() ?? '';
     const status = STATUS[code[0] ?? ''];
     if (!status) {

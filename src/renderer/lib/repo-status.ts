@@ -23,19 +23,19 @@ export function repoItems(
   const byId = new Map(remote.map((r) => [r.id, r]));
   const linked = new Set(local.map((r) => r.remoteId).filter(Boolean));
   return [
-    ...local.map(
-      (repo): RepoItem => ({
-        kind: 'local',
-        key: repo.id,
-        repo,
-        remote: repo.remoteId ? (byId.get(repo.remoteId) ?? null) : null,
-      }),
-    ),
+    ...local.map((repo): RepoItem => ({
+      kind: 'local',
+      key: repo.id,
+      repo,
+      remote: repo.remoteId ? (byId.get(repo.remoteId) ?? null) : null,
+    })),
     ...remote
       .filter((r) => !linked.has(r.id))
-      .map(
-        (r): RepoItem => ({ kind: 'remote', key: `remote:${r.id}`, remote: r }),
-      ),
+      .map((r): RepoItem => ({
+        kind: 'remote',
+        key: `remote:${r.id}`,
+        remote: r,
+      })),
   ];
 }
 
