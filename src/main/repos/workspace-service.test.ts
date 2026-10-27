@@ -5,6 +5,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -36,6 +37,11 @@ import {
 // Real Git, real folders: the same commands the app runs, against temporary repositories.
 const git = (cwd: string, ...args: string[]) =>
   execFileSync('git', args, { cwd, encoding: 'utf8' });
+const bareGit = (cwd: string, ...args: string[]) =>
+  execFileSync('git', ['--git-dir', cwd, ...args], {
+    cwd: dir,
+    encoding: 'utf8',
+  });
 
 beforeAll(() => {
   process.env.GIT_AUTHOR_NAME = 'Test';
@@ -283,7 +289,9 @@ describe('workspace changes and diffs', () => {
     const { id, service } = await setup(root);
     await service.discard({ id, paths: ['README.md', 'scratch.txt'] });
     expect(readFileSync(path.join(root, 'README.md'), 'utf8')).toBe('# hi\n');
-    expect(trashItem).toHaveBeenCalledWith(path.join(root, 'scratch.txt'));
+    expect(trashItem).toHaveBeenCalledWith(
+      path.join(realpathSync(root), 'scratch.txt'),
+    );
     expect(existsSync(path.join(root, 'scratch.txt'))).toBe(false);
   });
 });
@@ -804,7 +812,9 @@ describe('push', () => {
     expect(git(root, 'rev-parse', '--abbrev-ref', 'main@{u}').trim()).toBe(
       'origin/main',
     );
-    expect(git(bare, 'rev-parse', 'main')).toBe(git(root, 'rev-parse', 'HEAD'));
+    expect(bareGit(bare, 'rev-parse', 'main')).toBe(
+      git(root, 'rev-parse', 'HEAD'),
+    );
     expect(
       store.activity(10).map((entry) => [entry.type, entry.detail]),
     ).toContainEqual(['pushed', 'origin/main']);
@@ -816,14 +826,14 @@ describe('push', () => {
     git(other, 'add', '.');
     git(other, 'commit', '-q', '-m', 'Theirs');
     git(other, 'push', '-q', 'origin', 'main');
-    const theirs = git(bare, 'rev-parse', 'main');
+    const theirs = bareGit(bare, 'rev-parse', 'main');
     writeFileSync(path.join(root, 'mine.txt'), 'mine\n');
     git(root, 'add', '.');
     git(root, 'commit', '-q', '-m', 'Mine');
 
     const refused = await service.push({ id, jobId: job() });
     expect(refused).toMatchObject({ status: 'failed', reason: 'rejected' });
-    expect(git(bare, 'rev-parse', 'main')).toBe(theirs);
+    expect(bareGit(bare, 'rev-parse', 'main')).toBe(theirs);
   });
 
   it('says why when there is no remote or no branch', async () => {
