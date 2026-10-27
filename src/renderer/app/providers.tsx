@@ -90,7 +90,11 @@ function Appearance({ children }: { children: ReactNode }) {
       reducedMotion={motion === 'full' ? 'user' : 'always'}
       transition={motion === 'off' ? { duration: 0 } : undefined}
     >
-      {children}
+      <TooltipProvider
+        delayDuration={settings?.tooltipDelay === 'instant' ? 0 : 300}
+      >
+        {children}
+      </TooltipProvider>
     </MotionConfig>
   );
 }
@@ -111,14 +115,12 @@ export function Providers({ children }: { children: ReactNode }) {
       <RepoSync />
       <UpdateSync />
       <Appearance>
-        <TooltipProvider delayDuration={300}>
-          <ToastProvider>
-            <NavigationProvider>
-              <NoticeSync />
-              <WorkspaceUiProvider>{children}</WorkspaceUiProvider>
-            </NavigationProvider>
-          </ToastProvider>
-        </TooltipProvider>
+        <ToastProvider>
+          <NavigationProvider>
+            <NoticeSync />
+            <WorkspaceUiProvider>{children}</WorkspaceUiProvider>
+          </NavigationProvider>
+        </ToastProvider>
       </Appearance>
     </QueryClientProvider>
   );

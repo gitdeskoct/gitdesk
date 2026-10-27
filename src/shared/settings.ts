@@ -45,13 +45,27 @@ export const settingsSchema = z.object({
   contentWidth: z.enum(['compact', 'default', 'wide']),
   // Chromium zoom level: each step of 0.5 is roughly 10%, so -3..3 is about 50% to 200%.
   zoomLevel: z.number().min(-3).max(3).multipleOf(0.5),
+  // More contrast darkens hairlines and secondary text; it never changes the accent.
+  contrast: z.enum(['standard', 'more']),
+  underlineLinks: z.boolean(),
+  // How long a pointer rests before a tooltip opens.
+  tooltipDelay: z.enum(['standard', 'instant']),
   sidebarCollapsed: z.boolean(),
+  // Pinned, then recently opened repositories under the sidebar's links; 0 hides them.
+  sidebarRecent: z.union([z.literal(0), z.literal(5), z.literal(8)]),
+  // What the window shows when gitdesk starts: Home, Repositories or the last opened repository.
+  startPage: z.enum(['home', 'repositories', 'last']),
   localOnly: z.boolean(),
   // Workspace: how Home is laid out and how often repositories are checked.
   dashboardLayout: z.enum(['auto', 'centered', 'split']),
   dashboardDensity: z.enum(['comfortable', 'compact']),
   // Repositories: one centered column, or the list beside the selected repository. Auto splits on wide windows.
   repositoriesLayout: z.enum(['auto', 'centered', 'split']),
+  // The list shows names; branch, state and path open per row, or on every row when expanded.
+  repositoriesExpandRows: z.boolean(),
+  // The All, Local, Remote and Linked counts with their context, above the list.
+  repositoriesShowStats: z.boolean(),
+  repositoriesSort: z.enum(['opened', 'name', 'tree', 'sync']),
   watchRepositories: z.boolean(),
   refreshOnFocus: z.boolean(),
   // Minutes between background checks while the window is open; 0 turns them off.
@@ -178,11 +192,19 @@ export const DEFAULT_SETTINGS: Settings = {
   motion: 'full',
   contentWidth: 'default',
   zoomLevel: 0,
+  contrast: 'standard',
+  underlineLinks: false,
+  tooltipDelay: 'standard',
   sidebarCollapsed: false,
+  sidebarRecent: 5,
+  startPage: 'home',
   localOnly: false,
   dashboardLayout: 'auto',
   dashboardDensity: 'comfortable',
   repositoriesLayout: 'auto',
+  repositoriesExpandRows: false,
+  repositoriesShowStats: false,
+  repositoriesSort: 'opened',
   watchRepositories: true,
   refreshOnFocus: true,
   backgroundRefresh: 5,

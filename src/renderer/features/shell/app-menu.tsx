@@ -1,8 +1,11 @@
 import * as Menubar from '@radix-ui/react-menubar';
 import {
   ClipboardPaste,
+  CloudDownload,
   Copy,
+  Folder,
   FolderOpen,
+  House,
   Info,
   Keyboard,
   LogIn,
@@ -147,14 +150,35 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
     >
       <Menu label="File">
         {inShell && (
-          <Item
-            icon={Settings}
-            label="Settings"
-            hint={hint('settings')}
-            onSelect={() => run('settings')}
-          />
+          <>
+            <Item
+              icon={Plus}
+              label="New repository…"
+              hint={hint('newRepository')}
+              onSelect={() => run('newRepository')}
+            />
+            <Item
+              icon={FolderOpen}
+              label="Open repository…"
+              hint={hint('openRepository')}
+              onSelect={() => run('openRepository')}
+            />
+            <Item
+              icon={CloudDownload}
+              label="Clone repository…"
+              hint={hint('cloneRepository')}
+              onSelect={() => run('cloneRepository')}
+            />
+            <Separator />
+            <Item
+              icon={Settings}
+              label="Settings"
+              hint={hint('settings')}
+              onSelect={() => run('settings')}
+            />
+            <Separator />
+          </>
         )}
-        {inShell && <Separator />}
         {signedIn ? (
           <Item
             icon={LogOut}
@@ -200,6 +224,25 @@ export function AppMenu({ inShell }: { inShell: boolean }) {
       <Menu label="View">
         {inShell && (
           <>
+            <Item
+              icon={House}
+              label="Home"
+              hint={hint('goHome')}
+              onSelect={() => run('goHome')}
+            />
+            <Item
+              icon={Folder}
+              label="Repositories"
+              hint={hint('goRepositories')}
+              onSelect={() => run('goRepositories')}
+            />
+            <Item
+              icon={RefreshCw}
+              label="Check status again"
+              hint={hint('refresh')}
+              onSelect={() => run('refresh')}
+            />
+            <Separator />
             <Item
               icon={PanelLeft}
               label="Toggle sidebar"

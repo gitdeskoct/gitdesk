@@ -1,5 +1,7 @@
+import { useEffect, useRef } from 'react';
 import type { AuthStatus } from '../../../shared/ipc';
-import { useSettings } from '../../lib/queries';
+import { useRepositories, useSettings } from '../../lib/queries';
+import { byRecent } from '../../lib/repo-status';
 import { useNavigation, type Route } from '../../app/navigation';
 import { HomePage } from '../home/home-page';
 import { NotBuiltPage } from '../not-built/not-built-page';
@@ -68,11 +70,36 @@ function RoutePage({ route, status }: { route: Route; status: AuthStatus }) {
   }
 }
 
+// Settings › General › Open on start, once per window: later visits to Home stay on Home.
+function useStartPage() {
+  const { route, navigate } = useNavigation();
+  const { data: settings } = useSettings();
+  const repos = useRepositories();
+  const done = useRef(false);
+  useEffect(() => {
+    if (done.current || !settings || !repos.isFetched) return;
+    done.current = true;
+    // Anything already opened (a notification, a shortcut) wins over the start page.
+    if (route.name !== 'home') return;
+    if (settings.startPage === 'repositories')
+      navigate({ name: 'repositories' });
+    if (settings.startPage === 'last') {
+      const last = (repos.data ?? [])
+        .filter(
+          (repo) => repo.lastOpenedAt && repo.availability === 'available',
+        )
+        .sort(byRecent)[0];
+      if (last) navigate({ name: 'repository', id: last.id });
+    }
+  }, [settings, repos.isFetched, repos.data, route.name, navigate]);
+}
+
 // Full height, no gaps: title bar and navigation share the canvas; the page surface runs to the window edges.
 export function AppShell({ status }: { status: AuthStatus }) {
   const { route } = useNavigation();
   const collapsed = useSettings().data?.sidebarCollapsed ?? false;
   const inSettings = route.name === 'settings';
+  useStartPage();
 
   return (
     <div className="flex h-full flex-col bg-canvas">

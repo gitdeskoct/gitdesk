@@ -137,6 +137,10 @@ Measured with `.agents/skills/antislop-human/contrast-check.py` (WCAG 2.x relati
 | amber on-accent on accent / hover     | 9.30 / 10.96       | AA                           |
 | rose on-accent on accent / hover      | 7.90 / 9.52        | AA                           |
 
+### More contrast
+
+Settings › Appearance › Contrast: More changes three tokens and nothing else. Light: `--line` #b8bfca, `--line-strong` #7c8594 (3.72:1 on surface), `--muted` #464c58 (8.62:1). Dark: #3a3d44, #6a6e78 (3.63:1), #c6cad2 (11.29:1).
+
 ### Rules that follow from the numbers
 
 - **Accepted exception.** The owner accepted success, warning and the green accent at 4.38 to 4.43:1 on white. Wherever they carry text, they are always paired with an icon or set at weight 600, so meaning never rests on a thin colored word.
@@ -148,8 +152,10 @@ Measured with `.agents/skills/antislop-human/contrast-check.py` (WCAG 2.x relati
 Hierarchy is **Page → Section → Component**. A page has one title. Sections are separated by headings and space, with a hairline (`line`) where a divider is needed. Components sit in sections without a card around them.
 
 - **Shell.** The title bar and the sidebar share the `canvas` color, so they read as one frame.
+- **Sidebar.** Home, the Code links, then pinned and recently opened repositories (5 by default, 8 or none in Settings › General), each with Git's count of changed files and a danger icon when its folder is gone. Settings and the account sit at the bottom. Signed out, the account slot is a neutral "Sign in with Google" button with Google's four-colour G; collapsed, the G stays inside the button and the tooltip carries the words, as Google's guidelines ask.
 - **Title bar.** 44px tall (`TITLE_BAR_HEIGHT` in `src/main/window.ts`). The window uses a hidden title bar with native window controls overlaid in canvas colors, so the frame never flashes a different color on load.
 - **Menu bar.** On Windows and Linux the title bar carries an in-window File, Edit, View and Help menu (Radix Menubar). The native menu is removed there, which also removes its Reload and DevTools accelerators. macOS keeps a minimal native menu. Every menu item has real behavior, and its shortcut comes from the same list as Settings › Shortcuts. _Why: a desktop app is expected to have menus, and one shortcut list can't drift from what the menu says._
+- **Shortcuts follow GitHub Desktop** where gitdesk has the same action and the key is free: Ctrl+N new, Ctrl+O open a folder, Ctrl+Shift+O clone, Ctrl+T Repositories, Ctrl+P push, Ctrl+Shift+P pull, Ctrl+Shift+A editor, Ctrl+Shift+F file manager. gitdesk's own: Ctrl+Shift+H Home, Ctrl+F the page's search field, F5 check status, Ctrl+1–9 the repository tabs in order, Ctrl+Shift+T fetch. A repository key is handled by the button that owns the action, so the key and the button share one spinner, and a key whose button isn't shown does nothing.
 - **Workspace surface.** The `surface` panel is flush to the right and bottom window edges and has a single 6px corner at the top left, where it meets the sidebar and title bar.
 - **Breadcrumb header.** 48px tall, at the top of the workspace surface.
 - **Content width.** Content is centered in the workspace up to `--content-max`: 840px (compact), 1020px (default) or 1160px (wide), from the `contentWidth` setting. _Why: long lines are hard to scan, and users on wide monitors can opt into more._
@@ -258,7 +264,8 @@ A folder path, remote URL or Git URL that doesn't fit loses its middle, never it
 
 ## Repositories
 
-- **One list, three overlapping sets.** Local is registered on this computer, Remote is in the account, Linked is both. The statistics strip is the filter and says the counts overlap. State filters (Changed, Ahead and so on) only match repositories on this computer.
+- **One list, three overlapping sets.** Local is registered on this computer, Remote is in the account, Linked is both. A Where control with each count is the filter; the statistics strip, which says where each count comes from, opens with Show statistics (Settings › General remembers it). State filters (Changed, Ahead and so on) only match repositories on this computer.
+- **Names first, details on request.** A row is the repository's name, its Local and Remote tags and its description. A disclosure opens branch, working tree, sync, last opened and folder under it; Expand all and Collapse all set every row. Only what can't wait shows on a closed row: a missing folder, conflicts, an operation in progress, a remote that isn't ready, or work running on it. Sort (Recent, Name, Changes, Sync) and "Open every row's details" are remembered in Settings › General.
 - **Two layouts, one set of components.** Centered shows the table in the content column. Split shows the list beside the selected repository; arrows move the selection and Enter opens the full page. Under 860px of content (1100px for Auto) split falls back to the list, and a row opens its page. The choice lives in Settings › Workspace.
 - **Charts answer a question.** The details chart is titled with the question it answers, counts commits reachable from the current branch per local-time week by commit date, and has a text summary and a hidden table for screen readers. Bars are focusable and name their week. No scores, no percentages of health.
 - **Words, not zeros.** A number that has nothing to compare against says so (Not connected), and an unchecked folder is never called safe to delete.
@@ -282,7 +289,7 @@ A folder path, remote URL or Git URL that doesn't fit loses its middle, never it
 - **Any operation can finish here.** A merge, cherry-pick, revert or rebase started in a terminal shows in Changes with both sides named from Git's refs; Continue and Abort run Git's own commands with no editor, and Abort lists the edits outside the conflict that it leaves alone.
 - **Commits say who.** The composer shows the name and email Git will write and which config set them; the account picture appears only when that email is yours.
 - **Toolbar.** The diff toolbar is one Radix Toolbar (arrow keys move between items): previous and next file (Alt+↑/↓), change (`[` and `]`), Unified or Split, Hide whitespace, Wrap, Copy patch, Open in editor, More.
-- **The header is one row.** Name, tags, description and path sit on the left; branch picker, status chips, "Fetched …" and Fetch on the right. It wraps instead of stacking, so the tabs start close to the top.
+- **The header holds four details.** The name, the branch picker, the working tree and sync, with Fetch, Pull and Push on the right; it wraps instead of stacking, so the tabs start close to the top. The folder (with its copy button), description, where it lives and the last fetch, with its "may be out of date" warning, are in Overview › This repository; the Fetch button's tooltip says when it last ran.
 - **The commit message folds away.** In the split file pane, Hide folds the summary and description into one row (Show message, the summary so far, Commit). The choice is remembered on this computer. Committing with no summary opens the fields and focuses Summary instead of failing out of sight.
 - **Authors are 6px squares.** Your own commits (matched by your gitdesk account email or your global Git email) show your gitdesk account picture, or initials on the accent tint when there is no picture. Everyone else gets initials on `control`. gitdesk never asks another service for pictures.
 - **Size is measured, not guessed.** Repository Settings shows the folder on disk split into Git history (`chart-1`), files in the last commit (`chart-2`) and everything else (`faint`), with a stacked bar, a sentence and the largest tracked files. It re-measures after status changes (cached 30 seconds) and on Measure again. A very large folder stops counting and says the numbers are a lower bound. Rounding never says 0% or 100% about a part that is neither.

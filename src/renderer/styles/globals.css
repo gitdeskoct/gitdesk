@@ -186,6 +186,22 @@
 :root[data-content-width='wide'] {
   --content-max: 1160px;
 }
+/* Settings › Appearance › Contrast: More. Muted text 8.62:1 on surface (light) and 11.29:1 (dark);
+   line-strong reaches 3:1 as a UI edge (3.72 / 3.63). The accent and state colors stay. */
+:root[data-contrast='more'] {
+  --line: #b8bfca;
+  --line-strong: #7c8594;
+  --muted: #464c58;
+}
+:root[data-theme='dark'][data-contrast='more'] {
+  --line: #3a3d44;
+  --line-strong: #6a6e78;
+  --muted: #c6cad2;
+}
+/* Settings › Appearance › Always underline links. */
+:root[data-underline-links='on'] .link {
+  text-decoration-line: underline;
+}
 /* Settings › Code. The font family itself arrives as --code-font, set through CSSOM. */
 :root[data-code-size='12'] {
   --code-size: 0.75rem;
