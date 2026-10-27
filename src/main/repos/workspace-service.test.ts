@@ -963,9 +963,7 @@ describe('hosted Git remote', () => {
     expect(await safe.repos.copyGitCommand(safe.id)).toEqual({
       expiresAt: 1_790_000_000_000,
     });
-    expect(safe.copyText).toHaveBeenCalledWith(
-      `git -c "http.${HOSTED}.extraHeader=Authorization: Bearer art_v1_0123456789abcdef?expires=1790000000" push origin HEAD`,
-    );
+    expect(safe.copyText).toHaveBeenCalledWith('git push origin HEAD');
 
     const unsafe = hosting({
       terminalToken: vi.fn(async () => ({

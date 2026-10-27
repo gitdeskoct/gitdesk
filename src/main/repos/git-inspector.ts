@@ -279,6 +279,42 @@ export function gitAuthEnv(url: string, token: string): Record<string, string> {
   };
 }
 
+// Store a bounded token through Git's configured credential helper so a terminal can use plain
+// `git push`. No credential is written by gitdesk itself.
+export async function approveGitCredential(
+  dir: string,
+  url: string,
+  token: string,
+): Promise<void> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password)
+    throw new GitError('The hosted Git URL is not safe for credential storage.');
+  const helper = await gitAt(dir)
+    .raw(['config', '--get-all', 'credential.helper'])
+    .catch(() => '');
+  if (!helper.trim())
+    throw new GitError(
+      'Git has no credential helper configured. Configure one before copying a terminal push command.',
+    );
+  const input = [
+    'protocol=https',
+    `host=${parsed.host}`,
+    `path=${parsed.pathname.replace(/^\/+/, '')}`,
+    'username=x',
+    `password=${token}`,
+    '',
+    '',
+  ].join('\n');
+  const result = await gitBytes(dir, ['credential', 'approve'], {
+    maxBytes: 1000,
+    input,
+  });
+  if (result.code !== 0)
+    throw new GitError(
+      'Git could not save the hosted remote credential in its credential helper.',
+    );
+}
+
 export class GitError extends UserError {}
 export class GitTimeout extends GitError {}
 

@@ -283,8 +283,10 @@ export function HostedRemoteSection({
             Revoke tokens
           </Button>
           <span className="text-xs text-muted">
-            The command carries a {LIFETIME_WORDS[tokenLifetime] ?? '1 hour'}{' '}
-            token. Anyone who sees it can push until it expires.
+            Git saves a {LIFETIME_WORDS[tokenLifetime] ?? '1 hour'} token in
+            your configured credential helper, then the command uses plain
+            <code className="mx-1">git push</code>. Anyone with that helper
+            entry can push until it expires.
           </span>
         </div>
       )}
