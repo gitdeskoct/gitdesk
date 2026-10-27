@@ -33,6 +33,7 @@ import {
 } from '../../lib/format';
 import { ipcErrorMessage } from '../../lib/ipc-error';
 import { useSettings, useUpdateSettings } from '../../lib/queries';
+import { Segmented } from '../../components/ui/segmented';
 import {
   useCheckForUpdates,
   useDownloadUpdate,
@@ -535,9 +536,21 @@ export function UpdatesSection() {
         <SettingRow
           id="update-channel"
           label="Channel"
-          description="Published stable releases only. gitdesk has no preview channel."
+          description="Stable is recommended. Beta receives prerelease builds from a separate repository and may be less tested."
         >
-          <span className="text-[0.8125rem] text-muted">Stable</span>
+          {settings && (
+            <Segmented
+              label="Update channel"
+              value={settings.updateChannel}
+              onChange={(updateChannel) =>
+                updateSettings.mutate({ updateChannel })
+              }
+              options={[
+                { value: 'stable', label: 'Stable' },
+                { value: 'beta', label: 'Beta' },
+              ]}
+            />
+          )}
         </SettingRow>
         <SettingRow
           label="How downloads are checked"

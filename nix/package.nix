@@ -44,7 +44,7 @@ stdenv.mkDerivation {
   inherit version;
 
   src = fetchurl {
-    url = "https://github.com/BotCoder254/gitdesk-releases/releases/download/v${version}/${file}";
+    url = "https://github.com/gitdeskoct/gitdesk/releases/download/v${version}/${file}";
     inherit hash;
   };
 
@@ -129,7 +129,7 @@ stdenv.mkDerivation {
 
   meta = {
     description = "Desktop Git client with local-first history";
-    homepage = "https://github.com/BotCoder254/gitdesk-releases";
+    homepage = "https://github.com/gitdeskoct/gitdesk";
     license = lib.licenses.mit;
     mainProgram = "gitdesk";
     platforms = [ "x86_64-linux" ];
