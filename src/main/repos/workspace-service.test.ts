@@ -290,7 +290,7 @@ describe('workspace changes and diffs', () => {
     await service.discard({ id, paths: ['README.md', 'scratch.txt'] });
     expect(readFileSync(path.join(root, 'README.md'), 'utf8')).toBe('# hi\n');
     expect(trashItem).toHaveBeenCalledWith(
-      path.join(realpathSync(root), 'scratch.txt'),
+      path.join(realpathSync.native(root), 'scratch.txt'),
     );
     expect(existsSync(path.join(root, 'scratch.txt'))).toBe(false);
   });

@@ -612,7 +612,7 @@ describe('disconnect, rename and trash', () => {
     );
     expect(trashItem).not.toHaveBeenCalled();
 
-    const expectedTarget = realpathSync(root);
+    const expectedTarget = realpathSync.native(root);
     await service.trash({ id, confirmName: 'app' });
     expect(trashItem).toHaveBeenCalledWith(expectedTarget);
     expect(existsSync(root)).toBe(false);
