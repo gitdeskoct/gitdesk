@@ -89,6 +89,8 @@ jobs:
     name: Package smoke test (Linux)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      API_ORIGIN: ${{ secrets.API_ORIGIN }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,10 +102,10 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Packaged smoke test unavailable without API_ORIGIN
-        if: ${{ secrets.API_ORIGIN == '' }}
+        if: ${{ env.API_ORIGIN == '' }}
         run: echo "::notice::Skipping packaged-app smoke test because API_ORIGIN is unavailable to this workflow."
       # Packaged builds refuse a non-https API origin, so the smoke build needs a real one baked in.
-      - if: ${{ secrets.API_ORIGIN != '' }}
+      - if: ${{ env.API_ORIGIN != '' }}
         run: |
           case "$API_ORIGIN" in
             https://*) ;;
@@ -114,10 +116,10 @@ jobs:
           API_ORIGIN: ${{ secrets.API_ORIGIN }}
           VITE_API_ORIGIN: ${{ secrets.API_ORIGIN }}
       - name: Updater metadata is packaged
-        if: ${{ secrets.API_ORIGIN != '' }}
+        if: ${{ env.API_ORIGIN != '' }}
         run: test -f dist/linux-unpacked/resources/app-update.yml
       - name: Launch the packaged app
-        if: ${{ secrets.API_ORIGIN != '' }}
+        if: ${{ env.API_ORIGIN != '' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y xvfb
