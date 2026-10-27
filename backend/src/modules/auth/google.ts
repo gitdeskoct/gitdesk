@@ -42,8 +42,8 @@ export function buildAuthorizeUrl(input: {
 }): string {
   const url = new URL(GOOGLE.authorize);
   url.search = new URLSearchParams({
-    client_id: input.clientId,
-    redirect_uri: input.redirectUri,
+    client_id: input.clientId.trim(),
+    redirect_uri: input.redirectUri.trim(),
     response_type: 'code',
     scope: 'openid email profile',
     state: input.state,
@@ -88,6 +88,7 @@ export async function verifyGoogleIdToken(
 }
 
 const tokenResponse = z.object({ id_token: z.string().min(1) });
+const tokenError = z.object({ error: z.string().regex(/^[a-z0-9_]+$/).optional() });
 
 export const googleProvider: GoogleProvider = {
   async exchangeCode(input) {
@@ -98,14 +99,19 @@ export const googleProvider: GoogleProvider = {
         grant_type: 'authorization_code',
         code: input.code,
         code_verifier: input.codeVerifier,
-        redirect_uri: input.redirectUri,
-        client_id: input.clientId,
-        client_secret: input.clientSecret,
+        redirect_uri: input.redirectUri.trim(),
+        client_id: input.clientId.trim(),
+        client_secret: input.clientSecret.trim(),
       }),
     });
-    const body = res.ok ? tokenResponse.safeParse(await res.json()) : null;
+    const raw = await res.json().catch(() => null);
+    const body = res.ok ? tokenResponse.safeParse(raw) : null;
     if (!body?.success) {
-      throw new ApiError('AUTH_PROVIDER_ERROR', 'Google rejected the sign-in.');
+      const providerCode = tokenError.safeParse(raw).data?.error;
+      throw new ApiError(
+        'AUTH_PROVIDER_ERROR',
+        providerCode ? `Google rejected the sign-in (${providerCode}).` : 'Google rejected the sign-in.',
+      );
     }
     return body.data.id_token;
   },

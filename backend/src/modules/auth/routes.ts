@@ -40,6 +40,8 @@ const desktopRedirect = (port: number, params: Record<string, string>) =>
 
 const authLimit = rateLimit('AUTH_LIMITER', (c) => `${c.req.path}:${clientIp(c)}`);
 
+const publicOrigin = (value: string) => value.trim().replace(/\/+$/, '');
+
 export function authRoutes(google: GoogleProvider) {
   const app = new Hono<AppEnv>();
 
@@ -60,10 +62,11 @@ export function authRoutes(google: GoogleProvider) {
       },
       Date.now(),
     );
+    const origin = publicOrigin(c.env.PUBLIC_ORIGIN);
     return c.redirect(
       buildAuthorizeUrl({
         clientId: c.env.GOOGLE_CLIENT_ID,
-        redirectUri: c.env.PUBLIC_ORIGIN + callbackPath,
+        redirectUri: origin + callbackPath,
         state: googleState,
         nonce,
         codeChallenge: await sha256(googleVerifier),
@@ -95,19 +98,24 @@ export function authRoutes(google: GoogleProvider) {
       return back({ error: error === 'access_denied' ? 'access_denied' : 'provider_error' });
     }
 
+    let stage: 'exchange' | 'verify' | 'account' | 'desktop_code' = 'exchange';
     try {
+      const origin = publicOrigin(c.env.PUBLIC_ORIGIN);
       const idToken = await google.exchangeCode({
         code,
         codeVerifier: tx.googleCodeVerifier,
-        redirectUri: c.env.PUBLIC_ORIGIN + callbackPath,
+        redirectUri: origin + callbackPath,
         clientId: c.env.GOOGLE_CLIENT_ID,
         clientSecret: c.env.GOOGLE_CLIENT_SECRET,
       });
+      stage = 'verify';
       const profile = await google.verifyIdToken(idToken, {
         clientId: c.env.GOOGLE_CLIENT_ID,
         nonce: tx.nonce,
       });
+      stage = 'account';
       const account = await upsertGoogleAccount(db, profile, now);
+      stage = 'desktop_code';
       const desktopCode = await createDesktopCode(
         db,
         { accountId: account.id, desktopChallenge: tx.desktopChallenge },
@@ -121,6 +129,8 @@ export function authRoutes(google: GoogleProvider) {
         {
           requestId: c.get('requestId'),
           code: err instanceof ApiError ? err.code : 'INTERNAL',
+          stage,
+          error: err instanceof ApiError ? err.message : undefined,
         },
         'warn',
       );
