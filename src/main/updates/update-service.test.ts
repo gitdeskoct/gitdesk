@@ -22,6 +22,7 @@ class FakeUpdater extends EventEmitter implements Updater {
   autoInstallOnAppQuit = true;
   allowPrerelease = true;
   allowDowngrade = true;
+  setFeedURL = vi.fn();
   check = vi.fn(async () => {});
   download = vi.fn(async () => {});
   quitAndInstall = vi.fn();
@@ -41,12 +42,16 @@ let lastCheck: { at: number; ok: boolean } | null;
 const downloaded = vi.fn();
 const openExternal = vi.fn(async () => {});
 
-const setup = (installKind: UpdateStatus['installKind'] = 'nsis') =>
+const setup = (
+  installKind: UpdateStatus['installKind'] = 'nsis',
+  channel: 'stable' | 'beta' = 'stable',
+) =>
   createUpdateService({
     updater,
     installKind,
     currentVersion: '1.0.0',
     autoCheck: () => true,
+    updateChannel: () => channel,
     isOnline: () => online,
     busy: () => busy,
     lastCheck: {
@@ -83,6 +88,29 @@ describe('settings it forces on electron-updater', () => {
     expect(updater.autoInstallOnAppQuit).toBe(true);
   });
 
+  it('selects the stable GitHub feed before checking', async () => {
+    const service = setup();
+    await service.check();
+    expect(updater.setFeedURL).toHaveBeenCalledWith({
+      provider: 'github',
+      owner: 'gitdeskoct',
+      repo: 'gitdesk',
+      releaseType: 'release',
+    });
+  });
+
+  it('selects the beta repository and allows prereleases', async () => {
+    const service = setup('nsis', 'beta');
+    await service.check();
+    expect(updater.allowPrerelease).toBe(true);
+    expect(updater.setFeedURL).toHaveBeenCalledWith({
+      provider: 'github',
+      owner: 'BotCoder254',
+      repo: 'gitdesk-releases',
+      releaseType: 'prerelease',
+    });
+  });
+
   it('never installs a deb or pacman package on quit, since that asks for a password', () => {
     setup('deb');
     expect(updater.autoInstallOnAppQuit).toBe(false);
@@ -100,8 +128,7 @@ describe('checking', () => {
     expect(status.phase).toBe('available');
     expect(status).toMatchObject({
       release: { version: '1.1.0', sizeBytes: 96_400_000 },
-      releasePage:
-        'https://github.com/BotCoder254/gitdesk-releases/releases/tag/v1.1.0',
+      releasePage: 'https://github.com/gitdeskoct/gitdesk/releases/tag/v1.1.0',
     });
     expect(lastCheck).toEqual({ at: 1_000, ok: true });
   });
@@ -252,7 +279,7 @@ describe('restarting to install', () => {
     const service = await downloadedService();
     await service.openReleasePage();
     expect(openExternal).toHaveBeenCalledWith(
-      'https://github.com/BotCoder254/gitdesk-releases/releases/tag/v1.1.0',
+      'https://github.com/gitdeskoct/gitdesk/releases/tag/v1.1.0',
     );
   });
 });

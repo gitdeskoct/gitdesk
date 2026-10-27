@@ -73,20 +73,20 @@ backend        Cloudflare Worker and D1 backend
 
 ## Releases
 
-The source repository is [`gitdeskoct/gitdesk`](https://github.com/gitdeskoct/gitdesk). Installers and update metadata are published to [`BotCoder254/gitdesk-releases`](https://github.com/BotCoder254/gitdesk-releases).
+Stable releases and their update metadata are published in [`gitdeskoct/gitdesk`](https://github.com/gitdeskoct/gitdesk). Beta releases are published in [`BotCoder254/gitdesk-releases`](https://github.com/BotCoder254/gitdesk-releases), and are selected in Settings › Updates.
 
-The release workflow runs after pushes to `main`, checks the full app and Worker, builds Windows and Linux packages, runs packaged-app smoke tests, writes checksums and Nix metadata, and publishes only after artifact verification.
+The release workflow runs after pushes to `main`, checks the full app and Worker, builds Windows and Linux packages, runs packaged-app smoke tests, writes checksums and Nix metadata, and publishes only after artifact verification. A normal `x.y.z` version is stable; an explicit `x.y.z-beta.N` version is beta and is marked as a prerelease automatically.
 
 Required Actions configuration:
 
-| Name                   | Type     | Purpose                                                                              |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------ |
-| `API_ORIGIN`           | Variable | HTTPS origin baked into packaged builds                                              |
-| `RELEASES_TOKEN`       | Secret   | Fine-grained token with Contents write access only to `BotCoder254/gitdesk-releases` |
-| `WIN_SIGNING`          | Variable | Set to `required` to enforce Windows signing                                         |
-| `WIN_PUBLISHER_NAME`   | Variable | Expected Windows certificate subject                                                 |
-| `WIN_CSC_LINK`         | Secret   | Signing certificate input for electron-builder                                       |
-| `WIN_CSC_KEY_PASSWORD` | Secret   | Signing certificate password                                                         |
+| Name                   | Type     | Purpose                                                                                                |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `API_ORIGIN`           | Variable | HTTPS origin baked into packaged builds                                                                |
+| `RELEASES_TOKEN`       | Secret   | Fine-grained token with Contents write access only to `BotCoder254/gitdesk-releases` for beta releases |
+| `WIN_SIGNING`          | Variable | Set to `required` to enforce Windows signing                                                           |
+| `WIN_PUBLISHER_NAME`   | Variable | Expected Windows certificate subject                                                                   |
+| `WIN_CSC_LINK`         | Secret   | Signing certificate input for electron-builder                                                         |
+| `WIN_CSC_KEY_PASSWORD` | Secret   | Signing certificate password                                                                           |
 
 Create and rotate `RELEASES_TOKEN` outside the repository. Do not use a personal all-repositories token for releases.
 

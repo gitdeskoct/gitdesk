@@ -75,6 +75,7 @@ export const settingsSchema = z.object({
   notifyOnlyInBackground: z.boolean(),
   // Settings › Updates: check GitHub for a new version at start and every 6 hours. Never downloads by itself.
   autoCheckUpdates: z.boolean(),
+  updateChannel: z.enum(['stable', 'beta']),
   // The repository workspace: Changes beside the diff, or one centered column.
   workspaceLayout: z.enum(['auto', 'centered', 'split']),
   // Code and diffs. The font is applied through a CSS variable, so it is limited to name characters.
@@ -197,6 +198,7 @@ export const DEFAULT_SETTINGS: Settings = {
   notifyProblems: true,
   notifyOnlyInBackground: true,
   autoCheckUpdates: true,
+  updateChannel: 'stable',
   workspaceLayout: 'auto',
   codeTheme: 'github',
   codeFont: '',

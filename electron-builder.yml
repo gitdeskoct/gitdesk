@@ -93,6 +93,6 @@ pacman:
 
 publish:
   provider: github
-  owner: BotCoder254
-  repo: gitdesk-releases
+  owner: gitdeskoct
+  repo: gitdesk
   releaseType: release

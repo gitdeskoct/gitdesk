@@ -34,4 +34,4 @@ Changes that affect the desktop app and Worker should run both suites. Security-
 
 ## Commit messages
 
-Use a short imperative subject. Release automation recognizes `#minor`, `#major`, and `BREAKING CHANGE` when deciding the next version.
+Use a short imperative subject. Release automation recognizes `#minor`, `#major`, and `BREAKING CHANGE` when deciding the next stable version. To publish a beta, raise `package.json` to an explicit semver prerelease such as `1.1.0-beta.1`; the workflow routes prereleases to `BotCoder254/gitdesk-releases` and normal versions to `gitdeskoct/gitdesk`.

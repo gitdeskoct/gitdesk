@@ -558,6 +558,7 @@ async function start() {
     installKind,
     currentVersion: app.getVersion(),
     autoCheck: () => settings.get().autoCheckUpdates,
+    updateChannel: () => settings.get().updateChannel,
     isOnline: () => net.isOnline(),
     busy,
     lastCheck: {
