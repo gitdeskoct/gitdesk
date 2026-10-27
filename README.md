@@ -79,14 +79,14 @@ The release workflow runs after pushes to `main`, checks the full app and Worker
 
 Required Actions configuration:
 
-| Name                   | Type     | Purpose                                                                              |
-| ---------------------- | -------- | ------------------------------------------------------------------------------------ |
-| `API_ORIGIN`           | Variable | HTTPS origin baked into packaged builds                                              |
+| Name                   | Type     | Purpose                                                                                                |
+| ---------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `API_ORIGIN`           | Variable | HTTPS origin baked into packaged builds                                                                |
 | `RELEASES_TOKEN`       | Secret   | Fine-grained token with Contents write access only to `BotCoder254/gitdesk-releases` for beta releases |
-| `WIN_SIGNING`          | Variable | Set to `required` to enforce Windows signing                                         |
-| `WIN_PUBLISHER_NAME`   | Variable | Expected Windows certificate subject                                                 |
-| `WIN_CSC_LINK`         | Secret   | Signing certificate input for electron-builder                                       |
-| `WIN_CSC_KEY_PASSWORD` | Secret   | Signing certificate password                                                         |
+| `WIN_SIGNING`          | Variable | Set to `required` to enforce Windows signing                                                           |
+| `WIN_PUBLISHER_NAME`   | Variable | Expected Windows certificate subject                                                                   |
+| `WIN_CSC_LINK`         | Secret   | Signing certificate input for electron-builder                                                         |
+| `WIN_CSC_KEY_PASSWORD` | Secret   | Signing certificate password                                                                           |
 
 Create and rotate `RELEASES_TOKEN` outside the repository. Do not use a personal all-repositories token for releases.
 
