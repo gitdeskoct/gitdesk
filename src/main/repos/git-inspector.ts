@@ -81,7 +81,7 @@ export const SAFE_CONFIG = [
   'core.quotePath=false',
 ];
 
-// The Git gitdesk runs: the one on PATH, or one picked in Settings › Git and checked to answer as Git.
+// The Git gitdesk runs: the one on PATH, or one picked in Settings â€º Git and checked to answer as Git.
 let gitBinary: string | null = null;
 export function useGitBinary(binary: string | null): void {
   gitBinary = binary;
@@ -208,6 +208,7 @@ export function gitBytes(
   options: {
     maxBytes: number;
     input?: string | Buffer;
+    config?: string[];
     timeoutMs?: number;
     // Commands that would open an editor (continue, revert) accept the prepared message instead.
     noEditor?: boolean;
@@ -224,7 +225,11 @@ export function gitBytes(
   return new Promise((resolve, reject) => {
     const child = spawn(
       gitBinary ?? 'git',
-      [...SAFE_CONFIG.flatMap((c) => ['-c', c]), ...args],
+      [
+        ...SAFE_CONFIG.flatMap((c) => ['-c', c]),
+        ...(options.config ?? []).flatMap((c) => ['-c', c]),
+        ...args,
+      ],
       {
         cwd: dir,
         env,
@@ -279,6 +284,62 @@ export function gitAuthEnv(url: string, token: string): Record<string, string> {
   };
 }
 
+// Store a bounded token through trusted system/global helpers so a terminal can use plain `git push`.
+export async function approveGitCredential(
+  dir: string,
+  url: string,
+  token: string,
+): Promise<void> {
+  const parsed = new URL(url);
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password)
+    throw new GitError(
+      'The hosted Git URL is not safe for credential storage.',
+    );
+  const helpers = (
+    await Promise.all(
+      (['--system', '--global'] as const).map(async (scope) => {
+        const result = await gitBytes(
+          dir,
+          ['config', scope, '--get-all', 'credential.helper'],
+          { maxBytes: 16_000 },
+        );
+        return result.code === 0
+          ? result.stdout
+              .toString('utf8')
+              .split(/\r?\n/)
+              .map((value) => value.trim())
+              .filter(Boolean)
+          : [];
+      }),
+    )
+  ).flat();
+  if (!helpers.length)
+    throw new GitError(
+      'Git has no credential helper configured. Configure one before copying a terminal push command.',
+    );
+  const input = [
+    'protocol=https',
+    `host=${parsed.host}`,
+    `path=${parsed.pathname.replace(/^\/+/, '')}`,
+    'username=x',
+    `password=${token}`,
+    '',
+    '',
+  ].join('\n');
+  const result = await gitBytes(dir, ['credential', 'approve'], {
+    maxBytes: 1000,
+    input,
+    // Repository-local helpers are deliberately excluded: they can be shell commands.
+    config: [
+      'credential.helper=',
+      ...helpers.map((helper) => `credential.helper=${helper}`),
+    ],
+  });
+  if (result.code !== 0)
+    throw new GitError(
+      'Git could not save the hosted remote credential in its credential helper.',
+    );
+}
 export class GitError extends UserError {}
 export class GitTimeout extends GitError {}
 
@@ -367,7 +428,7 @@ export const STATUS_ARGS = [
   '-z',
   '--untracked-files=normal',
 ];
-// How the Changes list asks Git (Settings › Git › Changes and staging). By default every untracked
+// How the Changes list asks Git (Settings â€º Git â€º Changes and staging). By default every untracked
 // file is listed on its own, not just its new folder, so each can be staged alone.
 export type ChangesOptions = {
   untracked: 'all' | 'normal';
@@ -611,8 +672,8 @@ export async function listChanges(
       await readStatus(root, workspaceStatusArgs(options)),
       MAX_CHANGES_FILES,
     );
-    // Each side's line counts come from that side's own comparison: Index → Working tree for
-    // unstaged rows, HEAD → Index for staged ones. Counts are a nicety, so a failure leaves them out.
+    // Each side's line counts come from that side's own comparison: Index â†’ Working tree for
+    // unstaged rows, HEAD â†’ Index for staged ones. Counts are a nicety, so a failure leaves them out.
     const numstat = (cached: boolean) =>
       git
         .raw([

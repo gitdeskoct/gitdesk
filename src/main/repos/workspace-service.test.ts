@@ -957,28 +957,44 @@ describe('hosted Git remote', () => {
 
   it('copies a push command that names HEAD, never a branch, and refuses unsafe tokens', async () => {
     const root = makeRepo();
+    const previousHome = process.env.HOME;
+    const previousUserProfile = process.env.USERPROFILE;
+    process.env.HOME = dir;
+    process.env.USERPROFILE = dir;
+    git(
+      root,
+      'config',
+      '--global',
+      'credential.helper',
+      `store --file=${path.join(dir, 'credentials')}`,
+    );
     git(root, 'remote', 'add', 'origin', HOSTED);
-    const safe = await setup(root, { hosting: hosting() });
-    safe.store.setRemote(safe.id, REMOTE_ID);
-    expect(await safe.repos.copyGitCommand(safe.id)).toEqual({
-      expiresAt: 1_790_000_000_000,
-    });
-    expect(safe.copyText).toHaveBeenCalledWith(
-      `git -c "http.${HOSTED}.extraHeader=Authorization: Bearer art_v1_0123456789abcdef?expires=1790000000" push origin HEAD`,
-    );
+    try {
+      const safe = await setup(root, { hosting: hosting() });
+      safe.store.setRemote(safe.id, REMOTE_ID);
+      expect(await safe.repos.copyGitCommand(safe.id)).toEqual({
+        expiresAt: 1_790_000_000_000,
+      });
+      expect(safe.copyText).toHaveBeenCalledWith('git push origin HEAD');
 
-    const unsafe = hosting({
-      terminalToken: vi.fn(async () => ({
-        token: 'x"; rm -rf ~; "',
-        expiresAt: 1,
-      })),
-    });
-    const bad = await setup(root, { hosting: unsafe, db: 'other.db' });
-    bad.store.setRemote(bad.id, REMOTE_ID);
-    await expect(bad.repos.copyGitCommand(bad.id)).rejects.toThrow(
-      /isn't safe/,
-    );
-    expect(bad.copyText).not.toHaveBeenCalled();
+      const unsafe = hosting({
+        terminalToken: vi.fn(async () => ({
+          token: 'x"; rm -rf ~; "',
+          expiresAt: 1,
+        })),
+      });
+      const bad = await setup(root, { hosting: unsafe, db: 'other.db' });
+      bad.store.setRemote(bad.id, REMOTE_ID);
+      await expect(bad.repos.copyGitCommand(bad.id)).rejects.toThrow(
+        /isn't safe/,
+      );
+      expect(bad.copyText).not.toHaveBeenCalled();
+    } finally {
+      if (previousHome === undefined) delete process.env.HOME;
+      else process.env.HOME = previousHome;
+      if (previousUserProfile === undefined) delete process.env.USERPROFILE;
+      else process.env.USERPROFILE = previousUserProfile;
+    }
   });
 });
 

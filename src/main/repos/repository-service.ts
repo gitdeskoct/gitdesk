@@ -31,6 +31,7 @@ import { sameUrl } from '../remote/git-auth';
 import { NameTakenError, type RemoteService } from '../remote/remote-service';
 import {
   canonicalPath,
+  approveGitCredential,
   describeGitError,
   gitAt,
   GitError,
@@ -1040,9 +1041,8 @@ export function createRepositoryService(deps: {
           "The server sent a token that isn't safe to paste into a terminal.",
         );
       const target = name && SHELL_SAFE_NAME.test(name) ? name : url;
-      deps.desktop.copyText(
-        `git -c "http.${url}.extraHeader=Authorization: Bearer ${token}" push ${target} HEAD`,
-      );
+      await approveGitCredential(row.rootPath, url, token);
+      deps.desktop.copyText(`git push ${target} HEAD`);
       return { expiresAt };
     },
 
