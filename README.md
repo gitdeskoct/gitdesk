@@ -16,7 +16,6 @@
 
 ## What it does
 
-gitdesk brings Git work into a focused desktop workspace:
 
 - inspect history, branches, diffs, and repository status
 - stage files, write commits, fetch, push, and manage remotes
