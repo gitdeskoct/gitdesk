@@ -1,3 +1,4 @@
+import { idleMcp } from '../test/mcp-stub';
 import {
   cleanup as cleanupRender,
   render,
@@ -157,6 +158,7 @@ function install(list: () => Promise<RepositorySummary[]>) {
     diff: vi.fn(never),
   };
   window.desktop = {
+    mcp: idleMcp(),
     updates: idleUpdates(),
     platform: 'win32',
     app: {

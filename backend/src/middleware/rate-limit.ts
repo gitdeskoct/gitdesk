@@ -9,7 +9,8 @@ type Limiter =
   | 'WRITE_LIMITER'
   | 'GIT_LIMITER'
   | 'PULL_LIMITER'
-  | 'SYNC_LIMITER';
+  | 'SYNC_LIMITER'
+  | 'MCP_IP_LIMITER';
 
 export const clientIp = (c: Context<AppEnv>): string =>
   c.req.header('cf-connecting-ip') ?? 'unknown';

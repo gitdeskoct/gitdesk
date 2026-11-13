@@ -8,7 +8,7 @@ export type NotificationSink = {
   show(notice: { title: string; body: string }, onClick: () => void): void;
 };
 
-export type NoticeKind = 'clone' | 'problem' | 'update' | 'test';
+export type NoticeKind = 'clone' | 'problem' | 'update' | 'mcp' | 'test';
 
 const REPEAT_GAP_MS = 60_000;
 // Windows and macOS truncate long notifications; keep both lines short and whole.
@@ -34,7 +34,8 @@ export function createNotifier(deps: {
     const s = deps.settings();
     if (kind === 'test') return true;
     if (!s.notifications) return false;
-    if (kind === 'update') return true;
+    // An update, or an agent waiting for an answer, has no finer switch of its own.
+    if (kind === 'update' || kind === 'mcp') return true;
     return kind === 'clone' ? s.notifyClone : s.notifyProblems;
   }
 
@@ -42,7 +43,7 @@ export function createNotifier(deps: {
     // Returns where the notice went, for tests and for the Settings test button.
     notify(kind: NoticeKind, notice: AppNotice): 'system' | 'window' | 'none' {
       if (!allowed(kind)) return 'none';
-      const key = `${kind}:${notice.repositoryId ?? ''}:${notice.title}`;
+      const key = `${kind}:${notice.repositoryId ?? ''}:${notice.key ?? notice.title}`;
       const sent = lastSent.get(key);
       if (kind !== 'test' && sent !== undefined && now() - sent < REPEAT_GAP_MS)
         return 'none';

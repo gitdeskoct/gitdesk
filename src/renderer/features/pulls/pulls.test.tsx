@@ -1,3 +1,4 @@
+import { idleMcp } from '../../test/mcp-stub';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
@@ -211,6 +212,7 @@ function install(list: PullRequest[]) {
     stats: vi.fn(never),
   };
   window.desktop = {
+    mcp: idleMcp(),
     updates: idleUpdates(),
     platform: 'win32',
     app: {

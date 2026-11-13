@@ -175,6 +175,10 @@ export const settingsSchema = z.object({
     z.literal(3600),
     z.literal(28_800),
   ]),
+  // MCP on this computer: whether agents can connect at all, and whether they may ask to change
+  // anything. Every change still waits for Allow.
+  mcpLocal: z.boolean(),
+  mcpLocalWrites: z.boolean(),
   editor: z.enum(EDITOR_IDS),
   editorGotoLine: z.boolean(),
   editorOpenFolder: z.boolean(),
@@ -272,6 +276,8 @@ export const DEFAULT_SETTINGS: Settings = {
   autoHostedRemote: true,
   pullStrategy: 'ff-only',
   hostingTokenLifetime: 3600,
+  mcpLocal: false,
+  mcpLocalWrites: false,
   editor: 'system',
   editorGotoLine: true,
   editorOpenFolder: true,

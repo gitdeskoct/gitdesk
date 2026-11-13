@@ -1,3 +1,4 @@
+import { idleMcp } from '../../test/mcp-stub';
 import {
   fireEvent,
   render,
@@ -177,6 +178,7 @@ function install() {
     onChanged: vi.fn(() => () => {}),
   };
   window.desktop = {
+    mcp: idleMcp(),
     updates: idleUpdates(),
     platform: 'win32',
     app: {

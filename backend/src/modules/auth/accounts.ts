@@ -21,7 +21,7 @@ export async function getAccount(db: Db, id: string) {
   return db.query.accounts.findFirst({ where: eq(accounts.id, id) });
 }
 
-async function findByIdentity(db: Db, provider: string, subject: string) {
+export async function findByIdentity(db: Db, provider: string, subject: string) {
   const [row] = await db
     .select({ account: accounts })
     .from(authIdentities)

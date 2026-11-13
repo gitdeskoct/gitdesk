@@ -361,3 +361,47 @@ export const repositoryBranches = sqliteTable(
     index('repository_branches_recent').on(t.repositoryId, t.deletedAt, t.updatedAt),
   ],
 );
+
+// MCP agents authorized through OAuth. The grant itself (client, scopes, token hashes) lives in
+// the OAuth library's KV; this row only remembers when the grant was last used, under the random
+// key the grant carries in its metadata.
+export const mcpGrantUsage = sqliteTable(
+  'mcp_grant_usage',
+  {
+    grantKey: text('grant_key').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    createdAt: integer('created_at').notNull(),
+    lastUsedAt: integer('last_used_at').notNull(),
+  },
+  (t) => [index('mcp_grant_usage_account').on(t.accountId), index('mcp_grant_usage_last_used').on(t.lastUsedAt)],
+);
+
+export const MCP_AUDIT_OUTCOMES = ['ok', 'refused', 'failed'] as const;
+
+// Every write an agent made and every call that was refused. Tool name and outcome only: never
+// arguments, file contents or comment text. repository_id has no foreign key so the record
+// outlives the repository.
+export const mcpAudit = sqliteTable(
+  'mcp_audit',
+  {
+    id: text('id').primaryKey(),
+    accountId: text('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    grantKey: text('grant_key').notNull(),
+    clientName: text('client_name').notNull(),
+    tool: text('tool').notNull(),
+    repositoryId: text('repository_id'),
+    outcome: text('outcome', { enum: MCP_AUDIT_OUTCOMES }).notNull(),
+    // A short code such as RATE_LIMITED or MISSING_SCOPE; null when the call went through.
+    reason: text('reason'),
+    createdAt: integer('created_at').notNull(),
+  },
+  (t) => [
+    index('mcp_audit_account_created').on(t.accountId, t.createdAt, t.id),
+    index('mcp_audit_time').on(t.createdAt),
+    check('mcp_audit_outcome', sql`${t.outcome} IN ('ok', 'refused', 'failed')`),
+  ],
+);

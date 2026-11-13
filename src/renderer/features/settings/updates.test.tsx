@@ -1,3 +1,4 @@
+import { idleMcp } from '../../test/mcp-stub';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -43,6 +44,7 @@ function mount(status: UpdateStatus, ui: 'section' | 'titlebar' = 'section') {
   download = vi.fn(() => new Promise<UpdateStatus>(() => {}));
   check = vi.fn(() => new Promise<UpdateStatus>(() => {}));
   window.desktop = {
+    mcp: idleMcp(),
     platform: 'win32',
     updates: { ...bridge, install, download, check },
     auth: {

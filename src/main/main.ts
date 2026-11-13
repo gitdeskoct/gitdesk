@@ -44,6 +44,9 @@ import {
   type WorkspaceService,
 } from './repos/workspace-service';
 import { createHandle } from './ipc/handle';
+import { MCP_IPC } from '../shared/mcp';
+import { createMcpService } from './mcp/mcp-service';
+import { isMcpInvocation, runMcpProxy } from './mcp/proxy';
 import { registerIpc } from './ipc/register';
 import { createNotifier } from './notifier';
 import { registerAppScheme, serveRendererFrom } from './protocol';
@@ -105,7 +108,15 @@ const formatBytes = (bytes: number) =>
     ? `${(bytes / 1024 ** 2).toFixed(1)} MB`
     : `${Math.max(1, Math.round(bytes / 1024))} KB`;
 
-if (!app.requestSingleInstanceLock()) {
+// `gitdesk --mcp` is what an AI agent starts: it relays MCP messages between the agent's stdio
+// and the gitdesk that is already open, then exits. It opens no window and takes no lock.
+if (isMcpInvocation(process.argv)) {
+  app.disableHardwareAcceleration();
+  void runMcpProxy(app.getPath('userData')).then(
+    (code) => app.exit(code),
+    () => app.exit(1),
+  );
+} else if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   // Sandbox every renderer, including any future window, not only the ones that opt in.
@@ -140,6 +151,8 @@ async function start() {
   const db = openDatabase(path.join(userData, 'gitdesk.db'));
   // Assigned once the repository service exists; settings changes before that have nothing to apply to.
   let workspace: WorkspaceService | null = null;
+  // Assigned once the services agents reach exist.
+  let mcp: ReturnType<typeof createMcpService> | null = null;
   const settings = new SettingsService(db, (patch) => {
     if (
       patch.watchRepositories !== undefined ||
@@ -148,6 +161,8 @@ async function start() {
       repos.applySettings();
     if (patch.watchRepositories !== undefined || patch.autoFetch !== undefined)
       workspace?.applySettings();
+    if (patch.mcpLocal !== undefined || patch.mcpLocalWrites !== undefined)
+      void mcp?.applySettings();
     if (!mainWindow) return;
     if (patch.theme) applyChromeColors(mainWindow);
     if (patch.zoomLevel !== undefined)
@@ -281,7 +296,11 @@ async function start() {
     },
     settings: () => settings.get(),
     signedIn: () => auth.getStatus().status === 'authenticated',
-    emit: (list) => mainWindow?.webContents.send(REPOS_IPC.changed, list),
+    emit: (list) => {
+      mainWindow?.webContents.send(REPOS_IPC.changed, list);
+      // A repository removed from gitdesk drops out of what agents may see.
+      mcp?.repositoriesChanged(list.map((repo) => repo.id));
+    },
     emitProgress: sendProgress,
     // A conflict gitdesk's own pull just stopped on is already on screen, so it isn't news.
     onProblem: (repo, kind) =>
@@ -431,6 +450,7 @@ async function start() {
   });
   await gitInstall.restore();
   app.on('before-quit', () => {
+    void mcp?.dispose();
     updates.dispose();
     tray?.destroy();
     move.dispose();
@@ -586,9 +606,47 @@ async function start() {
     log,
   });
 
+  // A development run is started through Electron with the app folder; a packaged gitdesk is its
+  // own program (the AppImage file, when it is one).
+  // Agents started from an Electron host (VS Code and its extensions, for one) inherit
+  // ELECTRON_RUN_AS_NODE=1, which turns this program into plain Node and stops it at once. An
+  // empty value counts as unset. Release builds also have the RunAsNode fuse off; a build without
+  // that fuse, and a development run, rely on this.
+  const launchEnv = { ELECTRON_RUN_AS_NODE: '' };
+  const mcpService = createMcpService({
+    db,
+    userData,
+    settings: () => settings.get(),
+    services: { repos, workspace: ws, branches, pulls, source: localSource },
+    launch: app.isPackaged
+      ? {
+          command: process.env.APPIMAGE ?? process.execPath,
+          args: ['--mcp'],
+          env: launchEnv,
+        }
+      : {
+          command: process.execPath,
+          args: [app.getAppPath(), '--mcp'],
+          env: process.env.GITDESK_USER_DATA
+            ? { ...launchEnv, GITDESK_USER_DATA: process.env.GITDESK_USER_DATA }
+            : launchEnv,
+        },
+    account: {
+      signedIn: () => auth.getStatus().status === 'authenticated',
+      call: (fn) => auth.authorized(fn),
+      api,
+    },
+    copyText: (text) => clipboard.writeText(text),
+    notify: (notice) => notifier.notify('mcp', notice),
+    emit: (status) => mainWindow?.webContents.send(MCP_IPC.changed, status),
+    log,
+  });
+  mcp = mcpService;
+
   registerIpc(
     createHandle(() => mainWindow?.webContents ?? null, origins),
     {
+      mcp: mcpService,
       app: createAppService(() => mainWindow),
       auth,
       settings,
@@ -632,6 +690,7 @@ async function start() {
   updates.start();
   void auth.restore();
   repos.start();
+  void mcpService.start();
 
   app.on('activate', () => {
     if (!mainWindow) openWindow();

@@ -8,6 +8,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ToastProvider, useToast } from '../components/ui/toast';
 import { TooltipProvider } from '../components/ui/tooltip';
 import { keys, repoKeys, useSettings } from '../lib/queries';
+import { useMcpSync } from '../lib/mcp-queries';
 import { useUpdateSync } from '../lib/update-queries';
 import { NavigationProvider, useNavigation } from './navigation';
 import { useAppearance } from './use-appearance';
@@ -45,6 +46,7 @@ function RepoSync() {
 
 function UpdateSync() {
   useUpdateSync(useQueryClient());
+  useMcpSync(useQueryClient());
   return null;
 }
 

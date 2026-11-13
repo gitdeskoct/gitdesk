@@ -253,6 +253,18 @@ const MIGRATIONS = [
   ALTER TABLE merge_operations_next RENAME TO merge_operations;
   CREATE INDEX merge_operations_repo ON merge_operations (repository_id, updated_at);
   CREATE INDEX merge_operations_time ON merge_operations (created_at);`,
+  // What agents did through MCP on this computer: every change, and every call that was refused.
+  // Tool names and outcomes only, never arguments or file contents.
+  `CREATE TABLE mcp_calls (
+    id TEXT PRIMARY KEY,
+    client TEXT NOT NULL,
+    tool TEXT NOT NULL,
+    repository_name TEXT,
+    outcome TEXT NOT NULL CHECK (outcome IN ('ok', 'refused', 'failed')),
+    reason TEXT,
+    at INTEGER NOT NULL
+  );
+  CREATE INDEX mcp_calls_time ON mcp_calls (at);`,
 ];
 
 export type AppDatabase = DatabaseSync;

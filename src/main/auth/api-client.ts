@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MCP_OUTCOMES, mcpGrantSchema } from '../../shared/mcp';
 import { accountSummarySchema, sessionInfoSchema } from '../../shared/ipc';
 import { PULL_EVENTS } from '../../shared/pulls';
 import {
@@ -321,6 +322,27 @@ export type SourceBlobResponse = z.infer<typeof sourceBlobResponse>;
 export type TokenResponse = z.infer<typeof tokenResponse>;
 type Fetch = (url: string, init: RequestInit) => Promise<Response>;
 
+const mcpStatusResponse = z.object({ endpoint: z.url().max(2048) });
+const mcpGrantsResponse = z.object({
+  grants: z.array(mcpGrantSchema).max(100),
+  more: z.boolean(),
+});
+const mcpAuditResponse = z.object({
+  events: z
+    .array(
+      z.object({
+        id: z.string(),
+        clientName: z.string().max(200),
+        tool: z.string().max(100),
+        repositoryId: z.string().nullable(),
+        outcome: z.enum(MCP_OUTCOMES),
+        reason: z.string().max(100).nullable(),
+        createdAt: z.number(),
+      }),
+    )
+    .max(50),
+});
+
 export function createApiClient(origin: string, fetchImpl: Fetch) {
   async function request<T>(
     path: string,
@@ -568,6 +590,17 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
                     : null) as z.ZodType<T> | null,
         { ...init, token },
       ),
+    mcpStatus: (token: string) =>
+      request('/api/v1/mcp/status', mcpStatusResponse, { token }),
+    mcpGrants: (token: string) =>
+      request('/api/v1/mcp/grants', mcpGrantsResponse, { token }),
+    mcpRevokeGrant: (token: string, id: string) =>
+      request(`/api/v1/mcp/grants/${encodeURIComponent(id)}/revoke`, null, {
+        method: 'POST',
+        token,
+      }),
+    mcpAudit: (token: string) =>
+      request('/api/v1/mcp/audit?limit=20', mcpAuditResponse, { token }),
     revokeSession: (token: string, id: string) =>
       request(`/api/v1/auth/sessions/${encodeURIComponent(id)}`, null, {
         method: 'DELETE',

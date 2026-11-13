@@ -57,6 +57,13 @@
       "when": 1793004962926,
       "tag": "0007_branches",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1794520233550,
+      "tag": "0008_mcp",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { BranchesApi } from './branches';
+import type { McpApi } from './mcp';
 import type { SyncApi } from './sync';
 import type { UpdatesApi } from './updates';
 import type { PullsApi } from './pulls';
@@ -138,6 +139,8 @@ export type AppNotice = {
   body: string;
   tone: 'success' | 'danger' | 'info';
   repositoryId: string | null;
+  // Repeats of the same notice are held back for a minute; a distinct key is never a repeat.
+  key?: string;
 };
 
 export type TestNotificationResult = 'shown' | 'unsupported' | 'off';
@@ -184,4 +187,5 @@ export interface DesktopApi {
   source: SourceApi;
   branches: BranchesApi;
   updates: UpdatesApi;
+  mcp: McpApi;
 }
