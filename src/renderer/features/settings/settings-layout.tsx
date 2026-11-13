@@ -2,6 +2,7 @@ import {
   AppWindow,
   ArrowDownToLine,
   ArrowLeft,
+  Bot,
   Braces,
   Cloud,
   FolderTree,
@@ -36,6 +37,7 @@ import { DevicesSection } from './devices-section';
 import { GeneralSection } from './general-section';
 import { GitSection } from './git-section';
 import { HostingSection } from './hosting-section';
+import { McpSection } from './mcp-section';
 import { PullsSection } from './pulls-section';
 import { SyncSection } from './sync-section';
 import { ShortcutsSection } from './shortcuts-section';
@@ -68,6 +70,7 @@ const GROUPS: {
       { id: 'account', icon: User },
       { id: 'hosting', icon: Cloud },
       { id: 'devices', icon: Laptop },
+      { id: 'mcp', icon: Bot },
     ],
   },
   {
@@ -151,6 +154,7 @@ export function SettingsLayout({
     account: <AccountSection status={status} />,
     hosting: <HostingSection status={status} />,
     devices: <DevicesSection status={status} />,
+    mcp: <McpSection status={status} />,
     updates: <UpdatesSection />,
     about: <AboutSection />,
   };

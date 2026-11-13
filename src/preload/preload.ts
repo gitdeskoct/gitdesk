@@ -11,6 +11,7 @@ import {
   type RepositorySummary,
 } from '../shared/repos';
 import { BRANCHES_IPC as B } from '../shared/branches';
+import { MCP_IPC as M, type McpLocalStatus } from '../shared/mcp';
 import { PULLS_IPC as P } from '../shared/pulls';
 import { SOURCE_IPC as F, type SourceChange } from '../shared/source';
 import { SYNC_IPC as S } from '../shared/sync';
@@ -255,6 +256,22 @@ const api: DesktopApi = {
         callback(status);
       ipcRenderer.on(U.changed, listener);
       return () => ipcRenderer.removeListener(U.changed, listener);
+    },
+  },
+  mcp: {
+    localStatus: () => ipcRenderer.invoke(M.localStatus),
+    setRepositories: (repositories) =>
+      ipcRenderer.invoke(M.setRepositories, { repositories }),
+    copyConfig: () => ipcRenderer.invoke(M.copyConfig),
+    localCalls: () => ipcRenderer.invoke(M.localCalls),
+    decide: (input) => ipcRenderer.invoke(M.decide, input),
+    remoteStatus: () => ipcRenderer.invoke(M.remoteStatus),
+    revokeGrant: (id) => ipcRenderer.invoke(M.revokeGrant, id),
+    onChanged(callback) {
+      const listener = (_event: IpcRendererEvent, status: McpLocalStatus) =>
+        callback(status);
+      ipcRenderer.on(M.changed, listener);
+      return () => ipcRenderer.removeListener(M.changed, listener);
     },
   },
 };

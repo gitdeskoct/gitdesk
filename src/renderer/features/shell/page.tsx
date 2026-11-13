@@ -4,6 +4,7 @@ import { Button } from '../../components/ui/button';
 import { EmptyState } from '../../components/ui/empty-state';
 import { cn } from '../../lib/cn';
 import { Breadcrumbs, type Crumb } from './breadcrumbs';
+import { McpApprovalBand } from '../mcp/approval-band';
 import { ConnectionStatus } from './connection-status';
 
 // Settings read best as a single column; app pages use the content width setting; tables use it all.
@@ -45,6 +46,7 @@ export function Page({
         )}
       </header>
       <ConnectionStatus />
+      <McpApprovalBand />
       <div className="flex min-h-0 flex-1">
         {fill ? (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col">{children}</div>

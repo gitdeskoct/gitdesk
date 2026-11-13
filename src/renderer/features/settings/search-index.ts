@@ -14,6 +14,7 @@ export const SECTION_LABELS: Record<SettingsSection, string> = {
   hosting: 'Git hosting',
   sync: 'Sync',
   devices: 'Devices',
+  mcp: 'MCP',
   updates: 'Updates',
   about: 'About',
 };
@@ -652,6 +653,43 @@ export const SETTINGS_INDEX: SettingEntry[] = [
     label: 'Signed-in devices',
     section: 'devices',
     keywords: 'sessions computers revoke sign out',
+  },
+  {
+    id: 'mcp-local',
+    label: 'Let agents on this computer connect',
+    section: 'mcp',
+    keywords:
+      'mcp ai agent assistant model context protocol local stdio claude cursor',
+  },
+  {
+    id: 'mcp-setup',
+    label: 'Agent setup',
+    section: 'mcp',
+    keywords: 'mcp configuration config json command copy',
+  },
+  {
+    id: 'mcp-repositories',
+    label: 'Repositories agents can see',
+    section: 'mcp',
+    keywords: 'mcp share allow repositories access',
+  },
+  {
+    id: 'mcp-writes',
+    label: 'Let agents ask to make changes',
+    section: 'mcp',
+    keywords: 'mcp write commit push branch approve allow deny',
+  },
+  {
+    id: 'mcp-endpoint',
+    label: 'Server address for agents',
+    section: 'mcp',
+    keywords: 'mcp remote url endpoint oauth account',
+  },
+  {
+    id: 'mcp-agents',
+    label: 'Agents connected to your account',
+    section: 'mcp',
+    keywords: 'mcp authorized grants revoke access tokens',
   },
   {
     id: 'version',

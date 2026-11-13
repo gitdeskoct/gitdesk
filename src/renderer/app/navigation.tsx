@@ -22,6 +22,7 @@ export type SettingsSection =
   | 'hosting'
   | 'sync'
   | 'devices'
+  | 'mcp'
   | 'updates'
   | 'about';
 export type RepoTab =

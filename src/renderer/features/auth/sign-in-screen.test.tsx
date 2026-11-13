@@ -1,3 +1,4 @@
+import { idleMcp } from '../../test/mcp-stub';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -46,6 +47,7 @@ describe('SignInScreen', () => {
       },
     };
     window.desktop = {
+      mcp: idleMcp(),
       platform: 'win32',
       updates: idleUpdates(),
       ...desktop,

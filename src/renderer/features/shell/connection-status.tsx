@@ -9,7 +9,7 @@ import {
 } from '../../lib/queries';
 import { authNoticeMessages } from '../auth/messages';
 
-function Line({
+export function Line({
   icon,
   tone,
   children,
@@ -22,7 +22,6 @@ function Line({
 }) {
   return (
     <div
-      role="status"
       className={cn(
         'flex-none border-b border-line px-6 py-2.5 text-[0.8125rem] text-ink',
         tone === 'warning' ? 'bg-warning-soft' : 'bg-sunken',
@@ -35,7 +34,10 @@ function Line({
         )}
       >
         {icon}
-        <span className="min-w-0 flex-1">{children}</span>
+        {/* Only the words are announced; the buttons stay ordinary controls. */}
+        <span role="status" className="min-w-0 flex-1">
+          {children}
+        </span>
         {action}
       </div>
     </div>

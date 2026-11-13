@@ -10,6 +10,10 @@
   "main": "src/index.ts",
   // Newest date the bundled test runtime (@cloudflare/vitest-plugin 1.4.0) supports; bump with it.
   "compatibility_date": "2026-10-06",
+  // nodejs_compat: the MCP handler (agents/mcp/server) uses node:async_hooks.
+  // global_fetch_strictly_public: the OAuth library fetches MCP clients' metadata documents, and
+  // refuses to accept them unless those fetches can only reach the public internet.
+  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
   "upload_source_maps": true,
   // Preview URLs stay off: an uploaded but undeployed version must not be reachable with real data.
   "workers_dev": true,
@@ -46,6 +50,9 @@
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
   // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
   "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
+  // MCP authorization (@cloudflare/workers-oauth-provider): registered clients, grants and token
+  // hashes. Create it with `npx wrangler kv namespace create OAUTH_KV --env=` and paste the id.
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_PRODUCTION_OAUTH_KV_ID" }],
   // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.
   "ratelimits": [
     { "name": "AUTH_LIMITER", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },
@@ -58,7 +65,12 @@
     // Pull request writes: comments, reviews and snapshots come in bursts during a review.
     { "name": "PULL_LIMITER", "namespace_id": "4106", "simple": { "limit": 60, "period": 60 } },
     // Push reports: one per push to the account's Git URL, plus retries of earlier ones.
-    { "name": "SYNC_LIMITER", "namespace_id": "4107", "simple": { "limit": 60, "period": 60 } }
+    { "name": "SYNC_LIMITER", "namespace_id": "4107", "simple": { "limit": 60, "period": 60 } },
+    // MCP tool calls, per authorized agent: one runaway agent can't spend the account's API budget.
+    { "name": "MCP_LIMITER", "namespace_id": "4108", "simple": { "limit": 120, "period": 60 } },
+    // /mcp and its discovery documents per address, before any token is looked up: a flood of
+    // made-up tokens costs no KV reads. Above MCP_LIMITER so several agents behind one address fit.
+    { "name": "MCP_IP_LIMITER", "namespace_id": "4109", "simple": { "limit": 600, "period": 60 } }
   ],
   "triggers": {
     "crons": ["0 3 * * *"]
@@ -110,6 +122,7 @@
         }
       ],
       "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories-dev" }],
+      "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "361084f401724f29a02f1d05a9fc17fa" }],
       // Same limits as production in their own namespaces, so dev traffic never spends production's.
       "ratelimits": [
         { "name": "AUTH_LIMITER", "namespace_id": "5101", "simple": { "limit": 10, "period": 60 } },
@@ -118,7 +131,9 @@
         { "name": "WRITE_LIMITER", "namespace_id": "5104", "simple": { "limit": 10, "period": 60 } },
         { "name": "GIT_LIMITER", "namespace_id": "5105", "simple": { "limit": 30, "period": 60 } },
         { "name": "PULL_LIMITER", "namespace_id": "5106", "simple": { "limit": 60, "period": 60 } },
-        { "name": "SYNC_LIMITER", "namespace_id": "5107", "simple": { "limit": 60, "period": 60 } }
+        { "name": "SYNC_LIMITER", "namespace_id": "5107", "simple": { "limit": 60, "period": 60 } },
+        { "name": "MCP_LIMITER", "namespace_id": "5108", "simple": { "limit": 120, "period": 60 } },
+        { "name": "MCP_IP_LIMITER", "namespace_id": "5109", "simple": { "limit": 600, "period": 60 } }
       ],
       "triggers": {
         "crons": ["0 3 * * *"]

@@ -1,3 +1,4 @@
+import { idleMcp } from '../../test/mcp-stub';
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {
@@ -201,6 +202,7 @@ function install(list: RepositorySummary[] = [repo()]) {
     log: vi.fn(),
   };
   window.desktop = {
+    mcp: idleMcp(),
     updates: idleUpdates(),
     platform: 'win32',
     app: {

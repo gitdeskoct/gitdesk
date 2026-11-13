@@ -71,6 +71,31 @@ Review records for repositories the account owns. A pull request is only ever fo
 
 Every OID is a client-reported fact: the Worker checks its shape and that it belongs to a recorded snapshot, but has no Git data to verify it against.
 
+### MCP for AI agents (`src/modules/mcp`)
+
+A remote [MCP](https://modelcontextprotocol.io) server over Streamable HTTP, so an agent can read the account's hosted repositories and pull request records. It runs no Git and reaches no one's computer: local working trees are served by the desktop app's own MCP server (Settings, MCP, This computer).
+
+| Route | Purpose |
+| --- | --- |
+| `POST /mcp` | MCP tool discovery and calls. Needs an MCP access token for this resource; a desktop session token is refused, and an MCP token is refused by `/api/v1/*`. Through `MCP_IP_LIMITER` per address before the token is looked up, then `MCP_LIMITER` per grant. |
+| `GET /.well-known/oauth-protected-resource[/mcp]`, `GET /.well-known/oauth-authorization-server` | Discovery metadata (RFC 9728, RFC 8414). |
+| `POST /oauth/register` | Dynamic client registration, `AUTH_LIMITER` per address. Clients that publish a Client ID Metadata Document need none. |
+| `GET`/`POST /authorize` | The consent page. Shows who is asking and where access goes; the person picks scopes, then confirms who they are with Google. Bound to the browser that opened it by a `__Host-` cookie; one use. |
+| `GET /oauth/google/callback` | Google's redirect target for MCP consent. Links only to an existing account, never creates one; an unknown Google account goes back to the agent as `access_denied`. |
+| `POST /oauth/token` | Authorization code (PKCE S256) and refresh. `REFRESH_LIMITER` per address. |
+| `GET /api/v1/mcp/status`, `GET /api/v1/mcp/grants`, `POST /api/v1/mcp/grants/:id/revoke`, `GET /api/v1/mcp/audit` | Settings, MCP in the desktop app: the endpoint, authorized agents with scopes and last use, revoke, and the audit trail. Desktop session only. |
+
+Scopes, each enforced by the tools that need it (an agent sees only the tools its grant covers, and each call checks again):
+
+| Scope | Grants |
+| --- | --- |
+| `repo:read` | Always included. Repositories, branches, files, commits, pushes and activity. |
+| `pr:read` | Pull requests with reviews, comments and history. |
+| `pr:write` | Comment, review, edit, close and reopen pull requests. Never merge or push. Brings `pr:read` with it. |
+| `offline_access` | A refresh token. Without it the grant ends with its one-hour access token. With it, a grant lasts 30 days from last use and 90 days at most. |
+
+Only the scopes the consent page offered for that client can be granted. Tokens and grants are the OAuth library's, in `OAUTH_KV` (hashed, props encrypted). D1 keeps `mcp_grant_usage` (last use, at most one write a minute) and `mcp_audit`: every write, and every read refused for scope or for an id that isn't the account's, with the tool, repository, outcome and reason, never arguments. Rate-limit refusals are logged, not audited. The cron removes audit rows after 90 days.
+
 ### Repository lifecycle
 
 D1, R2 and the Git host can't commit together, so each repository row records how far its storage got in `status`:
@@ -111,6 +136,7 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 | `pull_request_snapshots` | Each comparison version: source, target and merge-base commits, and its mergeability check. |
 | `pull_request_reviews`, `pull_request_comments`, `pull_request_comment_anchors` | Review decisions, comments and the snapshot each line comment points at. |
 | `pull_request_activity`, `pull_request_merge_results` | The timeline, and one row per reported merge operation. |
+| `mcp_grant_usage`, `mcp_audit` | When each MCP grant was last used, and what agents did or were refused. |
 
 ## Configuration
 
@@ -130,7 +156,10 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 | `API_LIMITER` | rate limit binding | `wrangler.jsonc` | Every signed-in request, 120 per 60 seconds per account |
 | `WRITE_LIMITER` | rate limit binding | `wrangler.jsonc` | Repository writes, 10 per 60 seconds per account, to protect D1's daily row-write quota |
 | `GIT_LIMITER` | rate limit binding | `wrangler.jsonc` | Git tokens, 30 per 60 seconds per account. The desktop reuses a token until a minute before it expires. |
-| `PULL_LIMITER` | rate limit binding | `wrangler.jsonc` | Pull request writes, 60 per 60 seconds per account |
+| `PULL_LIMITER` | rate limit binding | `wrangler.jsonc` | Pull request writes, 60 per 60 seconds per account, shared by the desktop and MCP agents |
+| `MCP_LIMITER` | rate limit binding | `wrangler.jsonc`, namespace 4108 or 5108 | MCP calls, 120 per 60 seconds per authorized agent |
+| `MCP_IP_LIMITER` | rate limit binding | `wrangler.jsonc`, namespace 4109 or 5109 | `/mcp` and its discovery documents, 600 per 60 seconds per IP, before any token is looked up |
+| `OAUTH_KV` | KV binding | `wrangler.jsonc`, one namespace per environment. Create with `npx wrangler kv namespace create OAUTH_KV --env=` (or `--env dev`) and paste the id | MCP OAuth clients, grants, token hashes and consent transactions |
 
 `PUBLIC_ORIGIN` is an origin with no trailing slash, because the code appends `/api/v1/auth/google/callback` to it.
 
@@ -152,6 +181,8 @@ Add one authorized redirect URI per origin the Worker runs on, in the form `<PUB
 
 - Local: `http://localhost:8787/api/v1/auth/google/callback`
 - Production: `https://<your-worker-origin>/api/v1/auth/google/callback`
+
+MCP consent has its own Google callback, so add `<PUBLIC_ORIGIN>/oauth/google/callback` for each origin too.
 
 The Worker requests the `openid email profile` scopes, so the OAuth consent screen needs those. Copy the client ID and client secret for the next steps.
 
@@ -213,7 +244,8 @@ Two Workers on account `5b14dbcfcd4e8acdb4bad6aff07ce149`, from one `wrangler.js
 | Worker | `gitdesk-api` | `gitdesk-api-dev` |
 | D1 | `gitdesk-db` | `gitdesk-db-dev` |
 | R2 | `gitdesk-repositories` | `gitdesk-repositories-dev` |
-| Rate-limit namespaces | 4101–4107 | 5101–5107 |
+| Rate-limit namespaces | 4101–4109 | 5101–5109 |
+| MCP OAuth KV | `OAUTH_KV` (production id) | `OAUTH_KV` (dev id) |
 | Traces sampled | 5% | 100% |
 | Deploy | `npm run deploy` | `npm run deploy:dev` |
 | Migrate | `npm run db:migrate:remote` | `npm run db:migrate:dev` |
@@ -270,6 +302,7 @@ npx wrangler secret put JWT_SIGNING_KEY --env=
 The Google client must list every callback as an authorized redirect URI, or Google stops sign-in with `redirect_uri_mismatch`:
 
 - `<PUBLIC_ORIGIN>/api/v1/auth/google/callback`
+- `<PUBLIC_ORIGIN>/oauth/google/callback` (MCP consent)
 
 ### Observability
 

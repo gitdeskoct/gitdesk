@@ -124,6 +124,13 @@ import type { Notifier } from '../notifier';
 import { installModeSchema, UPDATES_IPC as U } from '../../shared/updates';
 import type { UpdateService } from '../updates/update-service';
 import type { Handle } from './handle';
+import {
+  MCP_IPC as M,
+  mcpApprovalInputSchema,
+  mcpGrantIdSchema,
+  mcpRepositoriesInputSchema,
+} from '../../shared/mcp';
+import type { McpService } from '../mcp/mcp-service';
 
 const none = z.undefined();
 
@@ -163,6 +170,7 @@ export function registerIpc(
     remoteSource: RemoteSource;
     branches: BranchService;
     updates: UpdateService;
+    mcp: McpService;
   },
 ): void {
   const {
@@ -181,7 +189,44 @@ export function registerIpc(
     source,
     remoteSource,
   } = services;
-  const { branches, updates } = services;
+  const { branches, updates, mcp } = services;
+  // MCP: the renderer picks repositories by id and answers approvals by id. It never names a
+  // program, a path or a URL; the copied setup text is built in main.
+  handle(
+    M.localStatus,
+    none,
+    userFacing(() => mcp.status()),
+  );
+  handle(
+    M.setRepositories,
+    mcpRepositoriesInputSchema,
+    userFacing((input) => mcp.setRepositories(input.repositories)),
+  );
+  handle(
+    M.copyConfig,
+    none,
+    userFacing(() => mcp.copyConfig()),
+  );
+  handle(
+    M.localCalls,
+    none,
+    userFacing(() => mcp.calls()),
+  );
+  handle(
+    M.decide,
+    mcpApprovalInputSchema,
+    userFacing((input) => mcp.decide(input)),
+  );
+  handle(
+    M.remoteStatus,
+    none,
+    userFacing(() => mcp.remoteStatus()),
+  );
+  handle(
+    M.revokeGrant,
+    mcpGrantIdSchema,
+    userFacing((grantId) => mcp.revokeGrant(grantId)),
+  );
   // Updates: no input carries a URL or path; the release page is built in main.
   handle(U.status, none, () => updates.status());
   handle(U.check, none, () => updates.check());
