@@ -20,15 +20,17 @@ export function mcpSocketPath(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   if (platform === 'win32') return `\\\\.\\pipe\\gitdesk-mcp-${tag(userData)}`;
-  const inProfile = path.join(userData, 'mcp.sock');
+  // A Unix socket path follows POSIX rules, whatever system computes it.
+  const posix = path.posix;
+  const inProfile = posix.join(userData, 'mcp.sock');
   if (inProfile.length <= SOCKET_PATH_MAX) return inProfile;
   const name = `gitdesk-mcp-${tag(userData)}.sock`;
   const runtime = env.XDG_RUNTIME_DIR;
-  if (runtime && path.isAbsolute(runtime)) {
-    const inRuntime = path.join(runtime, name);
+  if (runtime && posix.isAbsolute(runtime)) {
+    const inRuntime = posix.join(runtime, name);
     if (inRuntime.length <= SOCKET_PATH_MAX) return inRuntime;
   }
-  return path.join(privateTempDir(), name);
+  return posix.join(privateTempDir(), name);
 }
 
 // <tmp>/gitdesk-<uid>: the folder, not the socket name, is what has to be this user's.
