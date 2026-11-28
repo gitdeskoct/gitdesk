@@ -24,6 +24,9 @@ import { openDatabase } from '../db/database';
 import { createRepositoryService } from '../repos/repository-service';
 import { createRepositoryStore } from '../repos/repository-store';
 import { createWorkspaceService } from '../repos/workspace-service';
+import { createApiClient, ApiRequestError } from '../auth/api-client';
+import { UserError } from '../errors';
+import { createAccountRecords } from './account-records';
 import { createLocalRecords, createViewedStore } from './local-records';
 import { parseMergeTree, parseNameStatus, parseNumstatFiles } from './pull-git';
 import { createPullService } from './pull-service';
@@ -160,10 +163,172 @@ async function setup(
       draft: false,
       key: crypto.randomUUID(),
     });
-  return { repoId, pulls, open, store };
+  return { repoId, pulls, open, store, db };
 }
 
 const job = () => crypto.randomUUID();
+
+describe('repository-scoped pull records', () => {
+  it('sends the hosted repository id with every individual request, with no unscoped retry on 404', async () => {
+    const repositoryId = crypto.randomUUID();
+    const pull = crypto.randomUUID();
+    const comment = crypto.randomUUID();
+    const fetch = vi.fn(async (_url: string, _init: RequestInit) =>
+      Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 }),
+    );
+    const records = createAccountRecords({
+      repositoryId,
+      localRepositoryId: crypto.randomUUID(),
+      api: createApiClient('https://fixture.invalid', fetch),
+      call: (fn) => fn('fixture'),
+    });
+    const actor = { accountId: 'owner', name: 'Test', avatarUrl: null };
+    expect(await records.get(pull)).toBeNull();
+    for (const call of [
+      () => records.comments(pull),
+      () => records.reviews(pull),
+      () => records.activity(pull, null),
+      () =>
+        records.addComment(pull, {
+          author: actor,
+          body: 'test',
+          anchor: null,
+          parentId: null,
+        }),
+      () => records.editComment(pull, comment, { body: 'edit' }, actor),
+      () => records.deleteComment(pull, comment, actor),
+      () =>
+        records.addReview(pull, {
+          author: actor,
+          decision: 'approved',
+          body: '',
+          version: 1,
+          sourceOid: 'a'.repeat(40),
+          targetOid: 'b'.repeat(40),
+        }),
+      () => records.recordEvent(pull, 'merge_aborted', null, actor),
+      () => records.setStatus(pull, 'closed', actor),
+      () =>
+        records.recordMerge(
+          pull,
+          {
+            operationId: crypto.randomUUID(),
+            mergeCommitOid: 'a'.repeat(40),
+            targetOid: 'b'.repeat(40),
+          },
+          actor,
+        ),
+    ])
+      await expect(call()).rejects.toThrow();
+    const base = `/api/v1/repositories/${repositoryId}/pull-requests/${pull}`;
+    expect(
+      fetch.mock.calls.map(
+        ([url, init]) => `${init.method} ${new URL(url).pathname}`,
+      ),
+    ).toEqual([
+      `GET ${base}`,
+      `GET ${base}/comments`,
+      `GET ${base}/reviews`,
+      `GET ${base}/activity`,
+      `POST ${base}/comments`,
+      `PATCH ${base}/comments/${comment}`,
+      `DELETE ${base}/comments/${comment}`,
+      `POST ${base}/reviews`,
+      `POST ${base}/events`,
+      `POST ${base}/close`,
+      `POST ${base}/merge-result`,
+    ]);
+  });
+
+  it('rechecks a comment grant inside the authenticated callback, including after token renewal', async () => {
+    let allowed = true;
+    const refusal = new UserError('This repository is no longer shared.');
+    const post = vi.fn(async () =>
+      Response.json({ error: { code: 'SESSION_EXPIRED' } }, { status: 401 }),
+    );
+    const records = createAccountRecords({
+      repositoryId: crypto.randomUUID(),
+      localRepositoryId: crypto.randomUUID(),
+      api: createApiClient('https://fixture.invalid', post),
+      async call(fn) {
+        try {
+          return await fn('expired');
+        } catch (err) {
+          if (
+            !(err instanceof ApiRequestError && err.code === 'SESSION_EXPIRED')
+          )
+            throw err;
+          allowed = false;
+          return fn('renewed');
+        }
+      },
+    });
+    const send = () =>
+      records.addComment(
+        crypto.randomUUID(),
+        {
+          author: { accountId: 'owner', name: 'Test', avatarUrl: null },
+          body: 'test',
+          anchor: null,
+          parentId: null,
+        },
+        () => {
+          if (!allowed) throw refusal;
+        },
+      );
+    await expect(send()).rejects.toBe(refusal);
+    expect(post).toHaveBeenCalledTimes(1);
+    await expect(send()).rejects.toBe(refusal);
+    expect(post).toHaveBeenCalledTimes(1);
+  });
+
+  it('never shows or settles a different checkout’s merge, or edits its comments', async () => {
+    const root = makeRepo();
+    const { repoId, pulls, open, store, db } = await setup(root);
+    const pull = await open();
+    const sibling = crypto.randomUUID();
+    store.insert({
+      id: sibling,
+      rootPath: path.join(dir, 'other'),
+      pathKey: sibling,
+      name: 'other',
+      description: null,
+      activity: 'added',
+      now: 1,
+    });
+    db.prepare(`INSERT INTO merge_operations (id, repository_id, pull_id, kind, state, source_oid, target_oid, result_oid, created_at, updated_at)
+      VALUES (?, ?, ?, 'merge', 'report_pending', ?, ?, ?, 1, 1)`).run(
+      job(),
+      sibling,
+      pull.id,
+      pull.latest!.sourceOid,
+      pull.latest!.targetOid,
+      pull.latest!.sourceOid,
+    );
+    const ref = { repoId, id: pull.id };
+    expect((await pulls.readStoredDetail(ref)).mergeOperation).toBeNull();
+    expect(await pulls.get(ref)).toMatchObject({
+      mergeOperation: null,
+      pull: { status: 'open' },
+    });
+    const parent = await pulls.addComment({
+      ...ref,
+      body: 'mine',
+      parentId: null,
+      line: null,
+    });
+    const wrong = createLocalRecords(db, sibling);
+    await expect(
+      wrong.editComment(pull.id, parent.id, { body: 'changed' }, parent.author),
+    ).rejects.toThrow();
+    await expect(
+      wrong.deleteComment(pull.id, parent.id, parent.author),
+    ).rejects.toThrow();
+    expect(await pulls.comments(ref)).toMatchObject([
+      { id: parent.id, body: 'mine', deleted: false },
+    ]);
+  });
+});
 
 describe('comparing branches', () => {
   it('refuses pairs that make no pull request', async () => {
@@ -184,6 +349,19 @@ describe('comparing branches', () => {
     expect(await problem('unrelated', 'main')).toBe('unrelated');
     expect(await problem('behind', 'main')).toBe('nothing-to-merge');
     expect(await problem('feature', 'main')).toBe('ok');
+  });
+
+  it('does not substitute a locally computed merge base when the stored comparison has none', async () => {
+    const { repoId, pulls, open, db } = await setup(makeRepo());
+    const pull = await open();
+    const ref = { repoId, id: pull.id };
+    db.prepare(
+      'UPDATE pull_snapshots SET merge_base_oid = NULL WHERE pull_id = ?',
+    ).run(pull.id);
+    expect((await pulls.readStoredDetail(ref)).comparison).toBeNull();
+    expect((await pulls.get(ref)).comparison?.mergeBaseOid).toBe(
+      pull.latest!.mergeBaseOid,
+    );
   });
 
   it('shows what the source adds since the merge base, not what the target gained meanwhile', async () => {
@@ -249,7 +427,18 @@ describe('reviews and comments', () => {
     commit(root, 'More filters');
     git(root, 'switch', '-q', 'main');
 
-    const detail = await pulls.get({ repoId, id: pull.id });
+    const ref = { repoId, id: pull.id };
+    const before = await pulls.readRecord(ref);
+    const stored = await pulls.readStoredDetail(ref);
+    expect(stored.pull).toEqual(before);
+    expect(stored.pull.latest).toEqual(pull.latest);
+    expect(stored.comparison?.sourceOid).toBe(pull.latest!.sourceOid);
+    expect(stored.comparison?.commits.map((c) => c.subject)).toEqual([
+      'Improve search',
+    ]);
+    expect(await pulls.readRecord(ref)).toEqual(before);
+
+    const detail = await pulls.get(ref);
     expect(detail.pull.latest!.version).toBe(2);
     expect(detail.pull.review).toEqual({
       decision: 'approved',
@@ -655,7 +844,14 @@ describe('mergeability and merging', () => {
     expect((await pulls.get({ repoId, id: pull.id })).pull.status).toBe('open');
 
     offline = false;
-    const detail = await pulls.get({ repoId, id: pull.id });
+    const ref = { repoId, id: pull.id };
+    const attempts = recordMerge.mock.calls.length;
+    expect((await pulls.readStoredDetail(ref)).mergeOperation?.state).toBe(
+      'report_pending',
+    );
+    expect((await pulls.readRecord(ref)).status).toBe('open');
+    expect(recordMerge).toHaveBeenCalledTimes(attempts);
+    const detail = await pulls.get(ref);
     expect(detail.pull.status).toBe('merged');
     expect(detail.mergeOperation?.state).toBe('completed');
     expect(new Set(recordMerge.mock.calls.map((call) => call[0])).size).toBe(1);

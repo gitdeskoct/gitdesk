@@ -1,16 +1,22 @@
-import { mkdtemp, readFile, rm, stat } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LOCAL_READ_TOOLS, type McpLocalStatus } from '../../shared/mcp';
+import { looksSecret } from '../../shared/mcp-file-privacy';
 import type { RepositorySummary } from '../../shared/repos';
 import { DEFAULT_SETTINGS, type Settings } from '../../shared/settings';
 import { openDatabase, type AppDatabase } from '../db/database';
+import { createLocalRecords, createViewedStore } from '../pulls/local-records';
+import { createPullService } from '../pulls/pull-service';
+import { createRepositoryStore } from '../repos/repository-store';
+import { createSourceService } from '../repos/source-service';
 import { mcpSocketPath, mcpTokenPath, privateTempDir } from './endpoint';
 import { cleanName, clientNameOf } from './local-server';
-import { looksSecret, type LocalServices } from './local-tools';
+import type { LocalServices } from './local-tools';
 import { createMcpService } from './mcp-service';
 import { isMcpInvocation, runMcpProxy } from './proxy';
 
@@ -94,6 +100,21 @@ beforeEach(async () => {
       remotes: vi.fn(async () => []),
       stage: vi.fn(async () => ({ status: 'done' })),
       unstage: vi.fn(),
+      prepareCommit: vi.fn(async () => ({
+        branch: 'main',
+        head: head.headOid,
+        tree: 'c'.repeat(40),
+        paths: ['b.txt'],
+      })),
+      preparePush: vi.fn(async () => ({
+        branch: head.current,
+        branchOid: head.headOid,
+        remote: 'origin',
+        target: 'refs/heads/main',
+        tracked: true,
+        label: 'https://host/repo.git',
+        url: 'https://someone:password@host/repo.git',
+      })),
       commit: vi.fn(async () => ({
         status: 'committed',
         oid: 'a'.repeat(40),
@@ -106,14 +127,16 @@ beforeEach(async () => {
     branches: { compare: vi.fn(), mergeability: vi.fn(), create: vi.fn() },
     pulls: {
       list: vi.fn(),
-      get: vi.fn(),
+      readStoredDetail: vi.fn(),
+      readRecord: vi.fn(),
       comments: vi.fn(),
       reviews: vi.fn(),
       addComment: vi.fn(),
     },
     source: {
       list: vi.fn(),
-      read: vi.fn(async () => ({
+      agentRenameSource: vi.fn(async () => null),
+      readForAgent: vi.fn(async () => ({
         kind: 'text',
         text: 'hello',
         size: 5,
@@ -289,6 +312,39 @@ describe('local MCP tools', () => {
     bot.close();
   });
 
+  it('refuses an ignored worktree file over stdio but reads a tracked match', async () => {
+    const root = await mkdtemp(path.join(dir, 'repo-'));
+    const git = (...args: string[]) => execFileSync('git', args, { cwd: root });
+    git('init', '-q');
+    await writeFile(path.join(root, '.gitignore'), '*.log\n');
+    await writeFile(path.join(root, 'local.log'), 'ignored fixture');
+    await writeFile(path.join(root, 'kept.log'), 'tracked fixture');
+    git('add', '-f', 'kept.log');
+    const source = createSourceService({
+      rootOf: () => root,
+      showItemInFolder: vi.fn(),
+    });
+    services.source.agentRenameSource!.mockImplementation(
+      source.agentRenameSource,
+    );
+    services.source.readForAgent!.mockImplementation(source.readForAgent);
+    const bot = agent();
+    await bot.open();
+    const denied = await bot.call('read_file', {
+      repositoryId: SHARED,
+      path: 'local.log',
+    });
+    expect(denied.isError).toBe(true);
+    expect(denied.text).toContain('ignored');
+    expect(denied.text).not.toContain('ignored fixture');
+    const allowed = await bot.call('read_file', {
+      repositoryId: SHARED,
+      path: 'kept.log',
+    });
+    expect(allowed.data.text).toBe('tracked fixture');
+    bot.close();
+  });
+
   it('refuses paths outside the repository and files that look like credentials', async () => {
     const bot = agent();
     await bot.open();
@@ -318,7 +374,7 @@ describe('local MCP tools', () => {
       expect(reply.isError).toBe(true);
       expect(reply.text).toContain('credentials');
     }
-    expect(services.source.read).not.toHaveBeenCalled();
+    expect(services.source.readForAgent).not.toHaveBeenCalled();
     expect(
       (
         await bot.call('read_file', {
@@ -328,6 +384,127 @@ describe('local MCP tools', () => {
       ).data.text,
     ).toBe('hello');
     expect(looksSecret('docs/environment.md')).toBe(false);
+    bot.close();
+  });
+
+  it('reads stored PRs and prepares comments without changing records; only Allow posts', async () => {
+    const store = createRepositoryStore(db);
+    const actor = { accountId: null, name: 'Test', avatarUrl: null };
+    const recordsFor = (id: string) => createLocalRecords(db, id);
+    const seed = async (id: string) => {
+      store.insert({
+        id,
+        rootPath: path.join(dir, id),
+        pathKey: id,
+        name: id,
+        description: null,
+        activity: 'added',
+        now: 1,
+      });
+      return recordsFor(id).create({
+        title: id === SHARED ? 'Shared change' : 'Private change',
+        description: '',
+        sourceRef: 'feature',
+        targetRef: 'main',
+        draft: false,
+        key: crypto.randomUUID(),
+        author: actor,
+      });
+    };
+    const pull = await seed(SHARED);
+    const sibling = await seed(PRIVATE);
+    db.prepare(`INSERT INTO merge_operations (id, repository_id, pull_id, kind, state, source_oid, result_oid, created_at, updated_at)
+      VALUES (?, ?, ?, 'merge', 'report_pending', ?, ?, 1, 1)`).run(
+      crypto.randomUUID(),
+      SHARED,
+      pull.id,
+      'a'.repeat(40),
+      'b'.repeat(40),
+    );
+    Object.assign(
+      services.pulls,
+      createPullService({
+        db,
+        store,
+        recordsFor,
+        author: async () => actor,
+        viewed: createViewedStore(db),
+        workspace: {
+          rootOf: () => dir,
+          serial: vi.fn(),
+          lockHeld: vi.fn(),
+          keepCopy: vi.fn(),
+          operationInProgress: vi.fn(),
+          push: vi.fn(),
+        },
+        addActivity: vi.fn(),
+        refresh: vi.fn(),
+      }),
+    );
+    const records = recordsFor(SHARED);
+    const state = async () => ({
+      pull: await records.get(pull.id),
+      events: await records.activity(pull.id, null),
+      operation: db
+        .prepare(
+          'SELECT state, recorded, updated_at FROM merge_operations WHERE pull_id = ?',
+        )
+        .get(pull.id),
+    });
+    const before = await state();
+    settings = { ...settings, mcpLocalWrites: true };
+    await service.applySettings();
+    const bot = agent();
+    await bot.open();
+    const ref = { repositoryId: SHARED, pullRequestId: pull.id };
+    expect(
+      (await bot.call('get_pull_request', ref)).data.pullRequest.mergeOperation
+        .state,
+    ).toBe('report_pending');
+    expect(await state()).toEqual(before);
+    const post = (id = pull.id) =>
+      bot.call('comment_on_pull_request', {
+        ...ref,
+        pullRequestId: id,
+        body: 'Looks good',
+      });
+    const hidden = await post(sibling.id);
+    expect(hidden.isError).toBe(true);
+    expect((await post(crypto.randomUUID())).text).toBe(hidden.text);
+    expect(notified).toEqual([]);
+
+    const denied = post();
+    await until(() => emitted.at(-1)?.approvals.length === 1);
+    expect(emitted.at(-1)!.approvals[0]?.summary).toBe(
+      'Comment on #1 Shared change',
+    );
+    await service.decide({
+      id: emitted.at(-1)!.approvals[0]!.id,
+      allow: false,
+    });
+    expect((await denied).isError).toBe(true);
+    expect(await state()).toEqual(before);
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const expired = post();
+      await vi.waitFor(() => expect(emitted.at(-1)?.approvals.length).toBe(1));
+      vi.advanceTimersByTime(2 * 60_000 + 1);
+      vi.useRealTimers();
+      expect((await expired).text).toContain('Nobody answered');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await state()).toEqual(before);
+
+    const allowed = post();
+    await until(() => emitted.at(-1)?.approvals.length === 1);
+    await service.decide({ id: emitted.at(-1)!.approvals[0]!.id, allow: true });
+    expect((await allowed).data.body).toBe('Looks good');
+    expect((await records.comments(pull.id)).map((c) => c.body)).toEqual([
+      'Looks good',
+    ]);
+    expect((await state()).operation).toEqual(before.operation);
     bot.close();
   });
 
@@ -383,11 +560,17 @@ describe('local MCP tools', () => {
     await until(() => (emitted.at(-1)?.approvals.length ?? 0) === 1);
     await service.decide({ id: emitted.at(-1)!.approvals[0]!.id, allow: true });
     expect((await allowed).data.status).toBe('committed');
-    expect(services.workspace.commit).toHaveBeenCalledWith({
-      id: SHARED,
-      summary: 'Fix the parser',
-      description: '',
-    });
+    expect(services.workspace.commit).toHaveBeenCalledWith(
+      {
+        id: SHARED,
+        summary: 'Fix the parser',
+        description: '',
+      },
+      {
+        expected: expect.objectContaining({ tree: 'c'.repeat(40) }),
+        assertAllowed: expect.any(Function),
+      },
+    );
 
     const hidden = await bot.call('commit', {
       repositoryId: PRIVATE,
@@ -466,7 +649,7 @@ describe('local MCP tools', () => {
     await until(() => (emitted.at(-1)?.approvals.length ?? 0) === 1);
     settings = { ...settings, mcpLocal: false };
     const closing = service.applySettings();
-    expect((await waiting).text).toContain('chose not to allow');
+    expect((await waiting).text).toContain('withdrawn');
     // Still connected for a moment, but already refused.
     expect((await bot.call('list_repositories')).text).toContain('turned off');
     await closing;
@@ -511,31 +694,129 @@ describe('local MCP approvals', () => {
     expect(services.workspace.push).not.toHaveBeenCalled();
   });
 
-  it('names the branch and upstream a push goes to, and refuses if they moved', async () => {
+  it('shows the source commit and credential-safe destination, not the effective raw URL', async () => {
     settings = { ...settings, mcpLocalWrites: true };
     await service.applySettings();
     const bot = agent();
     await bot.open();
     const pushing = bot.call('push', { repositoryId: SHARED });
     await until(() => (emitted.at(-1)?.approvals.length ?? 0) === 1);
-    expect(emitted.at(-1)!.approvals[0]).toMatchObject({
+    const asked = emitted.at(-1)!.approvals[0]!;
+    expect(asked).toMatchObject({
       summary: 'Push main to origin/main',
-      details: ['main at bbbbbbb'],
+      details: [`main at ${head.headOid}`, 'https://host/repo.git'],
     });
-    // Someone switched branch while the question was open.
-    head = { ...head, current: 'other', headOid: 'c'.repeat(40) };
-    await service.decide({ id: emitted.at(-1)!.approvals[0]!.id, allow: true });
-    const answer = await pushing;
-    expect(answer.isError).toBe(true);
-    expect(answer.text).toContain('changed after the person was asked');
-    expect(services.workspace.push).not.toHaveBeenCalled();
-    expect(service.calls()[0]).toMatchObject({
-      tool: 'push',
-      outcome: 'refused',
-      reason: 'STATE_CHANGED',
-    });
+    expect(JSON.stringify(asked)).not.toContain('password');
+    await service.decide({ id: asked.id, allow: false });
+    expect((await pushing).isError).toBe(true);
     bot.close();
   });
+
+  it('withdraws only the unshared repository, ignoring even a late Allow after re-sharing', async () => {
+    settings = { ...settings, mcpLocalWrites: true };
+    await service.applySettings();
+    await service.setRepositories([SHARED, PRIVATE]);
+    const bot = agent();
+    await bot.open();
+    const stage = (repositoryId: string) =>
+      bot.call('stage_paths', { repositoryId, paths: ['a.txt'] });
+    const removed = stage(SHARED);
+    const kept = stage(PRIVATE);
+    await until(() => emitted.at(-1)?.approvals.length === 2);
+    const approvals = emitted.at(-1)!.approvals;
+    await service.setRepositories([PRIVATE]);
+    await service.setRepositories([PRIVATE, SHARED]);
+    for (const approval of approvals)
+      await service.decide({ id: approval.id, allow: true });
+    expect((await removed).isError).toBe(true);
+    expect((await kept).isError).toBe(false);
+    expect(services.workspace.stage).toHaveBeenCalledTimes(1);
+    expect(services.workspace.stage!.mock.calls[0]![0].id).toBe(PRIVATE);
+    bot.close();
+  });
+
+  it('does not ask if the repository was unshared and re-shared during preparation', async () => {
+    settings = { ...settings, mcpLocalWrites: true };
+    await service.applySettings();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    services.workspace.prepareCommit!.mockImplementationOnce(async () => {
+      await gate;
+      return {
+        branch: 'main',
+        head: head.headOid,
+        tree: 'f'.repeat(40),
+        paths: ['file'],
+      };
+    });
+    const bot = agent();
+    await bot.open();
+    const waiting = bot.call('commit', {
+      repositoryId: SHARED,
+      summary: 'Message',
+    });
+    await until(
+      () => services.workspace.prepareCommit!.mock.calls.length === 1,
+    );
+    await service.setRepositories([]);
+    await service.setRepositories([SHARED]);
+    release();
+    expect((await waiting).isError).toBe(true);
+    expect(notified).toEqual([]);
+    expect(services.workspace.commit).not.toHaveBeenCalled();
+    bot.close();
+  });
+
+  it.each(['unshare', 'writes off', 'removed'])(
+    'invalidates a queued Allow across %s and restoration',
+    async (loss) => {
+      settings = { ...settings, mcpLocalWrites: true };
+      await service.applySettings();
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const mutation = vi.fn();
+      services.workspace.stage!.mockImplementationOnce(
+        async (_input, assertAllowed) => {
+          await gate;
+          assertAllowed();
+          mutation();
+          return { status: 'applied' };
+        },
+      );
+      const bot = agent();
+      await bot.open();
+      const waiting = bot.call('stage_paths', {
+        repositoryId: SHARED,
+        paths: ['a.txt'],
+      });
+      await until(() => emitted.at(-1)?.approvals.length === 1);
+      await service.decide({
+        id: emitted.at(-1)!.approvals[0]!.id,
+        allow: true,
+      });
+      await until(() => services.workspace.stage!.mock.calls.length === 1);
+      if (loss === 'writes off') {
+        settings = { ...settings, mcpLocalWrites: false };
+        const off = service.applySettings();
+        settings = { ...settings, mcpLocalWrites: true };
+        await Promise.all([off, service.applySettings()]);
+      } else {
+        if (loss === 'removed') {
+          service.repositoriesChanged([PRIVATE]);
+          service.repositoriesChanged([PRIVATE, SHARED]);
+        } else await service.setRepositories([]);
+        await service.setRepositories([SHARED]);
+      }
+      release();
+      expect((await waiting).isError).toBe(true);
+      expect(mutation).not.toHaveBeenCalled();
+      bot.close();
+    },
+  );
 
   it('refuses invalid input before asking anyone', async () => {
     settings = { ...settings, mcpLocalWrites: true };
@@ -613,23 +894,42 @@ describe('local MCP approvals', () => {
     bot.close();
   });
 
-  it('checks the old name of a renamed file before showing its diff', async () => {
-    services.repos.changes!.mockResolvedValue({
-      files: [
-        { path: 'notes.txt', origPath: '.env', kind: 'staged', code: 'R' },
-      ],
-      truncated: false,
-      total: 1,
-    });
+  it('checks both names before showing a renamed file or its diff', async () => {
+    services.source.agentRenameSource!.mockResolvedValue('.env');
     const bot = agent();
     await bot.open();
+    const read = await bot.call('read_file', {
+      repositoryId: SHARED,
+      path: 'notes.txt',
+    });
+    expect(read.isError).toBe(true);
+    expect(read.text).toContain('credentials');
     const reply = await bot.call('get_diff', {
       repositoryId: SHARED,
       path: 'notes.txt',
       side: 'staged',
     });
     expect(reply.isError).toBe(true);
+    expect(reply.text).toContain('credentials');
+    expect(services.source.readForAgent).not.toHaveBeenCalled();
     expect(services.workspace.diff).not.toHaveBeenCalled();
+    services.source.resolve!.mockResolvedValue({ oid: 'a'.repeat(40) });
+    services.source.agentRenameSource!.mockClear();
+    const historic = await bot.call('read_file', {
+      repositoryId: SHARED,
+      path: 'notes.txt',
+      ref: 'HEAD',
+    });
+    expect(historic.data.text).toBe('hello');
+    const blocked = await bot.call('read_file', {
+      repositoryId: SHARED,
+      path: '.env',
+      ref: 'HEAD',
+    });
+    expect(blocked.isError).toBe(true);
+    expect(blocked.text).toContain('credentials');
+    expect(services.source.readForAgent).toHaveBeenCalledOnce();
+    expect(services.source.agentRenameSource).not.toHaveBeenCalled();
     bot.close();
   });
 });

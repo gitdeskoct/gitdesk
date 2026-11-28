@@ -309,12 +309,11 @@ function AccountGroup({ status }: { status: AuthStatus }) {
     </SettingGroup>
   );
 
-  // One state for both: agents reach the account only while gitdesk uses one.
   if (status.status === 'signed-out' || settings?.localOnly)
     return only(
       settings?.localOnly
-        ? 'gitdesk is set to work without an account, so agents can reach only this computer. Turn off local-only mode to connect agents to your account.'
-        : 'Sign in, and an agent running somewhere else can read the repositories stored in your account after you approve it in your browser. Agents on this computer work either way.',
+        ? 'gitdesk is set to work without an account. Existing cloud agents keep their access. To revoke one, turn off local-only mode and sign in.'
+        : 'Signing out does not revoke cloud agents. Sign in to manage or revoke their access. Agents on this computer work either way.',
       settings?.localOnly ? (
         <Button
           size="sm"

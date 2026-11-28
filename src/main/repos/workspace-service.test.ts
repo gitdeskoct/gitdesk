@@ -32,6 +32,7 @@ import {
   parseBlockedFiles,
   redactRemoteUrl,
   sanitizeOutput,
+  WriteRefusal,
 } from './workspace-service';
 
 // Real Git, real folders: the same commands the app runs, against temporary repositories.
@@ -85,6 +86,7 @@ async function setup(
   extra: {
     hosting?: Hosting;
     gitAuth?: Parameters<typeof createWorkspaceService>[0]['gitAuth'];
+    forgetAuth?: (remoteId: string) => void;
     db?: string;
   } = {},
 ) {
@@ -120,6 +122,7 @@ async function setup(
   const service = createWorkspaceService({
     store,
     gitAuth: extra.gitAuth,
+    forgetAuth: extra.forgetAuth,
     refresh: (repoId) => repos.refresh(repoId),
     addActivity: (repoId, type, detail) =>
       store.addActivity(repoId, type, detail, Date.now()),
@@ -596,6 +599,106 @@ describe('staging parts of a file', () => {
 });
 
 describe('committing', () => {
+  it.each(['branch', 'index'])(
+    'refuses an approved commit after a queued %s change',
+    async (change) => {
+      const root = makeRepo();
+      const { id, service } = await setup(root);
+      writeFileSync(path.join(root, 'README.md'), 'approved');
+      git(root, 'add', 'README.md');
+      const expected = await service.prepareCommit(id);
+      expect(expected.paths).toEqual(['README.md']);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const other = service.serial(id, async () => {
+        await gate;
+        if (change === 'branch') git(root, 'switch', '-qc', 'other');
+        else {
+          writeFileSync(path.join(root, 'README.md'), 'not approved');
+          git(root, 'add', 'README.md');
+        }
+      });
+      const commit = service.commit(
+        { id, summary: 'Message', description: '' },
+        { expected, assertAllowed: vi.fn() },
+      );
+      release();
+      await other;
+      await expect(commit).rejects.toMatchObject({ reason: 'STATE_CHANGED' });
+      expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(expected.head);
+    },
+  );
+
+  it('commits the approved tree, with hooks, identity and signoff', async () => {
+    const root = makeRepo();
+    const { id, service } = await setup(root);
+    settings.commitSignoff = true;
+    const hook = path.join(root, '.git', 'hooks', 'pre-commit');
+    writeFileSync(hook, '#!/bin/sh\ntouch .hook-ran\n', { mode: 0o755 });
+    writeFileSync(path.join(root, 'README.md'), 'approved');
+    git(root, 'add', 'README.md');
+    const expected = await service.prepareCommit(id);
+    writeFileSync(path.join(root, 'README.md'), 'unstaged');
+    const guard = vi.fn();
+    expect(
+      (
+        await service.commit(
+          { id, summary: 'Approved', description: '' },
+          { expected, assertAllowed: guard },
+        )
+      ).status,
+    ).toBe('committed');
+    expect(guard).toHaveBeenCalled();
+    expect(existsSync(path.join(root, '.hook-ran'))).toBe(true);
+    expect(git(root, 'rev-parse', 'HEAD^{tree}').trim()).toBe(expected.tree);
+    expect(git(root, 'log', '-1', '--format=%B')).toContain(
+      'Signed-off-by: Test <test@example.com>',
+    );
+  });
+
+  it('keeps the branch at its previous commit if a hook restages a different tree', async () => {
+    const root = makeRepo();
+    const { id, service } = await setup(root);
+    writeFileSync(path.join(root, 'README.md'), 'approved');
+    git(root, 'add', 'README.md');
+    const expected = await service.prepareCommit(id);
+    writeFileSync(
+      path.join(root, '.git', 'hooks', 'pre-commit'),
+      '#!/bin/sh\nprintf formatted > README.md\ngit add README.md\n',
+      { mode: 0o755 },
+    );
+    await expect(
+      service.commit(
+        { id, summary: 'Approved', description: '' },
+        { expected, assertAllowed: vi.fn() },
+      ),
+    ).rejects.toMatchObject({ reason: 'STATE_CHANGED' });
+    expect(git(root, 'rev-parse', 'HEAD').trim()).toBe(expected.head);
+    expect(git(root, 'show', ':README.md')).toBe('formatted');
+  });
+
+  it('checks a queued stage approval before touching the index', async () => {
+    const root = makeRepo();
+    const { id, service } = await setup(root);
+    writeFileSync(path.join(root, 'README.md'), 'unstaged');
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const first = service.serial(id, () => gate);
+    let allowed = true;
+    const stage = service.stage({ id, paths: ['README.md'] }, () => {
+      if (!allowed) throw new WriteRefusal('Withdrawn', 'NOT_ALLOWED');
+    });
+    allowed = false;
+    release();
+    await first;
+    await expect(stage).rejects.toMatchObject({ reason: 'NOT_ALLOWED' });
+    expect(git(root, 'diff', '--cached', '--name-only')).toBe('');
+  });
+
   it('commits staged work locally and refuses when nothing is staged', async () => {
     const root = makeRepo();
     const { id, service } = await setup(root);
@@ -796,6 +899,167 @@ describe('push', () => {
     return bare;
   };
   const job = () => crypto.randomUUID();
+
+  it('pushes only the approved ref and never overwrites newer remote commits', async () => {
+    const bare = bareRemote();
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', bare);
+    git(root, 'config', 'push.followTags', 'true');
+    git(root, 'tag', '-a', 'local-tag', '-m', 'Local only');
+    const { id, service } = await setup(root);
+    const push = async () =>
+      service.push(
+        { id, jobId: job() },
+        { expected: await service.preparePush(id), assertAllowed: vi.fn() },
+      );
+    expect((await push()).status).toBe('pushed');
+    expect(bareGit(bare, 'for-each-ref', '--format=%(refname)').trim()).toBe(
+      'refs/heads/main',
+    );
+    git(root, 'commit', '-q', '--allow-empty', '-m', 'New remote tip');
+    git(root, 'push', '-q', '--no-follow-tags', 'origin', 'main');
+    const newer = bareGit(bare, 'rev-parse', 'main');
+    git(root, 'switch', '-qc', 'other', 'HEAD^');
+    git(root, 'config', 'branch.other.remote', 'origin');
+    git(root, 'config', 'branch.other.merge', 'refs/heads/main');
+    expect(await push()).toMatchObject({
+      status: 'failed',
+      reason: 'rejected',
+    });
+    expect(bareGit(bare, 'rev-parse', 'main')).toBe(newer);
+  });
+
+  it('pins the source OID and expanded endpoint even if a local writer changes them at dispatch', async () => {
+    const bare = bareRemote();
+    const other = bareRemote('other.git');
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', 'local-alias:');
+    git(root, 'config', `url.${bare}.pushInsteadOf`, 'local-alias:');
+    const { id, service } = await setup(root);
+    const expected = await service.preparePush(id);
+    expect(expected).toMatchObject({ label: bare, target: 'refs/heads/main' });
+    const assertAllowed = () => {
+      git(root, 'remote', 'set-url', '--push', 'origin', other);
+      git(root, 'commit', '-q', '--allow-empty', '-m', 'Later commit');
+    };
+    expect(
+      (await service.push({ id, jobId: job() }, { expected, assertAllowed }))
+        .status,
+    ).toBe('pushed');
+    expect(bareGit(bare, 'rev-parse', 'main').trim()).toBe(expected.branchOid);
+    expect(bareGit(other, 'for-each-ref')).toBe('');
+    expect(git(root, 'rev-parse', 'HEAD').trim()).not.toBe(expected.branchOid);
+  });
+
+  it.each(['url', 'ref', 'source', 'default'])(
+    'refuses a changed push %s before sending anything',
+    async (change) => {
+      const bare = bareRemote();
+      const other = bareRemote('other.git');
+      const root = makeRepo();
+      git(root, 'remote', 'add', 'origin', bare);
+      git(root, 'remote', 'add', 'other', other);
+      const { id, service } = await setup(root);
+      const expected = await service.preparePush(id);
+      if (change === 'url')
+        git(root, 'remote', 'set-url', '--push', 'origin', other);
+      if (change === 'ref') {
+        git(root, 'config', 'branch.main.remote', 'origin');
+        git(root, 'config', 'branch.main.merge', 'refs/heads/other');
+      }
+      if (change === 'source')
+        git(root, 'commit', '-q', '--allow-empty', '-m', 'New head');
+      if (change === 'default')
+        service.setPreferences({ id, defaultRemote: 'other' });
+      await expect(
+        service.push(
+          { id, jobId: job() },
+          { expected, assertAllowed: vi.fn() },
+        ),
+      ).rejects.toMatchObject({ reason: 'STATE_CHANGED' });
+      expect(bareGit(bare, 'for-each-ref')).toBe('');
+      expect(bareGit(other, 'for-each-ref')).toBe('');
+    },
+  );
+
+  it.each([
+    [false, false],
+    [true, false],
+    [true, true],
+  ])(
+    'rechecks the endpoint and permission after a credential wait (retry: %s, withdrawn: %s)',
+    async (retry, withdraw) => {
+      const bare = bareRemote();
+      const other = bareRemote('other.git');
+      const root = makeRepo();
+      git(root, 'remote', 'add', 'origin', bare);
+      if (retry)
+        writeFileSync(
+          path.join(root, '.git', 'hooks', 'pre-push'),
+          '#!/bin/sh\necho "Authentication failed" >&2\nexit 1\n',
+          { mode: 0o755 },
+        );
+      let attempts = 0;
+      let allowed = true;
+      const { id, service, store } = await setup(root, {
+        forgetAuth: vi.fn(),
+        gitAuth: async () => {
+          if (++attempts === (retry ? 2 : 1)) {
+            if (withdraw) allowed = false;
+            else git(root, 'remote', 'set-url', '--push', 'origin', other);
+          }
+          return {};
+        },
+      });
+      store.setRemote(id, '44444444-4444-4444-8444-444444444444');
+      const expected = await service.preparePush(id);
+      await expect(
+        service.push(
+          { id, jobId: job() },
+          {
+            expected,
+            assertAllowed() {
+              if (!allowed) throw new WriteRefusal('Withdrawn', 'NOT_ALLOWED');
+            },
+          },
+        ),
+      ).rejects.toMatchObject({
+        reason: withdraw ? 'NOT_ALLOWED' : 'STATE_CHANGED',
+      });
+      expect(attempts).toBe(retry ? 2 : 1);
+      expect(bareGit(bare, 'for-each-ref')).toBe('');
+      expect(bareGit(other, 'for-each-ref')).toBe('');
+    },
+  );
+
+  it('redacts push URLs for display and refuses more than one destination', async () => {
+    const root = makeRepo();
+    git(root, 'remote', 'add', 'origin', bareRemote());
+    git(
+      root,
+      'remote',
+      'set-url',
+      '--push',
+      'origin',
+      'https://test:secret@example.invalid/repo?token=secret',
+    );
+    const { id, service } = await setup(root);
+    expect((await service.preparePush(id)).label).toBe(
+      'https://example.invalid/repo',
+    );
+    git(
+      root,
+      'remote',
+      'set-url',
+      '--add',
+      '--push',
+      'origin',
+      bareRemote('other.git'),
+    );
+    await expect(service.preparePush(id)).rejects.toThrow(
+      'single supported push destination',
+    );
+  });
 
   it('pushes the current branch, sets its upstream once, and is refused rather than forced', async () => {
     const bare = bareRemote();

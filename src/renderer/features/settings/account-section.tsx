@@ -90,7 +90,7 @@ export function AccountSection({ status }: { status: AuthStatus }) {
         <SettingRow
           id="sign-out"
           label="Sign out"
-          description="Ends the session on this computer and on the server."
+          description="Ends this desktop session. Cloud agents keep their access unless you revoke them in Settings › MCP."
         >
           <Button
             variant="danger"

@@ -30,6 +30,7 @@ import type { PullService } from '../pulls/pull-service';
 import { describeGitError, gitAt, gitBytes } from '../repos/git-inspector';
 import type { RepositoryStore } from '../repos/repository-store';
 import {
+  changedSinceAsked,
   parseBlockedFiles,
   parseCommitRows,
   sanitizeOutput,
@@ -343,13 +344,16 @@ export function createBranchService(deps: {
       return results;
     },
 
-    create: (input: {
-      id: string;
-      name: string;
-      start: BranchStart;
-      switchTo: boolean;
-      track: 'git' | 'always' | 'never';
-    }) =>
+    create: (
+      input: {
+        id: string;
+        name: string;
+        start: BranchStart;
+        switchTo: boolean;
+        track: 'git' | 'always' | 'never';
+      },
+      approval?: { assertAllowed: () => void; expectedHead: string | null },
+    ) =>
       ws.serial(input.id, async (): Promise<BranchActionResult> => {
         const root = ws.rootOf(input.id);
         if (!(await validName(root, input.name)))
@@ -368,7 +372,15 @@ export function createBranchService(deps: {
             'operation',
             'A merge, rebase or revert is in progress. Finish or abort it before switching.',
           );
-        const start = await startRef(root, list, input.start);
+        if (approval && list.headOid !== approval.expectedHead)
+          throw changedSinceAsked();
+        const start = await startRef(
+          root,
+          list,
+          approval?.expectedHead
+            ? { kind: 'commit', oid: approval.expectedHead }
+            : input.start,
+        );
         if ('status' in start) return start;
         if (!start.arg && !list.headOid && !input.switchTo)
           return blocked(
@@ -391,6 +403,7 @@ export function createBranchService(deps: {
               ...(start.arg ? [start.arg] : []),
             ]
           : ['branch', ...track, input.name, ...(start.arg ? [start.arg] : [])];
+        approval?.assertAllowed();
         const result = await run(root, args);
         await deps.refresh(input.id).catch(() => undefined);
         if (result.code !== 0) {

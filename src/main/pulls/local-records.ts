@@ -486,7 +486,8 @@ export function createLocalRecords(
       return ids.map((row) => commentOf(id, row.id));
     },
 
-    async addComment(id, input) {
+    async addComment(id, input, assertAllowed) {
+      assertAllowed?.();
       rowOf(id);
       if (input.parentId) {
         const parent = commentOf(id, input.parentId);
@@ -523,6 +524,7 @@ export function createLocalRecords(
     },
 
     async editComment(id, commentId, patch) {
+      rowOf(id);
       const comment = commentOf(id, commentId);
       if (comment.deleted) throw new Error('That comment was deleted.');
       db.prepare(
@@ -543,6 +545,7 @@ export function createLocalRecords(
     },
 
     async deleteComment(id, commentId) {
+      rowOf(id);
       commentOf(id, commentId);
       // Soft delete keeps a thread's replies in place under "Comment deleted".
       db.prepare(

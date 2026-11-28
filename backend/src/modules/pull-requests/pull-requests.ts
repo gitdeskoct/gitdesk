@@ -44,7 +44,7 @@ export async function repositoryOwned(db: Db, accountId: string, repositoryId: s
   return !!row;
 }
 
-export async function pullOwned(db: Db, accountId: string, pullId: string): Promise<PullRow | null> {
+export async function pullOwned(db: Db, accountId: string, pullId: string, repositoryId?: string): Promise<PullRow | null> {
   const [row] = await db
     .select({ pull: pullRequests })
     .from(pullRequests)
@@ -52,6 +52,7 @@ export async function pullOwned(db: Db, accountId: string, pullId: string): Prom
     .where(
       and(
         eq(pullRequests.id, pullId),
+        repositoryId === undefined ? undefined : eq(pullRequests.repositoryId, repositoryId),
         eq(repositories.ownerAccountId, accountId),
         ne(repositories.status, 'deleting'),
       ),
@@ -403,36 +404,48 @@ export async function addReview(
   input: z.output<typeof reviewBody>,
   now: number,
 ): Promise<ReviewResult> {
-  const [latest] = await db
-    .select()
-    .from(pullRequestSnapshots)
-    .where(eq(pullRequestSnapshots.pullRequestId, row.id))
-    .orderBy(desc(pullRequestSnapshots.version))
-    .limit(1);
-  if (
-    !latest ||
-    latest.version !== input.comparisonVersion ||
-    latest.sourceOid !== input.sourceOid ||
-    latest.targetOid !== input.targetOid
-  )
-    return { status: 'stale' };
   const actor = await actorOf(db, accountId);
-  const review = {
-    id: crypto.randomUUID(),
-    pullRequestId: row.id,
-    reviewerAccountId: accountId,
-    decision: input.decision,
-    body: input.body,
-    sourceOid: input.sourceOid,
-    targetOid: input.targetOid,
-    comparisonVersion: input.comparisonVersion,
-    submittedAt: now,
-  };
-  await db.batch([
-    db.insert(pullRequestReviews).values(review),
-    event(db, row.id, actor, 'reviewed', `${input.decision}:${input.comparisonVersion}`, now),
-    db.update(pullRequests).set({ updatedAt: now }).where(eq(pullRequests.id, row.id)),
+  const reviewId = crypto.randomUUID();
+  const atRevision = and(
+    eq(pullRequests.id, row.id),
+    eq(pullRequests.status, 'open'),
+    eq(pullRequests.comparisonVersion, input.comparisonVersion),
+    eq(pullRequests.latestSourceOid, input.sourceOid),
+    eq(pullRequests.latestTargetOid, input.targetOid),
+  );
+  const inserted = eq(pullRequestReviews.id, reviewId);
+  // D1 runs the batch atomically. An unmatched revision creates no review for the other writes to find.
+  const [[review]] = await db.batch([
+    db.insert(pullRequestReviews).select(
+      db.select({
+        id: sql`${reviewId}`.as('id'),
+        pullRequestId: pullRequests.id,
+        reviewerAccountId: sql`${accountId}`.as('reviewer_account_id'),
+        decision: sql`${input.decision}`.as('decision'),
+        body: sql`${input.body}`.as('body'),
+        sourceOid: pullRequests.latestSourceOid,
+        targetOid: pullRequests.latestTargetOid,
+        comparisonVersion: pullRequests.comparisonVersion,
+        submittedAt: sql`${now}`.as('submitted_at'),
+      }).from(pullRequests).where(atRevision),
+    ).returning(),
+    db.insert(pullRequestActivity).select(
+      db.select({
+        id: sql`${crypto.randomUUID()}`.as('id'),
+        pullRequestId: pullRequestReviews.pullRequestId,
+        actorAccountId: pullRequestReviews.reviewerAccountId,
+        actorName: sql`${actor.name}`.as('actor_name'),
+        eventType: sql`'reviewed'`.as('event_type'),
+        eventPayload: sql`${pullRequestReviews.decision} || ':' || ${pullRequestReviews.comparisonVersion}`.as('event_payload'),
+        createdAt: pullRequestReviews.submittedAt,
+      }).from(pullRequestReviews).where(inserted),
+    ),
+    db.update(pullRequests).set({ updatedAt: now }).where(eq(
+      pullRequests.id,
+      db.select({ id: pullRequestReviews.pullRequestId }).from(pullRequestReviews).where(inserted),
+    )),
   ]);
+  if (!review) return { status: 'stale' };
   return { status: 'done', review: toReview(review, new Map([[accountId, actor]])) };
 }
 

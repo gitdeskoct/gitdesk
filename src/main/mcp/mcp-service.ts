@@ -72,11 +72,14 @@ export function createMcpService(deps: {
   const now = deps.now ?? Date.now;
   const start = deps.start ?? startLocalServer;
   const pending = new Map<string, Pending>();
+  const generations = new Map<string, symbol>();
+  let selection = 0;
+  let disposed = false;
   let server: LocalServer | null = null;
   let error: string | null = null;
   // Start and stop run one after the other, so a quick off-on never leaves two sockets.
   let chain: Promise<void> = Promise.resolve();
-  let knownRepositories: string | null = null;
+  let knownRepositories: Set<string> | null = null;
 
   function allowlist(): string[] {
     const parsed = allowlistSchema.safeParse(readState(deps.db, ALLOWLIST_KEY));
@@ -114,6 +117,15 @@ export function createMcpService(deps: {
     for (const item of pending.values()) item.settle(answer);
   }
 
+  function setShared(next: string[]) {
+    const removed = allowlist().filter((id) => !next.includes(id));
+    writeState(deps.db, ALLOWLIST_KEY, next);
+    for (const id of removed) generations.delete(id);
+    for (const item of pending.values())
+      if (removed.includes(item.approval.repositoryId))
+        item.settle('withdrawn');
+  }
+
   function record(call: Omit<McpCall, 'id' | 'at'>) {
     deps.db
       .prepare(
@@ -136,8 +148,14 @@ export function createMcpService(deps: {
 
   const policy: LocalPolicy = {
     allowed: (id) => allowlist().includes(id),
-    enabled: () => deps.settings().mcpLocal,
-    writes: () => deps.settings().mcpLocal && deps.settings().mcpLocalWrites,
+    enabled: () => !disposed && deps.settings().mcpLocal,
+    writes: () => policy.enabled() && deps.settings().mcpLocalWrites,
+    generation(id) {
+      if (!policy.allowed(id)) return null;
+      const generation = generations.get(id) ?? Symbol();
+      generations.set(id, generation);
+      return generation;
+    },
     approve(request: ApprovalRequest) {
       const { signal, connection, ...shown } = request;
       // An agent that already left, or cancelled, is not asked about.
@@ -194,8 +212,13 @@ export function createMcpService(deps: {
     buildLocalServer(deps.services, policy, connection);
 
   function apply(): Promise<void> {
+    const want = deps.settings().mcpLocal;
+    const hadPending = pending.size > 0;
+    if (!policy.writes()) {
+      generations.clear();
+      settleAll('withdrawn');
+    }
     chain = chain.then(async () => {
-      const want = deps.settings().mcpLocal;
       if (want && !server) {
         try {
           server = await start({
@@ -212,8 +235,7 @@ export function createMcpService(deps: {
         }
       } else if (!want && server) {
         // An agent waiting on an answer gets its refusal before the connection goes.
-        if (pending.size) {
-          settleAll('denied');
+        if (hadPending) {
           await new Promise((resolve) => setTimeout(resolve, 100));
         }
         const closing = server;
@@ -221,7 +243,6 @@ export function createMcpService(deps: {
         await closing.close().catch(() => undefined);
         error = null;
       }
-      if (!deps.settings().mcpLocalWrites) settleAll('denied');
       changed();
     });
     return chain;
@@ -257,12 +278,19 @@ export function createMcpService(deps: {
     start: apply,
 
     async setRepositories(ids: string[]): Promise<McpLocalStatus> {
+      const revision = ++selection;
+      const current = allowlist();
+      if (current.some((id) => !ids.includes(id)))
+        setShared(current.filter((id) => ids.includes(id)));
       const have = new Set((await deps.services.repos.list()).map((r) => r.id));
-      writeState(
-        deps.db,
-        ALLOWLIST_KEY,
-        [...new Set(ids)].filter((id) => have.has(id)),
-      );
+      if (revision === selection)
+        setShared(
+          [...new Set(ids)].filter(
+            (id) =>
+              have.has(id) && (!knownRepositories || knownRepositories.has(id)),
+          ),
+        );
+
       const next = await status();
       deps.emit(next);
       return next;
@@ -360,17 +388,26 @@ export function createMcpService(deps: {
     // A repository that left gitdesk leaves the allowlist with it. Status refreshes come often;
     // only a change in which repositories exist is passed on.
     repositoriesChanged(ids: string[]) {
-      const key = [...ids].sort().join(',');
-      if (key === knownRepositories) return;
+      const next = new Set(ids);
+      if (
+        knownRepositories?.size === next.size &&
+        ids.every((id) => knownRepositories!.has(id))
+      )
+        return;
       const first = knownRepositories === null;
-      knownRepositories = key;
+      knownRepositories = next;
+      const current = allowlist();
+      if (current.some((id) => !next.has(id)))
+        setShared(current.filter((id) => next.has(id)));
       if (!first) changed();
     },
 
     async dispose(): Promise<void> {
       // The token and socket files go at once: quitting doesn't wait for the close below.
       server?.removeFiles();
-      settleAll('denied');
+      disposed = true;
+      generations.clear();
+      settleAll('withdrawn');
       await chain.catch(() => undefined);
       await server?.close().catch(() => undefined);
       server = null;

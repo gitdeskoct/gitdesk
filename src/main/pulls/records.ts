@@ -115,6 +115,7 @@ export interface PullRecords {
       anchor: CommentAnchor | null;
       author: PullAuthor;
     },
+    assertAllowed?: () => void,
   ): Promise<StoredComment>;
   editComment(
     id: string,

@@ -474,12 +474,12 @@ export function createPullService(deps: {
         );
       return ops.get(id)!;
     },
-    latestFor(pullId: string) {
+    latestFor(repoId: string, pullId: string) {
       return deps.db
         .prepare(
-          'SELECT * FROM merge_operations WHERE pull_id = ? ORDER BY updated_at DESC LIMIT 1',
+          'SELECT * FROM merge_operations WHERE repository_id = ? AND pull_id = ? ORDER BY updated_at DESC LIMIT 1',
         )
-        .get(pullId) as OpRow | undefined;
+        .get(repoId, pullId) as OpRow | undefined;
     },
     activeFor(repoId: string) {
       return deps.db
@@ -836,6 +836,39 @@ export function createPullService(deps: {
     );
   }
 
+  function storedComparison(
+    root: string,
+    pull: PullRequest,
+    recordedBase?: string | null,
+  ) {
+    return pull.latest
+      ? compareRefs(
+          root,
+          pull.latest.targetOid,
+          pull.latest.sourceOid,
+          recordedBase,
+        ).catch(() => null)
+      : Promise.resolve(null);
+  }
+
+  function presentDetail(
+    pull: PullRequest,
+    comparison: Comparison | null,
+    problem: CompareProblem | null,
+    op: OpRow | undefined,
+  ): PullDetail {
+    return {
+      pull,
+      comparison,
+      problem,
+      changedSinceReview:
+        !!pull.review &&
+        !!pull.latest &&
+        pull.review.version < pull.latest.version,
+      mergeOperation: op ? toOperation(op) : null,
+    };
+  }
+
   // The live picture: the record, Git's comparison right now, and a new snapshot if a ref moved.
   async function detail(repoId: string, id: string): Promise<PullDetail> {
     const records = deps.recordsFor(repoId);
@@ -843,12 +876,6 @@ export function createPullService(deps: {
     let pull = await pullOf(records, id);
     let comparison: Comparison | null = null;
     let problem: CompareProblem | null = null;
-    const frozen = () =>
-      pull.latest
-        ? compareRefs(root, pull.latest.targetOid, pull.latest.sourceOid).catch(
-            () => null,
-          )
-        : Promise.resolve(null);
     if (pull.status === 'open') {
       const [sourceOid, targetOid] = await Promise.all([
         resolveBranch(root, pull.sourceRef),
@@ -864,7 +891,7 @@ export function createPullService(deps: {
       // that isn't recorded yet. Keep the last snapshot readable instead of recording an empty one.
       if (comparison && !comparison.commits.length && pull.latest) {
         problem = 'nothing-to-merge';
-        comparison = await frozen();
+        comparison = await storedComparison(root, pull);
       } else if (sourceOid && targetOid)
         pull = await records.recordComparison(
           id,
@@ -877,25 +904,16 @@ export function createPullService(deps: {
         );
     } else {
       // Closed or merged: the review stays readable as it was, from the last snapshot.
-      comparison = await frozen();
+      comparison = await storedComparison(root, pull);
     }
-    let op = ops.latestFor(id);
+    let op = ops.latestFor(repoId, id);
     // A merge done here that the account hasn't heard about yet is reported again, same id.
     if (op && op.kind === 'merge' && op.result_oid && op.recorded === 0) {
       const settled = await settle(records, op, op.state !== 'push_pending');
       op = settled.row;
       if (settled.recorded) pull = await pullOf(records, id);
     }
-    return {
-      pull,
-      comparison,
-      problem,
-      changedSinceReview:
-        !!pull.review &&
-        !!pull.latest &&
-        pull.review.version < pull.latest.version,
-      mergeOperation: op ? toOperation(op) : null,
-    };
+    return presentDetail(pull, comparison, problem, op);
   }
 
   return {
@@ -969,6 +987,20 @@ export function createPullService(deps: {
     },
 
     get: (input: PullRef) => wrap(() => detail(input.repoId, input.id)),
+
+    readRecord: ({ repoId, id }: PullRef) =>
+      wrap(() => pullOf(deps.recordsFor(repoId), id)),
+
+    readStoredDetail: ({ repoId, id }: PullRef) =>
+      wrap(async () => {
+        const pull = await pullOf(deps.recordsFor(repoId), id);
+        const comparison = await storedComparison(
+          deps.workspace.rootOf(repoId),
+          pull,
+          pull.latest?.mergeBaseOid,
+        );
+        return presentDetail(pull, comparison, null, ops.latestFor(repoId, id));
+      }),
 
     update: (input: UpdatePullInput) =>
       wrap(async () => {
@@ -1086,7 +1118,7 @@ export function createPullService(deps: {
         );
       }),
 
-    addComment: (input: AddCommentInput) =>
+    addComment: (input: AddCommentInput, assertAllowed?: () => void) =>
       wrap(async () => {
         const records = deps.recordsFor(input.repoId);
         const pull = await pullOf(records, input.id);
@@ -1126,12 +1158,16 @@ export function createPullService(deps: {
             contextHash: lineHash(line.text),
           };
         }
-        const stored = await records.addComment(input.id, {
-          parentId: input.parentId,
-          body: input.body,
-          anchor,
-          author: await deps.author(),
-        });
+        const stored = await records.addComment(
+          input.id,
+          {
+            parentId: input.parentId,
+            body: input.body,
+            anchor,
+            author: await deps.author(),
+          },
+          assertAllowed,
+        );
         const [view] = await viewComments(
           input.repoId,
           await pullOf(records, input.id),
@@ -1838,7 +1874,7 @@ export function createPullService(deps: {
         );
         const before = isMerge
           ? null
-          : (ops.latestFor(pull.id)?.target_oid ??
+          : (ops.latestFor(input.repoId, pull.id)?.target_oid ??
             pull.latest?.targetOid ??
             null);
         const from = isMerge ? parents[0]! : before;
@@ -1934,7 +1970,7 @@ export function createPullService(deps: {
             );
           const before = isMerge
             ? null
-            : (ops.latestFor(pull.id)?.target_oid ??
+            : (ops.latestFor(input.repoId, pull.id)?.target_oid ??
               pull.latest?.targetOid ??
               null);
           if (!isMerge && !before)

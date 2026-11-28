@@ -1,5 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
@@ -278,6 +284,95 @@ describe('reading a file', () => {
   it('refuses .git and paths that climb out', async () => {
     await expect(read('.git/config')).rejects.toThrow('outside');
     await expect(read('../outside.txt')).rejects.toThrow('outside');
+  });
+});
+
+describe('MCP worktree file privacy', () => {
+  const read = (
+    file: string,
+    snapshot: SourceSnapshot = { kind: 'worktree' },
+  ) =>
+    service().readForAgent({
+      id: ID,
+      path: file,
+      snapshot,
+      force: false,
+      limitMiB: 1,
+    });
+
+  it('admits tracked and visible untracked files, not ignored files', async () => {
+    write('.gitignore', 'dist/\n*.log\n!public.log\n');
+    write('dist/private.txt', 'ignored fixture');
+    write('kept.log', 'tracked fixture');
+    write('public.log', 'visible fixture');
+    git(root, 'add', '-f', 'kept.log');
+    await expect(read('dist/private.txt')).rejects.toThrow('ignored');
+    expect(await read('kept.log')).toMatchObject({ text: 'tracked fixture' });
+    expect(await read('public.log')).toMatchObject({ text: 'visible fixture' });
+    expect(
+      await service().read({
+        id: ID,
+        path: 'dist/private.txt',
+        snapshot: { kind: 'worktree' },
+        force: false,
+        limitMiB: 1,
+      }),
+    ).toMatchObject({ text: 'ignored fixture' });
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'treats pathspec magic, globs and line breaks as literal filename characters',
+    async () => {
+      write(':(glob)*.log', 'ignored fixture');
+      write('*.log', 'ignored fixture');
+      write('visible.log', 'tracked fixture');
+      git(root, 'add', '-f', 'visible.log');
+      for (const file of [':(glob)*.log', '*.log'])
+        await expect(read(file)).rejects.toThrow('ignored');
+      for (const file of [':(glob)*.ts', 'notes\n[1].ts', '-sample.ts']) {
+        write(file, 'visible fixture');
+        expect(await read(file)).toMatchObject({ text: 'visible fixture' });
+      }
+    },
+  );
+
+  it.skipIf(process.platform === 'win32')(
+    'does not follow a linked parent of a tracked path',
+    async () => {
+      write('dist/main.ts', 'ignored fixture');
+      rmSync(path.join(root, 'src'), { recursive: true });
+      symlinkSync('dist', path.join(root, 'src'));
+      await expect(read('src/main.ts')).rejects.toThrow();
+    },
+  );
+
+  it('does not consult the current worktree for an explicit historical file', async () => {
+    const { oid } = await service().resolve({ id: ID, ref: 'main' });
+    git(root, 'rm', '--cached', 'README.md');
+    write('.gitignore', 'README.md\n');
+    write('README.md', 'ignored replacement');
+    await expect(read('README.md')).rejects.toThrow('ignored');
+    expect(await read('README.md', { kind: 'commit', oid })).toMatchObject({
+      text: '# app\n',
+    });
+  });
+
+  it('gets the original path even when rename display is disabled', async () => {
+    git(root, 'config', 'status.renames', 'false');
+    git(root, 'mv', '.env.example', 'ordinary.txt');
+    write('ordinary.txt', 'changed again');
+    expect(await service().agentRenameSource(ID, 'ordinary.txt')).toBe(
+      '.env.example',
+    );
+    expect(await service().agentRenameSource(ID, 'README.md')).toBeNull();
+  });
+
+  it('refuses content when Git cannot verify the path', async () => {
+    write('.git/index', 'invalid fixture index');
+    await expect(read('README.md')).rejects.toThrow('verify');
+    await expect(service().agentRenameSource(ID, 'README.md')).rejects.toThrow(
+      'verify',
+    );
   });
 });
 

@@ -1,5 +1,6 @@
 import { env } from 'cloudflare:workers';
-import { describe, expect, it } from 'vitest';
+import { Client, discoverOAuthServerInfo, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
+import { describe, expect, it, vi } from 'vitest';
 import { createApp } from '../src/app';
 import { getDb } from '../src/db/client';
 import { mcpAudit } from '../src/db/schema';
@@ -62,15 +63,27 @@ const cookiesOf = (res: Response) =>
     .filter((pair) => !pair.endsWith('='))
     .join('; ');
 
-async function setup() {
+async function setup(host = fakeHost()) {
   const google = await fakeGoogle();
   const subject = `owner-${crypto.randomUUID()}`;
   google.state.claims = { ...google.state.claims, sub: subject };
-  const app = createApp({ google: google.provider, gitHost: fakeHost });
+  const app = createApp({ google: google.provider, gitHost: () => host });
   const owner = await signIn(app, google, ip());
   const created = await postJson(app, '/api/v1/repositories', { name: `r-${nextIp}` }, undefined, bearer(owner.access_token));
   const repositoryId = ((await created.json()) as { repository: { id: string } }).repository.id;
   return { app, google, owner, subject, repositoryId };
+}
+
+async function createTestPull(ctx: Awaited<ReturnType<typeof setup>>) {
+  const res = await postJson(
+    ctx.app,
+    `/api/v1/repositories/${ctx.repositoryId}/pull-requests`,
+    { title: 'Improve search', description: '', sourceRef: 'feature/search', targetRef: 'main', isDraft: false },
+    undefined,
+    bearer(ctx.owner.access_token),
+  );
+  expect(res.status).toBe(201);
+  return ((await res.json()) as { pullRequest: { id: string } }).pullRequest.id;
 }
 
 async function registerClient(app: TestApp, name = 'Test Agent') {
@@ -341,6 +354,41 @@ describe('MCP authorization', () => {
 });
 
 describe('MCP tools', () => {
+  it('discovers and reads a repository through the official Streamable HTTP client', async () => {
+    const ctx = await setup();
+    const endpoint = new URL('/mcp', ORIGIN);
+    const fetchWorker = async (url: URL | string, init?: RequestInit) => {
+      const request = new Request(url.toString(), init);
+      expect(new URL(request.url).origin).toBe(ORIGIN);
+      request.headers.set('host', endpoint.host);
+      return ctx.app.fetch(request, env);
+    };
+    const discovered = await discoverOAuthServerInfo(endpoint, { fetchFn: fetchWorker });
+    expect(discovered.resourceMetadata?.resource).toBe(endpoint.href);
+    expect(discovered.authorizationServerMetadata?.token_endpoint).toBe(`${ORIGIN}/oauth/token`);
+
+    const token = await connect(ctx, { scope: 'repo:read', tick: [] });
+    const client = new Client({ name: 'gitdesk-test', version: '1.0' }, { versionNegotiation: { mode: 'auto' } });
+    try {
+      await client.connect(new StreamableHTTPClientTransport(endpoint, {
+        fetch: fetchWorker,
+        requestInit: { headers: bearer(token) },
+      }));
+      expect(client.getServerVersion()?.name).toBe('gitdesk');
+      const { tools } = await client.listTools();
+      const names = tools.map((t) => t.name);
+      expect(names).toContain('get_repository');
+      expect(names).not.toContain('review_pull_request');
+      const read = await client.callTool({ name: 'get_repository', arguments: { repositoryId: ctx.repositoryId } });
+      expect(read.isError).not.toBe(true);
+      const content = read.content[0];
+      expect(content?.type).toBe('text');
+      expect(content?.type === 'text' && JSON.parse(content.text).repository.id).toBe(ctx.repositoryId);
+    } finally {
+      await client.close();
+    }
+  });
+
   it('lists only the tools the grant covers', async () => {
     const ctx = await setup();
     const readOnly = await connect(ctx);
@@ -358,6 +406,25 @@ describe('MCP tools', () => {
 
     const writer = await names(await connect(ctx, { tick: ['pr:read', 'pr:write'] }));
     expect(writer).toContain('comment_on_pull_request');
+  });
+
+  it('refuses credential filenames before fetching hosted blobs at any ref', async () => {
+    const host = fakeHost();
+    const read = vi.spyOn(host, 'readBlob');
+    const tree = vi.spyOn(host, 'readTree');
+    const ctx = await setup(host);
+    const token = await connect(ctx);
+    for (const ref of ['main', oid(20)]) {
+      for (const path of ['.env', 'src/Service-Account.fixture.JSON', 'nested/.docker/config.json']) {
+        const result = await tool(ctx.app, token, 'read_file', { repositoryId: ctx.repositoryId, ref, path });
+        expect(result.isError).toBe(true);
+        expect(result.text).toContain('credentials');
+      }
+    }
+    expect(tree).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect((await tool(ctx.app, token, 'read_file', { repositoryId: ctx.repositoryId, path: 'src/app.ts' })).data.kind).toBe('text');
+    expect(read).toHaveBeenCalledOnce();
   });
 
   it('reads the account’s repositories and files, and nobody else’s', async () => {
@@ -399,16 +466,55 @@ describe('MCP tools', () => {
     expect(events.filter((e) => e.outcome === 'ok')).toEqual([]);
   });
 
+  it('saves only the open comparison the agent read with get_pull_request', async () => {
+    const ctx = await setup();
+    const pullRequestId = await createTestPull(ctx);
+    const writer = await connect(ctx, { tick: ['pr:write'] });
+    const compare = async (sourceOid: string) => {
+      const res = await postJson(ctx.app, `/api/v1/pull-requests/${pullRequestId}/comparisons`, {
+        sourceOid, targetOid: oid(2), mergeBaseOid: null,
+      }, undefined, bearer(ctx.owner.access_token));
+      expect(res.status).toBe(200);
+    };
+    const read = async () => (await tool(ctx.app, writer, 'get_pull_request', { pullRequestId })).data;
+    const pins = async () => {
+      const { version, sourceOid, targetOid } = (await read()).pullRequest.latest;
+      return { comparisonVersion: version, sourceOid, targetOid };
+    };
+    const review = (revision: Record<string, unknown>) =>
+      tool(ctx.app, writer, 'review_pull_request', { pullRequestId, decision: 'approved', ...revision });
+
+    await compare(oid(1));
+    const first = await pins();
+    expect((await review({})).isError).toBe(true);
+    await compare(oid(3));
+    const latest = await pins();
+    for (const stale of [first, { ...latest, comparisonVersion: first.comparisonVersion },
+      { ...latest, sourceOid: first.sourceOid }, { ...latest, targetOid: oid(4) }]) {
+      const refusal = await review(stale);
+      expect(refusal.isError).toBe(true);
+      expect(refusal.text).toContain('Read it again');
+    }
+    expect((await read()).reviews).toEqual([]);
+
+    const saved = (await review(latest)).data.review;
+    expect(saved).toMatchObject({ version: 2, sourceOid: oid(3), targetOid: oid(2), decision: 'approved', body: '' });
+    const history = await tool(ctx.app, writer, 'list_pull_request_activity', { pullRequestId });
+    expect(history.data.events.filter((e: { type: string }) => e.type === 'reviewed')).toEqual([
+      expect.objectContaining({ detail: 'approved:2', createdAt: saved.submittedAt }),
+    ]);
+    expect((await read()).pullRequest.updatedAt).toBe(saved.submittedAt);
+
+    await tool(ctx.app, writer, 'close_pull_request', { pullRequestId });
+    const closed = await read();
+    expect(closed.pullRequest.status).toBe('closed');
+    expect((await review(latest)).isError).toBe(true);
+    expect(await read()).toEqual(closed);
+  });
+
   it('writes pull request records only with pr:write, and records each write', async () => {
     const ctx = await setup();
-    const created = await postJson(
-      ctx.app,
-      `/api/v1/repositories/${ctx.repositoryId}/pull-requests`,
-      { title: 'Improve search', description: '', sourceRef: 'feature/search', targetRef: 'main', isDraft: false },
-      undefined,
-      bearer(ctx.owner.access_token),
-    );
-    const pullRequestId = ((await created.json()) as { pullRequest: { id: string } }).pullRequest.id;
+    const pullRequestId = await createTestPull(ctx);
 
     const reader = await connect(ctx);
     const refused = await rpc(ctx.app, reader, 'tools/call', { name: 'close_pull_request', arguments: { pullRequestId } });
@@ -417,7 +523,9 @@ describe('MCP tools', () => {
     const writer = await connect(ctx, { tick: ['pr:read', 'pr:write'], clientName: 'Writer Agent' });
     const comment = await tool(ctx.app, writer, 'comment_on_pull_request', { pullRequestId, body: 'Looks right.' });
     expect(comment.data.comment.body).toBe('Looks right.');
-    const review = await tool(ctx.app, writer, 'review_pull_request', { pullRequestId, decision: 'approved' });
+    const review = await tool(ctx.app, writer, 'review_pull_request', {
+      pullRequestId, decision: 'approved', comparisonVersion: 1, sourceOid: oid(1), targetOid: oid(2),
+    });
     expect(review.isError).toBe(true);
     expect(review.text).toContain('not been compared yet');
     const closed = await tool(ctx.app, writer, 'close_pull_request', { pullRequestId });

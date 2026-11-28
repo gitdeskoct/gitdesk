@@ -162,8 +162,12 @@ export async function compare(
   root: string,
   targetOid: string,
   sourceOid: string,
+  recordedBase?: string | null,
 ): Promise<Comparison | null> {
-  const base = await mergeBase(root, targetOid, sourceOid);
+  const base =
+    recordedBase === undefined
+      ? await mergeBase(root, targetOid, sourceOid)
+      : recordedBase;
   if (!base) return null;
   const [log, names, numstat] = await Promise.all([
     raw(root, [

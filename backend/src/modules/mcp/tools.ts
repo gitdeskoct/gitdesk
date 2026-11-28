@@ -1,5 +1,6 @@
 import { McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { CREDENTIAL_FILE_MESSAGE, looksSecret } from '../../../../src/shared/mcp-file-privacy';
 import type { Db } from '../../db/client';
 import type { GitHost } from '../../lib/git-host';
 import { logEvent } from '../../lib/log';
@@ -23,6 +24,7 @@ import {
   branchName,
   commentBody,
   listQuery as pullListQuery,
+  reviewBody,
   updateBody,
 } from '../pull-requests/schemas';
 import { getOwned, listPage } from '../repositories/repositories';
@@ -258,13 +260,14 @@ export function buildServer(ctx: ToolContext): McpServer {
     'read_file',
     {
       title: 'Read a file',
-      description: `The text of one file in the hosted copy at a branch or commit, up to ${FILE_LIMIT / 1024} KB. Larger files, images and other binary files answer with their kind and size only.`,
+      description: `The text of one file in the hosted copy at a branch or commit, up to ${FILE_LIMIT / 1024} KB. Larger files, images and other binary files answer with their kind and size only. Credential filenames are refused.`,
       scope: 'repo:read',
       input: z.object({ repositoryId: uuid, ref: refInput, path: filePath }),
       repositoryOf: (input) => input.repositoryId,
     },
     async ({ repositoryId, ref, path }) => {
       const { git, repo } = await hosted(ctx, repositoryId);
+      if (looksSecret(path)) throw new ToolError(CREDENTIAL_FILE_MESSAGE, 'SECRET_FILE');
       const commit = await resolveRef(git, repo, ref);
       if (!commit) throw new ToolError('That branch or commit is not in the hosted copy.', 'REF_NOT_FOUND');
       const slash = path.lastIndexOf('/');
@@ -409,24 +412,15 @@ export function buildServer(ctx: ToolContext): McpServer {
     'review_pull_request',
     {
       title: 'Review a pull request',
-      description: 'Records a review (approved, changes_requested or commented) as the account owner, against the latest comparison the desktop reported. Refused when the pull request is not open or has no comparison yet.',
-      input: z.object({ pullRequestId: uuid, decision: z.enum(['approved', 'changes_requested', 'commented']), body: z.string().max(10_000).default('') }),
+      description: 'Reviews an open pull request as the account owner. From get_pull_request, pass pullRequest.latest.version as comparisonVersion and its sourceOid and targetOid. If the comparison changes, reread the pull request before reviewing again.',
+      input: reviewBody.extend({ pullRequestId: uuid, body: reviewBody.shape.body.default('') }),
     },
     async (row, input) => {
-      if (row.status !== 'open') throw new ToolError('Only an open pull request takes reviews.', 'INVALID_STATE');
-      const { latest } = await showPull(ctx.db, row);
-      if (!latest)
+      if (row.status !== 'open') throw new ToolError('The pull request is no longer open. Read it again before reviewing.', 'INVALID_STATE');
+      if (row.comparisonVersion === 0)
         throw new ToolError('This pull request has not been compared yet. Open it in the gitdesk desktop app first.', 'NO_COMPARISON');
-      const body = input.body.trim();
-      if (body.includes('\0')) throw new ToolError('The review has characters that cannot be stored.');
-      const result = await addReview(
-        ctx.db,
-        ctx.props.accountId,
-        row,
-        { decision: input.decision, body, comparisonVersion: latest.version, sourceOid: latest.sourceOid, targetOid: latest.targetOid },
-        Date.now(),
-      );
-      if (result.status === 'stale') throw new ToolError('The pull request changed while reviewing. Read it again and retry.', 'STALE');
+      const result = await addReview(ctx.db, ctx.props.accountId, row, input, Date.now());
+      if (result.status === 'stale') throw new ToolError('The pull request changed while reviewing. Read it again before reviewing.', 'STALE');
       return { review: result.review };
     },
   );
