@@ -555,9 +555,9 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
           headers: { 'idempotency-key': idempotencyKey },
         },
       ),
-    // One call shape for every pull request route: the path after /api/v1/pull-requests/:id.
     pullRequest: <T>(
       token: string,
+      repositoryId: string,
       id: string,
       rest: string,
       schema:
@@ -571,7 +571,7 @@ export function createApiClient(origin: string, fetchImpl: Fetch) {
       init: { method?: string; body?: unknown } = {},
     ) =>
       request(
-        `/api/v1/pull-requests/${encodeURIComponent(id)}${rest}`,
+        `/api/v1/repositories/${encodeURIComponent(repositoryId)}/pull-requests/${encodeURIComponent(id)}${rest}`,
         (schema === 'pull'
           ? pullResponse
           : schema === 'comments'

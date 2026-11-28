@@ -1,30 +1,22 @@
 #!/usr/bin/env bash
-# Starts a packaged gitdesk under a virtual display and waits for main to log that its window loaded.
-# Usage: smoke-linux.sh <path to the gitdesk binary>
+# Usage: smoke-linux.sh <path to the unpacked gitdesk binary>
 set -euo pipefail
 
-app="$1"
-log="$HOME/.config/gitdesk/logs/main.log"
-rm -f "$log"
+app=$(realpath -e "${1:?expected path to the packaged gitdesk binary}")
+package=$(dirname "$app")
+test -x "$app" && test -f "$package/resources/app.asar" || {
+  printf 'Not an unpacked gitdesk package: %s\n' "$app" >&2
+  exit 1
+}
+helper=$(dirname "$(realpath "$0")")/smoke-mcp.py
 
-# Its own process group, so stopping it also stops Xvfb and every Electron helper.
-setsid xvfb-run -a "$app" &
-group=$!
-stop() { kill -TERM -- "-$group" 2>/dev/null || true; }
-
-for _ in $(seq 1 60); do
-  if grep -q 'window ready' "$log" 2>/dev/null; then
-    echo "gitdesk started and loaded its window."
-    stop
-    exit 0
-  fi
-  if ! kill -0 "$group" 2>/dev/null; then
-    break
-  fi
-  sleep 1
-done
-
-echo "::error::gitdesk did not log 'window ready' within 60 seconds."
-cat "$log" 2>/dev/null || echo "(no log file at $log)"
-stop
-exit 1
+# Only the package and the driver are mounted beside the system runtime. The home, X display,
+# clipboard, D-Bus and MCP socket live in this namespace; its processes and tmpfs die together.
+exec timeout --kill-after=5s 120s bwrap --unshare-all --die-with-parent --new-session \
+  --ro-bind /usr /usr --ro-bind /etc /etc --ro-bind /lib /lib --ro-bind-try /lib64 /lib64 \
+  --symlink usr/bin /bin --dev /dev --proc /proc --tmpfs /tmp --perms 01777 --dir /tmp/.X11-unix \
+  --ro-bind "$package" '/packaged gitdesk' --ro-bind "$helper" /smoke-mcp.py \
+  --perms 0700 --dir /tmp/home --perms 0700 --dir /tmp/runtime --chdir /tmp/home \
+  --clearenv --setenv PATH /usr/bin:/bin --setenv LANG C.UTF-8 \
+  --setenv HOME /tmp/home --setenv XDG_RUNTIME_DIR /tmp/runtime --setenv GDK_BACKEND x11 \
+  xvfb-run -a dbus-run-session -- python3 -I -u /smoke-mcp.py "/packaged gitdesk/$(basename "$app")"

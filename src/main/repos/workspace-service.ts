@@ -52,6 +52,7 @@ import {
   launchEditor,
   type FoundEditor,
 } from '../editors/editors';
+import { ApprovedCommitChanged, runApprovedCommit } from './approved-commit';
 import { parseGitProgress } from './clone-runner';
 import { parseDiff, parseNumstat, untrackedDiff } from './git-diff';
 import { aggregate, parseLogNumstat, rangeStart } from './git-analytics';
@@ -81,6 +82,21 @@ import type { Journal } from '../sync/journal';
 const SIZE_TTL_MS = 30_000;
 
 export class WorkspaceError extends UserError {}
+
+export class WriteRefusal extends UserError {
+  constructor(
+    message: string,
+    readonly reason: string,
+  ) {
+    super(message);
+  }
+}
+
+export const changedSinceAsked = () =>
+  new WriteRefusal(
+    'The repository changed after the person was asked. Check its state and ask again.',
+    'STATE_CHANGED',
+  );
 // The list on screen no longer matches Git's status, or another program holds index.lock. Whole-file
 // writes answer these as results instead of errors (WriteResult).
 class StaleChanges extends WorkspaceError {}
@@ -676,7 +692,10 @@ export function createWorkspaceService(deps: {
     return inside.abs;
   }
 
-  async function diff(input: DiffInput): Promise<DiffResult> {
+  async function diff(
+    input: DiffInput,
+    checkPath?: (path: string | null) => void,
+  ): Promise<DiffResult> {
     const root = rootOf(input.id);
     const kind: ChangedFile['kind'] =
       input.side === 'staged'
@@ -687,6 +706,7 @@ export function createWorkspaceService(deps: {
             ? 'untracked'
             : 'conflict';
     const [file] = await requireChanged(input.id, root, [input.path], [kind]);
+    checkPath?.(file!.origPath ?? null);
     const maxLines = input.full ? MAX_FULL_LINES : MAX_LINES;
 
     if (input.side === 'untracked') {
@@ -837,9 +857,16 @@ export function createWorkspaceService(deps: {
     };
   }
 
-  async function inBatches(root: string, command: string[], paths: string[]) {
-    for (let i = 0; i < paths.length; i += BATCH)
+  async function inBatches(
+    root: string,
+    command: string[],
+    paths: string[],
+    assertAllowed?: () => void,
+  ) {
+    for (let i = 0; i < paths.length; i += BATCH) {
+      assertAllowed?.();
       await gitWrite(root, [...command, '--', ...paths.slice(i, i + BATCH)]);
+    }
   }
 
   // Staging a conflicted file marks it resolved, so it must not still hold conflict markers.
@@ -862,13 +889,52 @@ export function createWorkspaceService(deps: {
     return OID.test(oid) ? oid : null;
   }
 
+  async function commitState(root: string) {
+    const [branch, head, tree] = await Promise.all([
+      currentBranch(root),
+      headOid(root),
+      gitRaw(root, ['write-tree']).then((out) => out.trim()),
+    ]);
+    if (!OID.test(tree) || (!branch && !head))
+      throw new WorkspaceError(
+        "Git couldn't identify the staged tree or HEAD.",
+      );
+    return { branch, head, tree };
+  }
+
+  async function prepareCommit(id: string) {
+    const root = rootOf(id);
+    const state = await commitState(root);
+    // Derive the prompt from immutable trees, not a second read of a moving index.
+    const args = state.head
+      ? [
+          'diff',
+          '--name-only',
+          '--no-renames',
+          '--no-ext-diff',
+          '--no-textconv',
+          '-z',
+          state.head,
+          state.tree,
+          '--',
+        ]
+      : ['ls-tree', '-rz', '--name-only', state.tree];
+    const listing = await gitBytes(root, args, { maxBytes: MAX_WRITE_OUTPUT });
+    if (listing.code !== 0)
+      throw new WorkspaceError("Git couldn't list the staged files.");
+    const paths = listing.stdout.toString('utf8').split('\0').filter(Boolean);
+    return { ...state, paths };
+  }
+
   async function currentBranch(root: string): Promise<string | null> {
     const name = (
       await gitAt(root)
-        .raw(['symbolic-ref', '--quiet', '--short', 'HEAD'])
+        .raw(['symbolic-ref', '--quiet', 'HEAD'])
         .catch(() => '')
     ).trim();
-    return name || null;
+    return name.startsWith('refs/heads/')
+      ? name.slice('refs/heads/'.length)
+      : null;
   }
 
   async function remoteNames(root: string): Promise<string[]> {
@@ -1037,6 +1103,7 @@ export function createWorkspaceService(deps: {
     root: string,
     remote: string,
     scope: 'read' | 'write',
+    approvedUrl?: string,
   ): Promise<Record<string, string> | undefined> {
     const remoteId = deps.store.get(id)?.remoteId;
     if (!remoteId || !deps.gitAuth) return undefined;
@@ -1046,11 +1113,13 @@ export function createWorkspaceService(deps: {
       ...(scope === 'write' ? ['--push'] : []),
       remote,
     ];
-    const url = (
-      await gitAt(root)
-        .raw(args)
-        .catch(() => '')
-    ).trim();
+    const url =
+      approvedUrl ??
+      (
+        await gitAt(root)
+          .raw(args)
+          .catch(() => '')
+      ).trim();
     if (!url) return undefined;
     return (await deps.gitAuth(remoteId, url, scope)) ?? undefined;
   }
@@ -1064,11 +1133,13 @@ export function createWorkspaceService(deps: {
     timeoutMs: number,
     auth: Record<string, string> | undefined,
     onLine?: (line: string) => void,
+    approvedPushAlias = false,
   ) {
     const git = gitAt(root, {
       abort: signal,
       timeoutMs,
       allowProtocolOverride: true,
+      approvedPushAlias,
       auth,
       config: [
         'protocol.allow=never',
@@ -1120,8 +1191,9 @@ export function createWorkspaceService(deps: {
     remote: string,
     scope: 'read' | 'write',
     run: (auth: Record<string, string> | undefined) => Promise<T>,
+    approvedUrl?: string,
   ): Promise<T> {
-    const auth = await hostedAuth(id, root, remote, scope);
+    const auth = await hostedAuth(id, root, remote, scope, approvedUrl);
     try {
       return await run(auth);
     } catch (err) {
@@ -1134,7 +1206,7 @@ export function createWorkspaceService(deps: {
       )
         throw err;
       deps.forgetAuth(remoteId);
-      return run(await hostedAuth(id, root, remote, scope));
+      return run(await hostedAuth(id, root, remote, scope, approvedUrl));
     }
   }
 
@@ -1145,7 +1217,7 @@ export function createWorkspaceService(deps: {
     id: string,
     remote: string,
     jobId: string,
-    options: { record?: boolean } = {},
+    options: { record?: boolean; assertAllowed?: () => void } = {},
   ): Promise<FetchResult> {
     const key = `${id}\0${remote}`;
     const running = fetching.get(key);
@@ -1161,7 +1233,7 @@ export function createWorkspaceService(deps: {
     id: string,
     remote: string,
     jobId: string,
-    options: { record?: boolean },
+    options: { record?: boolean; assertAllowed?: () => void },
   ): Promise<FetchResult> {
     const root = rootOf(id);
     const remotes = await remoteNames(root);
@@ -1183,11 +1255,16 @@ export function createWorkspaceService(deps: {
     fetches.set(jobId, controller);
     try {
       // Prune follows the user's own fetch.prune.
-      await withHostedRetry(id, root, remote, 'read', (auth) =>
-        transferGit(root, jobId, controller.signal, FETCH_TIMEOUT_MS, auth).raw(
-          ['fetch', '--progress', '--recurse-submodules=no', remote],
-        ),
-      );
+      await withHostedRetry(id, root, remote, 'read', (auth) => {
+        options.assertAllowed?.();
+        return transferGit(
+          root,
+          jobId,
+          controller.signal,
+          FETCH_TIMEOUT_MS,
+          auth,
+        ).raw(['fetch', '--progress', '--recurse-submodules=no', remote]);
+      });
       deps.addActivity(id, 'fetched', remote);
       deps.journal?.markFetched(id, remote);
       if (opId) deps.journal?.update(opId, { state: 'completed' });
@@ -1195,11 +1272,12 @@ export function createWorkspaceService(deps: {
     } catch (err) {
       const text = errorText(err);
       // A UserError comes from the account side: no token could be had for the hosted remote.
-      const reason = controller.signal.aborted
-        ? 'cancelled'
-        : err instanceof UserError
-          ? 'auth'
-          : classifyFetchError(text);
+      const reason =
+        controller.signal.aborted || err instanceof WriteRefusal
+          ? 'cancelled'
+          : err instanceof UserError
+            ? 'auth'
+            : classifyFetchError(text);
       const code = syncCodeFor(reason, text);
       const message =
         err instanceof UserError ? err.message : FETCH_MESSAGES[reason];
@@ -1209,6 +1287,7 @@ export function createWorkspaceService(deps: {
           code,
           message,
         });
+      if (err instanceof WriteRefusal) throw err;
       return { status: 'failed', reason, code, message };
     } finally {
       fetches.delete(jobId);
@@ -1216,31 +1295,14 @@ export function createWorkspaceService(deps: {
     }
   }
 
-  // The current branch goes to its upstream when it has one on a configured remote; otherwise to
-  // the same name on the default remote, which then becomes its upstream. Publish names both the
-  // remote and the branch. Never a force push: the remote's own check keeps its newer commits.
-  async function pushBranch(
+  async function resolvePush(
     id: string,
-    jobId: string,
+    root: string,
     publish?: { remote: string; branch: string },
-    // A branch other than the current one, from the Branches tab; its own upstream applies.
     local?: string,
-  ): Promise<PushResult> {
-    const root = rootOf(id);
-    const failed = (
-      reason: PushFailure,
-      message = PUSH_MESSAGES[reason],
-      operationId?: string,
-      text = '',
-    ): PushResult => ({
-      status: 'failed',
-      reason,
-      code: syncCodeFor(reason, text),
-      message,
-      ...(operationId ? { operationId } : {}),
-    });
+  ) {
     const branch = local ?? (await currentBranch(root));
-    if (!branch) return failed('detached');
+    if (!branch) return { error: 'detached' as const };
     const branchOid = local
       ? await refOid(root, `refs/heads/${local}`)
       : await headOid(root);
@@ -1269,14 +1331,121 @@ export function createWorkspaceService(deps: {
       : tracked
         ? upstreamRemote
         : await defaultRemote(id, root);
-    if (!remote || remote.startsWith('-')) return failed('no-remote');
-    if (pushes.has(jobId))
-      throw new WorkspaceError('That push is already running.');
+    if (!remote || remote.startsWith('-'))
+      return { error: 'no-remote' as const };
     const target = publish
       ? `refs/heads/${publish.branch}`
       : tracked
         ? upstreamRef
         : `refs/heads/${branch}`;
+    return { branch, branchOid, remote, target, tracked };
+  }
+
+  type Destination = Extract<
+    Awaited<ReturnType<typeof resolvePush>>,
+    { branch: string }
+  >;
+  const samePush = (a: Destination, b: Destination) =>
+    a.branch === b.branch &&
+    a.branchOid === b.branchOid &&
+    a.remote === b.remote &&
+    a.target === b.target &&
+    a.tracked === b.tracked;
+
+  async function preparePush(id: string) {
+    const root = rootOf(id);
+    const plan = await resolvePush(id, root);
+    if (plan.error) throw new WorkspaceError(PUSH_MESSAGES[plan.error]);
+    if (!plan.branchOid)
+      throw new WorkspaceError('There is no commit to push.');
+    const raw = await gitRaw(root, [
+      'remote',
+      'get-url',
+      '--push',
+      '--all',
+      '--',
+      plan.remote,
+    ]);
+    let url = raw.replace(/\r?\n$/, '');
+    if (!url || /[\p{Cc}\p{Cf}]/u.test(url) || /^[\w+-]+::/.test(url))
+      throw new WorkspaceError(
+        'This remote does not have a single supported push destination. Push it from gitdesk instead.',
+      );
+    let label: string;
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) {
+      const parsed = URL.canParse(url) ? new URL(url) : null;
+      if (!parsed || !['https:', 'ssh:', 'file:'].includes(parsed.protocol))
+        throw new WorkspaceError(
+          'This push destination cannot be approved safely.',
+        );
+      parsed.username = parsed.password = parsed.search = parsed.hash = '';
+      label = parsed.toString();
+    } else {
+      const scp = /^(?:[^/@:]+@)?([^/@:\\]+):(.+)$/.exec(url);
+      if (scp && !path.isAbsolute(url))
+        label = `${scp[1]}:${scp[2]!.split(/[?#]/, 1)[0]}`;
+      else label = url = path.resolve(root, url);
+    }
+    return { ...plan, branchOid: plan.branchOid, url, label };
+  }
+
+  // A one-use URL spelling keeps credentials out of argv and prevents Git from resolving a
+  // changed remote name (or rewriting an already-expanded URL a second time).
+  function pinnedTransport(url: string, auth?: Record<string, string>) {
+    const name = `gitdesk-${randomUUID()}:`;
+    const env: Record<string, string> = { ...auth };
+    let n = Number(env.GIT_CONFIG_COUNT ?? 0);
+    for (const [key, value] of [
+      [`url.${url}.insteadOf`, name],
+      [`url.${url}.pushInsteadOf`, name],
+      ...(/^https:\/\//i.test(url)
+        ? [[`http.${url}.followRedirects`, 'false']]
+        : []),
+    ] as [string, string][]) {
+      env[`GIT_CONFIG_KEY_${n}`] = key;
+      env[`GIT_CONFIG_VALUE_${n++}`] = value;
+    }
+    env.GIT_CONFIG_COUNT = String(n);
+    return { name, env };
+  }
+
+  // The current branch goes to its upstream when it has one on a configured remote; otherwise to
+  // the same name on the default remote, which then becomes its upstream. Publish names both the
+  // remote and the branch. Never a force push: the remote's own check keeps its newer commits.
+  async function pushBranch(
+    id: string,
+    jobId: string,
+    publish?: { remote: string; branch: string },
+    // A branch other than the current one, from the Branches tab; its own upstream applies.
+    local?: string,
+    approval?: {
+      expected: Awaited<ReturnType<typeof preparePush>>;
+      assertAllowed: () => void;
+    },
+  ): Promise<PushResult> {
+    const root = rootOf(id);
+    const failed = (
+      reason: PushFailure,
+      message = PUSH_MESSAGES[reason],
+      operationId?: string,
+      text = '',
+    ): PushResult => ({
+      status: 'failed',
+      reason,
+      code: syncCodeFor(reason, text),
+      message,
+      ...(operationId ? { operationId } : {}),
+    });
+    const plan = await resolvePush(id, root, publish, local);
+    if (plan.error) {
+      if (approval) throw changedSinceAsked();
+      return failed(plan.error);
+    }
+    const { branch, branchOid, remote, target, tracked } = plan;
+    if (approval && !samePush(plan, approval.expected))
+      throw changedSinceAsked();
+    if (pushes.has(jobId))
+      throw new WorkspaceError('That push is already running.');
     const short = target.slice('refs/heads/'.length);
     const [localOid, trackingOid] = await Promise.all([
       branchOid,
@@ -1319,41 +1488,72 @@ export function createWorkspaceService(deps: {
       };
     };
     try {
-      await withHostedRetry(id, root, remote, 'write', (auth) =>
-        transferGit(
-          root,
-          jobId,
-          controller.signal,
-          PUSH_TIMEOUT_MS,
-          auth,
-          (line) => {
-            if (/^(Writing objects|Total \d+)/.test(line)) sent = true;
-          },
-        ).raw([
-          'push',
-          '--progress',
-          '--recurse-submodules=no',
-          ...(tracked ? [] : ['--set-upstream']),
-          remote,
-          `refs/heads/${branch}:${target}`,
-        ]),
+      await withHostedRetry(
+        id,
+        root,
+        remote,
+        'write',
+        async (auth) => {
+          let endpoint = remote;
+          let source = `refs/heads/${branch}`;
+          if (approval) {
+            const current = await preparePush(id).catch(() => {
+              throw changedSinceAsked();
+            });
+            if (
+              !samePush(current, approval.expected) ||
+              current.url !== approval.expected.url
+            )
+              throw changedSinceAsked();
+            const pinned = pinnedTransport(current.url, auth);
+            endpoint = pinned.name;
+            auth = pinned.env;
+            source = approval.expected.branchOid;
+            approval.assertAllowed();
+          }
+          return transferGit(
+            root,
+            jobId,
+            controller.signal,
+            PUSH_TIMEOUT_MS,
+            auth,
+            (line) => {
+              if (/^(Writing objects|Total \d+)/.test(line)) sent = true;
+            },
+            !!approval,
+          ).raw([
+            'push',
+            '--progress',
+            '--recurse-submodules=no',
+            ...(approval
+              ? ['--no-follow-tags', '--no-force']
+              : tracked
+                ? []
+                : ['--set-upstream']),
+            '--',
+            endpoint,
+            `${source}:${target}`,
+          ]);
+        },
+        approval?.expected.url,
       );
       return done();
     } catch (err) {
       const text = errorText(err);
-      let reason: PushFailure = controller.signal.aborted
-        ? 'cancelled'
-        : err instanceof UserError
-          ? 'auth'
-          : classifyPushError(text);
+      let reason: PushFailure =
+        controller.signal.aborted || err instanceof WriteRefusal
+          ? 'cancelled'
+          : err instanceof UserError
+            ? 'auth'
+            : classifyPushError(text);
       // Cut off after sending: ask the remote what it holds before calling it a failure.
       if (
         sent &&
         (reason === 'cancelled' || reason === 'network' || reason === 'failed')
       ) {
-        const tip = await lsRemote(id, root, remote, target).catch(
-          () => undefined,
-        );
+        const tip = approval
+          ? undefined
+          : await lsRemote(id, root, remote, target).catch(() => undefined);
         if (tip !== undefined && tip === localOid) return done();
         if (tip === undefined || tip !== trackingOid) reason = 'unknown';
       }
@@ -1370,6 +1570,7 @@ export function createWorkspaceService(deps: {
           code: syncCodeFor(reason, text),
           message,
         });
+      if (err instanceof WriteRefusal) throw err;
       return failed(reason, message, opId, text);
     } finally {
       pushes.delete(jobId);
@@ -1690,7 +1891,7 @@ export function createWorkspaceService(deps: {
   return {
     diff,
 
-    stage: (input: PathsInput) =>
+    stage: (input: PathsInput, assertAllowed?: () => void) =>
       serial(input.id, () =>
         written(input.id, async () => {
           const root = rootOf(input.id);
@@ -1706,6 +1907,7 @@ export function createWorkspaceService(deps: {
             root,
             ['add'],
             files.map((f) => f.path),
+            assertAllowed,
           );
           await deps.refresh(input.id);
         }),
@@ -1727,7 +1929,7 @@ export function createWorkspaceService(deps: {
         }),
       ),
 
-    unstage: (input: PathsInput) =>
+    unstage: (input: PathsInput, assertAllowed?: () => void) =>
       serial(input.id, () =>
         written(input.id, async () => {
           const root = rootOf(input.id);
@@ -1741,8 +1943,19 @@ export function createWorkspaceService(deps: {
           );
           // An unborn branch has no HEAD to restore from; rm --cached only touches the index.
           if (await headOid(root))
-            await inBatches(root, ['restore', '--staged'], paths);
-          else await inBatches(root, ['rm', '--cached', '--quiet'], paths);
+            await inBatches(
+              root,
+              ['restore', '--staged'],
+              paths,
+              assertAllowed,
+            );
+          else
+            await inBatches(
+              root,
+              ['rm', '--cached', '--quiet'],
+              paths,
+              assertAllowed,
+            );
           await deps.refresh(input.id);
         }),
       ),
@@ -2077,7 +2290,14 @@ export function createWorkspaceService(deps: {
       };
     },
 
-    commit: (input: CommitInput) =>
+    prepareCommit,
+    commit: (
+      input: CommitInput,
+      approval?: {
+        expected: Awaited<ReturnType<typeof commitState>>;
+        assertAllowed: () => void;
+      },
+    ) =>
       serial(input.id, async (): Promise<CommitResult> => {
         const root = rootOf(input.id);
         if (await lockHeld(root))
@@ -2107,14 +2327,37 @@ export function createWorkspaceService(deps: {
         const args = ['commit', '--quiet', '-m', message];
         if (deps.settings().commitSignoff) args.push('--signoff');
         const before = await headOid(root);
-        const result = await gitBytes(root, args, {
+        if (approval) {
+          if (merging || (await operationInProgress(root)))
+            throw changedSinceAsked();
+          const { branch, head, tree } = await commitState(root);
+          const expected = approval.expected;
+          if (
+            branch !== expected.branch ||
+            head !== expected.head ||
+            tree !== expected.tree
+          )
+            throw changedSinceAsked();
+          approval.assertAllowed();
+        }
+        const limits = {
           maxBytes: MAX_COMMIT_OUTPUT,
           timeoutMs: COMMIT_TIMEOUT_MS,
-        }).catch((err: unknown) => ({
-          code: -1,
-          stdout: Buffer.alloc(0),
-          stderr: errorText(err),
-        }));
+        };
+        const run = approval
+          ? runApprovedCommit(
+              root,
+              args,
+              approval.expected,
+              limits,
+              approval.assertAllowed,
+            )
+          : gitBytes(root, args, limits);
+        const result = await run.catch((err: unknown) => {
+          if (err instanceof ApprovedCommitChanged) throw changedSinceAsked();
+          if (err instanceof WriteRefusal) throw err;
+          return { code: -1, stdout: Buffer.alloc(0), stderr: errorText(err) };
+        });
         const after = await headOid(root);
         await deps.refresh(input.id).catch(() => undefined);
         // Success is a new HEAD, not just exit 0: a hook can fail without a word.
@@ -2158,11 +2401,14 @@ export function createWorkspaceService(deps: {
 
     branches,
 
-    switchBranch: (input: {
-      id: string;
-      name: string;
-      kind: 'local' | 'remote';
-    }) =>
+    switchBranch: (
+      input: {
+        id: string;
+        name: string;
+        kind: 'local' | 'remote';
+      },
+      assertAllowed?: () => void,
+    ) =>
       serial(input.id, async (): Promise<SwitchResult> => {
         const root = rootOf(input.id);
         if (await operationInProgress(root))
@@ -2177,6 +2423,7 @@ export function createWorkspaceService(deps: {
             return { status: 'switched', branch: branch.name };
           if (branch.otherWorktree)
             return { status: 'blocked', reason: 'other-worktree' };
+          assertAllowed?.();
           return runSwitch(
             input.id,
             root,
@@ -2188,6 +2435,7 @@ export function createWorkspaceService(deps: {
         if (!branch || branch.branch.startsWith('-'))
           return { status: 'blocked', reason: 'not-found' };
         if (branch.hasLocal) return { status: 'blocked', reason: 'exists' };
+        assertAllowed?.();
         return runSwitch(
           input.id,
           root,
@@ -2221,8 +2469,14 @@ export function createWorkspaceService(deps: {
       }),
 
     // A fetch someone asked for is journaled; the automatic one only updates the remote's time.
-    fetch: (input: { id: string; remote: string; jobId: string }) =>
-      fetchRemote(input.id, input.remote, input.jobId, { record: true }),
+    fetch: (
+      input: { id: string; remote: string; jobId: string },
+      assertAllowed?: () => void,
+    ) =>
+      fetchRemote(input.id, input.remote, input.jobId, {
+        record: true,
+        assertAllowed,
+      }),
     fetchQuietly: (id: string, remote: string, jobId: string) =>
       fetchRemote(id, remote, jobId),
 
@@ -2230,8 +2484,19 @@ export function createWorkspaceService(deps: {
       fetches.get(jobId)?.abort();
     },
 
-    push: (input: { id: string; jobId: string }) =>
-      pushBranch(input.id, input.jobId),
+    preparePush,
+    push: (
+      input: { id: string; jobId: string },
+      approval?: {
+        expected: Awaited<ReturnType<typeof preparePush>>;
+        assertAllowed: () => void;
+      },
+    ) =>
+      approval
+        ? serial(input.id, () =>
+            pushBranch(input.id, input.jobId, undefined, undefined, approval),
+          )
+        : pushBranch(input.id, input.jobId),
 
     publish: (input: {
       id: string;

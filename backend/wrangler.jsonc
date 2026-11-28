@@ -50,9 +50,9 @@
   "artifacts": [{ "binding": "ARTIFACTS", "namespace": "gitdesk", "remote": true }],
   // Repository data, one prefix per repository (repositories/<id>/). Only the Worker maps ids to keys.
   "r2_buckets": [{ "binding": "REPO_STORAGE", "bucket_name": "gitdesk-repositories" }],
-  // MCP authorization (@cloudflare/workers-oauth-provider): registered clients, grants and token
-  // hashes. Create it with `npx wrangler kv namespace create OAUTH_KV --env=` and paste the id.
-  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "REPLACE_WITH_PRODUCTION_OAUTH_KV_ID" }],
+  // npm run deploy fills this binding from the existing production namespace. Keep an explicit id
+  // in the template: an omitted id would let a bare Wrangler deploy auto-provision an empty store.
+  "kv_namespaces": [{ "binding": "OAUTH_KV", "id": "$GITDESK_PRODUCTION_OAUTH_KV_ID" }],
   // Per-location, eventually consistent. PKCE and atomic code consumption are the real protection.
   "ratelimits": [
     { "name": "AUTH_LIMITER", "namespace_id": "4101", "simple": { "limit": 10, "period": 60 } },

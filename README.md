@@ -27,6 +27,17 @@ gitdesk brings Git work into a focused desktop workspace:
 
 The app is built with Electron, React, TypeScript, Tailwind, Hono, D1, Drizzle, and `jose`.
 
+## Connecting an AI app
+
+Choose the model in your AI app and add gitdesk as an MCP server there. You do not need to give gitdesk a model API key.
+
+- **Local working tree:** Open **Settings › MCP › This computer**, enable access, select the repositories to share, and use **Copy setup**. Keep gitdesk open. The setup supplies the executable, arguments and environment for a stdio connector; adapt the outer JSON key if your AI app uses a different config format. Local writes are off by default and require approval in gitdesk when enabled.
+- **Hosted repositories:** Use **Settings › MCP › Your account › Server address for agents**. Add that URL as a remote Streamable HTTP server and complete the browser consent flow. It accesses hosted data, not your working tree. To disconnect it, use **Revoke**; signing out of the desktop or switching to local-only does not revoke its grant.
+
+For MCP commits, gitdesk needs Git 2.43 or newer with file-based refs and hooks so it can check the final commit before the branch moves. If a formatting hook stages different contents, inspect those changes and approve a new request. Normal desktop commits do not use this guard.
+
+Your AI app receives the tool results and may send them to its model provider. See the [file privacy policy](SECURITY.md#mcp-file-privacy) and [account tools and permissions](backend/README.md#mcp-for-ai-agents-srcmodulesmcp).
+
 ## Security model
 
 The renderer is sandboxed and untrusted. The privileged Electron main process owns Git, the filesystem, network access, and credentials. The Worker validates requests, owns sessions and token issuance, and treats all client input as untrusted.

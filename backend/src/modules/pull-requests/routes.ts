@@ -53,7 +53,7 @@ const pullLimit = rateLimit('PULL_LIMITER', (c) => c.get('auth').accountId);
 const NOT_FOUND = () => new ApiError('NOT_FOUND', 'Not found.');
 
 async function owned(c: Context<AppEnv>, pullRequestId: string) {
-  const row = await pullOwned(getDb(c.env.DB), c.get('auth').accountId, pullRequestId);
+  const row = await pullOwned(getDb(c.env.DB), c.get('auth').accountId, pullRequestId, c.req.param('repositoryId'));
   if (!row) throw NOT_FOUND();
   return row;
 }
@@ -119,12 +119,16 @@ export function repositoryPullRoutes(app: Hono<AppEnv>) {
       return c.json({ pullRequest: await showPull(db, row) }, 201);
     },
   );
+  app.route('/:repositoryId/pull-requests', individualPullRoutes());
 }
 
-// Under /api/v1/pull-requests: one pull request, found only through its owner's repository.
+// Existing REST clients address a pull request by account and id alone.
 export function pullRequestRoutes() {
+  return new Hono<AppEnv>().use(requireAuth).route('/', individualPullRoutes());
+}
+
+function individualPullRoutes() {
   const app = new Hono<AppEnv>();
-  app.use(requireAuth);
 
   app.get('/:pullRequestId', validate('param', pullParams), async (c) => {
     const row = await owned(c, c.req.valid('param').pullRequestId);
@@ -231,7 +235,7 @@ export function pullRequestRoutes() {
     if (result.status === 'conflict')
       throw new ApiError('VALIDATION_FAILED', 'That operation id belongs to another pull request.');
     logEvent('pull_request_merged', { requestId: c.get('requestId'), accountId });
-    return c.json({ pullRequest: await showPull(db, (await pullOwned(db, accountId, row.id))!) });
+    return c.json({ pullRequest: await showPull(db, await owned(c, row.id)) });
   });
 
   app.get('/:pullRequestId/merge-state', validate('param', pullParams), async (c) => {

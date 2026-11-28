@@ -94,6 +94,8 @@ Scopes, each enforced by the tools that need it (an agent sees only the tools it
 | `pr:write` | Comment, review, edit, close and reopen pull requests. Never merge or push. Brings `pr:read` with it. |
 | `offline_access` | A refresh token. Without it the grant ends with its one-hour access token. With it, a grant lasts 30 days from last use and 90 days at most. |
 
+To use `review_pull_request`, first call `get_pull_request` and read `pullRequest.latest`. Pass its `version` as `comparisonVersion`, along with its `sourceOid` and `targetOid`, the `pullRequestId`, and your `decision` (`approved`, `changes_requested`, or `commented`). The review `body` is optional. If `latest` is null, open the pull request in the desktop app to record a comparison. If the pull request closes or the comparison changes before the review is saved, the tool refuses it. Reread the pull request before reviewing again.
+
 Only the scopes the consent page offered for that client can be granted. Tokens and grants are the OAuth library's, in `OAUTH_KV` (hashed, props encrypted). D1 keeps `mcp_grant_usage` (last use, at most one write a minute) and `mcp_audit`: every write, and every read refused for scope or for an id that isn't the account's, with the tool, repository, outcome and reason, never arguments. Rate-limit refusals are logged, not audited. The cron removes audit rows after 90 days.
 
 ### Repository lifecycle
@@ -159,7 +161,7 @@ R2 can't speak Git's smart HTTP protocol, so Git data lives in [Cloudflare Artif
 | `PULL_LIMITER` | rate limit binding | `wrangler.jsonc` | Pull request writes, 60 per 60 seconds per account, shared by the desktop and MCP agents |
 | `MCP_LIMITER` | rate limit binding | `wrangler.jsonc`, namespace 4108 or 5108 | MCP calls, 120 per 60 seconds per authorized agent |
 | `MCP_IP_LIMITER` | rate limit binding | `wrangler.jsonc`, namespace 4109 or 5109 | `/mcp` and its discovery documents, 600 per 60 seconds per IP, before any token is looked up |
-| `OAUTH_KV` | KV binding | `wrangler.jsonc`, one namespace per environment. Create with `npx wrangler kv namespace create OAUTH_KV --env=` (or `--env dev`) and paste the id | MCP OAuth clients, grants, token hashes and consent transactions |
+| `OAUTH_KV` | KV binding | One namespace per environment. `npm run deploy` takes the production namespace ID from `GITDESK_PRODUCTION_OAUTH_KV_ID` in the release environment; dev uses `env.dev.kv_namespaces`. | MCP OAuth clients, grants, token hashes and consent transactions |
 
 `PUBLIC_ORIGIN` is an origin with no trailing slash, because the code appends `/api/v1/auth/google/callback` to it.
 
@@ -255,7 +257,9 @@ Environments inherit no bindings or vars, so `env.dev` restates every one; nothi
 
 ### Deploying a change
 
-Try it on dev, then production. Apply any new migration before the code that needs it. Secrets carry over between deploys.
+Try it on dev, then production. Apply any new migration before the code that needs it. Secrets carry over between deploys. Deploy the Worker with repository-scoped pull request routes before releasing the desktop that uses them: older desktops keep their existing routes, but a new desktop intentionally does not retry an account-wide route if its scoped route is missing.
+
+Set `GITDESK_PRODUCTION_OAUTH_KV_ID` in the release environment to the 32-hex-digit ID of **the namespace bound to the production Worker's `OAUTH_KV`**. Check the binding in the Cloudflare dashboard; a valid-looking ID alone does not prove it is the right store. Do not replace an existing grant store with a fresh namespace. Use `npm run deploy` rather than invoking `wrangler deploy` directly for production. It validates the ID and passes Wrangler an ephemeral config; the checked-in config and dev binding are not modified. `npm run deploy -- --dry-run` checks the bundle without uploading it or verifying live resources.
 
 ```bash
 npm run db:migrate:dev
@@ -320,9 +324,10 @@ Set `VITE_API_ORIGIN` in the root `.env` for local development. Released develop
 
 1. `npx wrangler d1 create gitdesk-db` and `npx wrangler d1 create gitdesk-db-dev`, and put each `database_id` in `wrangler.jsonc`.
 2. `npx wrangler r2 bucket create gitdesk-repositories` and `npx wrangler r2 bucket create gitdesk-repositories-dev`.
-3. Set `PUBLIC_ORIGIN` as a secret in each deployed environment.
-4. `npm run db:migrate:remote` and `npm run db:migrate:dev`.
-5. Deploy each once with its four secrets, so the required-secrets check passes: `npx wrangler deploy --minify --env= --secrets-file <file>` and the same with `--env dev`, each with a JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SIGNING_KEY` and `PUBLIC_ORIGIN`. Delete the files afterwards.
+3. On a **new** account, create separate KV namespaces for production and dev. Set `GITDESK_PRODUCTION_OAUTH_KV_ID` in the release environment and set the dev ID in `env.dev.kv_namespaces`. For an existing installation, use its existing namespaces instead.
+4. Set `PUBLIC_ORIGIN` for each environment. Register both `<PUBLIC_ORIGIN>/api/v1/auth/google/callback` and `<PUBLIC_ORIGIN>/oauth/google/callback` with Google.
+5. `npm run db:migrate:remote` and `npm run db:migrate:dev`.
+6. Deploy each once with its four secrets, so the required-secrets check passes: `npm run deploy -- --secrets-file <file>` and `npm run deploy:dev -- --secrets-file <file>`, each with a protected JSON file of `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `JWT_SIGNING_KEY` and `PUBLIC_ORIGIN`. Delete the files afterwards.
 
 ## Changing the schema
 
@@ -351,7 +356,7 @@ npm run cf-typegen
 | `git-host:local` | The local Git host for `dev:hosted` |
 | `test` | `vitest run` |
 | `typecheck` | `tsc --noEmit` |
-| `deploy` | `wrangler deploy --minify` |
+| `deploy` | Validates the production OAuth KV ID and runs `wrangler deploy --minify --env=` |
 | `cf-typegen` | `wrangler types --env-interface CloudflareBindings` |
 | `db:generate` | `drizzle-kit generate` |
 | `db:migrate:local` | `wrangler d1 migrations apply DB --local` |

@@ -144,7 +144,7 @@ export function GeneralSection() {
         <SettingRow
           id="local-only"
           label="Use gitdesk without an account"
-          description="Local Git only. Remote features ask you to sign in first."
+          description="Use local Git without signing in. Existing cloud agents keep their access. To stop one, revoke it in Settings › MCP before switching to local-only mode or signing out."
         >
           <Switch
             aria-label="Use gitdesk without an account"

@@ -110,8 +110,6 @@ jobs:
     uses: ./.github/workflows/quality.yml
     with:
       ref: ${{ needs.plan.outputs.sha }}
-    secrets:
-      API_ORIGIN: ${{ secrets.API_ORIGIN }}
 
   tag:
     name: Commit and tag the version
@@ -252,7 +250,7 @@ jobs:
       # bsdtar builds the pacman package; xvfb runs the smoke test.
       - run: |
           sudo apt-get update
-          sudo apt-get install -y libarchive-tools xvfb
+          sudo apt-get install -y libarchive-tools xvfb xauth bubblewrap dbus-daemon libglib2.0-bin at-spi2-core python3-gi gir1.2-atspi-2.0 gir1.2-gtk-3.0
       - run: npm version "$VERSION" --no-git-tag-version --allow-same-version
         env:
           VERSION: ${{ needs.plan.outputs.version }}
@@ -263,7 +261,7 @@ jobs:
         run: npm run dist -- --linux
       - name: Updater metadata is packaged
         run: test -f dist/linux-unpacked/resources/app-update.yml
-      - name: Launch the packaged app
+      - name: Launch the packaged app and exercise MCP over stdio
         run: |
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           bash .github/scripts/smoke-linux.sh dist/linux-unpacked/gitdesk

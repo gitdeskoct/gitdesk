@@ -18,7 +18,7 @@ import {
 } from '../../shared/source';
 import { UserError } from '../errors';
 import { gitBytes } from './git-inspector';
-import { parseStatusPaths, type StatusPath } from './git-status';
+import { parseStatus, parseStatusPaths, type StatusPath } from './git-status';
 import { resolveInside } from './paths';
 import { classify } from './source-classify';
 
@@ -486,6 +486,71 @@ export function createSourceService(deps: {
 
   return {
     read,
+
+    async readForAgent(input: SourceReadInput): Promise<SourceFile> {
+      if (input.snapshot.kind === 'worktree') {
+        const root = deps.rootOf(input.id);
+        // check-ignore does not support literal pathspecs. Ask for the exact visible name instead.
+        const visible = await gitBytes(
+          root,
+          [
+            'ls-files',
+            '-z',
+            '--cached',
+            '--others',
+            '--exclude-standard',
+            '--',
+            input.path,
+          ],
+          { maxBytes: 64 * 1024 },
+        );
+        if (visible.code !== 0 || visible.stderr)
+          throw new SourceError(
+            "Git couldn't verify whether this file is ignored.",
+          );
+        if (!visible.stdout.toString('utf8').split('\0').includes(input.path))
+          throw new SourceError(
+            'That path is ignored or is not a visible worktree file.',
+          );
+        // A tracked parent can have been replaced on disk with a link into an ignored directory.
+        for (
+          let parent = path.dirname(input.path);
+          parent !== '.';
+          parent = path.dirname(parent)
+        ) {
+          if ((await lstat(path.join(root, parent))).isSymbolicLink())
+            throw new SourceError(
+              'Agents cannot read through a linked folder.',
+            );
+        }
+      }
+      return read(input);
+    },
+
+    async agentRenameSource(id: string, file: string): Promise<string | null> {
+      // Limiting status to the destination loses its rename partner. Don't use the UI's row cap.
+      const status = await gitBytes(
+        deps.rootOf(id),
+        [
+          'status',
+          '--porcelain=v2',
+          '-z',
+          '--untracked-files=no',
+          '--find-renames',
+          '--ignore-submodules=all',
+        ],
+        { maxBytes: LIST_BYTES },
+      );
+      if (status.code !== 0 || status.stderr)
+        throw new SourceError(
+          "Git couldn't verify whether this file was renamed.",
+        );
+      return (
+        parseStatus(status.stdout.toString('utf8'), Infinity).files.find(
+          (entry) => entry.path === file && entry.origPath,
+        )?.origPath ?? null
+      );
+    },
 
     async list(input: SourceListInput): Promise<SourceListResult> {
       const root = deps.rootOf(input.id);

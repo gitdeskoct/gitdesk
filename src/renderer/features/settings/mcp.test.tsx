@@ -128,6 +128,9 @@ describe('Settings › MCP', () => {
     expect(
       await screen.findByText('Agents connected to your account'),
     ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Signing out does not revoke cloud agents/),
+    ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Sign in' })).toBeVisible();
     await userEvent.click(toggle);
     expect(update).toHaveBeenCalledWith({ mcpLocal: true });
@@ -162,7 +165,7 @@ describe('Settings › MCP', () => {
   it('points to the setting when gitdesk is local-only, even when signed in', async () => {
     mount({ status: signedIn, settings: { localOnly: true } });
     expect(
-      await screen.findByText(/set to work without an account/),
+      await screen.findByText(/Existing cloud agents keep their access/),
     ).toBeVisible();
     expect(screen.queryByRole('button', { name: 'Sign in' })).toBeNull();
     expect(screen.getByRole('button', { name: 'Open settings' })).toBeVisible();

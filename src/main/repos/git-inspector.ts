@@ -131,6 +131,8 @@ export function gitAt(
   options: Pick<SimpleGitOptions, 'abort' | 'progress'> & {
     config?: string[];
     allowProtocolOverride?: boolean;
+    // Only for the ephemeral alias bound to an approved effective push URL.
+    approvedPushAlias?: boolean;
     // Inactivity limit; commits get longer because hooks such as linters can run for a while.
     timeoutMs?: number;
     // GIT_CONFIG_* from gitAuthEnv only: credentials for one URL, kept off the command line.
@@ -152,6 +154,7 @@ export function gitAt(
     unsafe: {
       allowUnsafeFsMonitor: true,
       allowUnsafeProtocolOverride: options.allowProtocolOverride ?? false,
+      allowUnsafeUrlRewrite: options.approvedPushAlias ?? false,
       allowUnsafeCustomBinary: gitBinary !== null,
       allowUnsafeConfigEnvCount: options.auth !== undefined,
     },
@@ -210,6 +213,8 @@ export function gitBytes(
     input?: string | Buffer;
     config?: string[];
     timeoutMs?: number;
+    // Only the approved commit command gets the private reference-transaction guard.
+    privateHooksPath?: string;
     // Commands that would open an editor (continue, revert) accept the prepared message instead.
     noEditor?: boolean;
     // check-ignore refuses literal pathspecs; callers turning it off keep magic out themselves.
@@ -217,6 +222,11 @@ export function gitBytes(
   },
 ): Promise<GitBytes> {
   const env = gitEnv();
+  if (options.privateHooksPath !== undefined) {
+    env.GIT_CONFIG_COUNT = '1';
+    env.GIT_CONFIG_KEY_0 = 'core.hooksPath';
+    env.GIT_CONFIG_VALUE_0 = options.privateHooksPath;
+  }
   if (options.literalPathspecs === false) delete env.GIT_LITERAL_PATHSPECS;
   if (options.noEditor) {
     env.GIT_EDITOR = 'true';

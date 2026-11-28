@@ -68,6 +68,7 @@ export function createAccountRecords(deps: {
     attempt(fallback, (token) =>
       api.pullRequest<{ pullRequest: AccountPull }>(
         token,
+        repositoryId,
         id,
         rest,
         'pull',
@@ -175,6 +176,7 @@ export function createAccountRecords(deps: {
       attempt("Couldn't load the reviews.", (token) =>
         api.pullRequest<{ reviews: StoredReview[] }>(
           token,
+          repositoryId,
           id,
           '/reviews',
           'reviews',
@@ -185,6 +187,7 @@ export function createAccountRecords(deps: {
       attempt("Your account didn't save the review.", (token) =>
         api.pullRequest<{ review: StoredReview }>(
           token,
+          repositoryId,
           id,
           '/reviews',
           'review',
@@ -205,18 +208,21 @@ export function createAccountRecords(deps: {
       attempt("Couldn't load the comments.", (token) =>
         api.pullRequest<{ comments: StoredComment[] }>(
           token,
+          repositoryId,
           id,
           '/comments',
           'comments',
         ),
       ).then((result) => result.comments),
 
-    addComment: (id, input) =>
+    addComment: (id, input, assertAllowed) =>
       attempt(
         "Your account didn't save the comment. Your text is still here.",
-        (token) =>
-          api.pullRequest<{ comment: StoredComment }>(
+        (token) => {
+          assertAllowed?.();
+          return api.pullRequest<{ comment: StoredComment }>(
             token,
+            repositoryId,
             id,
             '/comments',
             'comment',
@@ -228,13 +234,15 @@ export function createAccountRecords(deps: {
                 anchor: input.anchor,
               },
             },
-          ),
+          );
+        },
       ).then((result) => result.comment),
 
     editComment: (id, commentId, patch) =>
       attempt("Your account didn't save the change.", (token) =>
         api.pullRequest<{ comment: StoredComment }>(
           token,
+          repositoryId,
           id,
           `/comments/${encodeURIComponent(commentId)}`,
           'comment',
@@ -249,6 +257,7 @@ export function createAccountRecords(deps: {
       await attempt("Your account didn't delete the comment.", (token) =>
         api.pullRequest(
           token,
+          repositoryId,
           id,
           `/comments/${encodeURIComponent(commentId)}`,
           'none',
@@ -261,6 +270,7 @@ export function createAccountRecords(deps: {
       attempt("Couldn't load the activity.", (token) =>
         api.pullRequest<{ events: PullEvent[]; nextCursor: string | null }>(
           token,
+          repositoryId,
           id,
           `/activity?limit=30${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`,
           'activity',
@@ -269,7 +279,7 @@ export function createAccountRecords(deps: {
 
     async recordEvent(id, type, detail) {
       await attempt("Your account didn't record that.", (token) =>
-        api.pullRequest(token, id, '/events', 'none', {
+        api.pullRequest(token, repositoryId, id, '/events', 'none', {
           method: 'POST',
           body: { type, detail },
         }),

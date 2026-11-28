@@ -9,6 +9,10 @@ import {
 } from '../../shared/branches';
 import type { LocalWriteTool, McpOutcome } from '../../shared/mcp';
 import {
+  CREDENTIAL_FILE_MESSAGE,
+  looksSecret,
+} from '../../shared/mcp-file-privacy';
+import {
   addCommentInputSchema,
   pullListInputSchema,
   pullRefSchema,
@@ -40,7 +44,10 @@ import { UserError } from '../errors';
 import type { PullService } from '../pulls/pull-service';
 import type { RepositoryService } from '../repos/repository-service';
 import type { SourceService } from '../repos/source-service';
-import type { WorkspaceService } from '../repos/workspace-service';
+import {
+  WriteRefusal as ToolError,
+  type WorkspaceService,
+} from '../repos/workspace-service';
 
 // The same services the window uses, so an agent meets every check a person does: paths are
 // confirmed against Git's own status, a busy index refuses, a push never forces.
@@ -56,6 +63,8 @@ export type LocalServices = {
     | 'stage'
     | 'unstage'
     | 'commit'
+    | 'prepareCommit'
+    | 'preparePush'
     | 'switchBranch'
     | 'fetch'
     | 'push'
@@ -63,9 +72,17 @@ export type LocalServices = {
   branches: Pick<BranchService, 'compare' | 'mergeability' | 'create'>;
   pulls: Pick<
     PullService,
-    'list' | 'get' | 'comments' | 'reviews' | 'addComment'
+    | 'list'
+    | 'readStoredDetail'
+    | 'readRecord'
+    | 'comments'
+    | 'reviews'
+    | 'addComment'
   >;
-  source: Pick<SourceService, 'list' | 'read' | 'resolve'>;
+  source: Pick<
+    SourceService,
+    'list' | 'readForAgent' | 'agentRenameSource' | 'resolve'
+  >;
 };
 
 export type ApprovalRequest = {
@@ -91,6 +108,7 @@ export type LocalPolicy = {
   // False from the moment MCP is switched off, before its connections have closed.
   enabled(): boolean;
   writes(): boolean;
+  generation(id: string): symbol | null;
   approve(request: ApprovalRequest): Promise<ApprovalAnswer>;
   record(call: {
     client: string;
@@ -110,20 +128,6 @@ const CALLS_PER_MINUTE = 240;
 
 // The most items an approval lists; the rest are counted.
 const DETAILS_SHOWN = 20;
-
-// Names that usually hold credentials. Reading them is refused whatever Git thinks of the file.
-const SECRET_FILE =
-  /(^|\/)(\.env(\..*)?|\.envrc|\.npmrc|\.netrc|\.pypirc|\.pgpass|\.git-credentials|\.htpasswd|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?|.*\.(pem|key|p12|pfx|jks|keystore|tfstate|tfstate\.backup|tfvars|kdbx|ovpn)|credentials(\..*)?|secrets?\.(json|ya?ml|toml|env)|kubeconfig(\..*)?|\.kube\/config|\.docker\/config\.json|\.aws\/config|service[-_]account.*\.json)$/i;
-export const looksSecret = (path: string) => SECRET_FILE.test(path);
-
-class ToolError extends Error {
-  constructor(
-    message: string,
-    readonly reason: string,
-  ) {
-    super(message);
-  }
-}
 
 const text = (value: string, isError = false) => ({
   content: [{ type: 'text' as const, text: value }],
@@ -161,17 +165,12 @@ type Prepared = {
   summary: string;
   details: string[];
   total?: number;
-  run: () => Promise<unknown>;
+  run: (assertAllowed: () => void) => Promise<unknown>;
 };
 type WriteSpec<S extends z.ZodObject> = Spec<S> & {
   prepare: (input: z.output<S>, repo: RepositorySummary) => Promise<Prepared>;
 };
 
-const changedSinceAsked = () =>
-  new ToolError(
-    'The repository changed after the person was asked, so nothing was done. Check its state and ask again.',
-    'STATE_CHANGED',
-  );
 const short = (oid: string | null | undefined) =>
   oid ? oid.slice(0, 7) : 'no commit';
 
@@ -235,6 +234,29 @@ export function buildLocalServer(
         const args = input as z.output<S> & { repositoryId?: string };
         const client = connection.client();
         let repo: RepositorySummary | null = null;
+        const signal = AbortSignal.any([
+          connection.closed,
+          ...(ctx?.mcpReq?.signal ? [ctx.mcpReq.signal] : []),
+        ]);
+        const id = args.repositoryId;
+        let generation: symbol | null = null;
+        const assertAllowed = () => {
+          if (signal.aborted)
+            throw new ToolError(
+              'The agent cancelled this request or disconnected.',
+              'CANCELLED',
+            );
+          if (!policy.writes())
+            throw new ToolError(
+              'Changes by agents are turned off in gitdesk (Settings › MCP).',
+              'WRITES_OFF',
+            );
+          if (!id || !generation || generation !== policy.generation(id))
+            throw new ToolError(
+              'Permission for this change was withdrawn. Ask again if the repository is shared.',
+              'NOT_ALLOWED',
+            );
+        };
         let prepared: Prepared | null = null;
         const record = (outcome: McpOutcome, reason: string | null) =>
           policy.record({
@@ -255,19 +277,12 @@ export function buildLocalServer(
               'Too many requests in a minute. Wait, then continue.',
               'RATE_LIMITED',
             );
-          if (args.repositoryId) repo = await summaryOf(args.repositoryId);
+          if (write && id) generation = policy.generation(id);
+          if (id) repo = await summaryOf(id);
           if (write) {
-            if (!policy.writes())
-              throw new ToolError(
-                'Changes by agents are turned off in gitdesk (Settings › MCP).',
-                'WRITES_OFF',
-              );
-            // Checked and described first: the person never approves something that is then
-            // refused or changed.
+            assertAllowed();
             prepared = await prepare!(args, repo!);
-            const signals = [connection.closed, ctx?.mcpReq?.signal].filter(
-              (signal): signal is AbortSignal => !!signal,
-            );
+            assertAllowed();
             const answer = await policy.approve({
               tool: name as LocalWriteTool,
               client,
@@ -277,7 +292,7 @@ export function buildLocalServer(
               summary: prepared.summary,
               details: prepared.details.slice(0, DETAILS_SHOWN),
               total: prepared.total ?? prepared.details.length,
-              signal: AbortSignal.any(signals),
+              signal,
             });
             if (answer === 'denied')
               throw new ToolError(
@@ -291,18 +306,13 @@ export function buildLocalServer(
               );
             if (answer === 'withdrawn')
               throw new ToolError(
-                'The request was cancelled before the person answered, so nothing was changed.',
+                'The request was withdrawn before it was started.',
                 'CANCELLED',
               );
-            // Turned off while the question was open.
-            if (!policy.writes())
-              throw new ToolError(
-                'Changes by agents are turned off in gitdesk (Settings › MCP).',
-                'WRITES_OFF',
-              );
+            assertAllowed();
           }
           const result = prepared
-            ? await prepared.run()
+            ? await prepared.run(assertAllowed)
             : await run(args, repo);
           const answer = JSON.stringify(result);
           if (answer.length > ANSWER_LIMIT)
@@ -372,12 +382,9 @@ export function buildLocalServer(
     );
 
   // The secret-name check covers both names of a renamed file.
-  function refuseSecret(...paths: (string | null | undefined)[]) {
-    if (paths.some((path) => path && looksSecret(path)))
-      throw new ToolError(
-        'That file looks like it holds credentials, so gitdesk does not hand it to agents.',
-        'SECRET_FILE',
-      );
+  function refuseSecret(path: string | null) {
+    if (path && looksSecret(path))
+      throw new ToolError(CREDENTIAL_FILE_MESSAGE, 'SECRET_FILE');
   }
 
   register(
@@ -479,17 +486,13 @@ export function buildLocalServer(
         'The uncommitted diff of one file that get_status lists: side "unstaged", "staged", "untracked" or "conflict". A very large diff answers "too-large" with its line counts.',
       input: z.object({
         repositoryId,
-        path: repoPathSchema,
+        path: sourcePathSchema,
         side: z.enum(['unstaged', 'staged', 'untracked', 'conflict']),
       }),
     },
     async ({ repositoryId: id, path, side }) => {
       refuseSecret(path);
-      // A rename shows the old file too: its old name is checked as well.
-      const changed = (await services.repos.changes(id)).files.find(
-        (file) => file.path === path,
-      );
-      refuseSecret(changed?.origPath);
+      refuseSecret(await services.source.agentRenameSource(id, path));
       return services.workspace.diff(
         build(diffInputSchema, {
           id,
@@ -499,6 +502,7 @@ export function buildLocalServer(
           ignoreWhitespace: false,
           full: false,
         }),
+        refuseSecret,
       );
     },
   );
@@ -593,7 +597,7 @@ export function buildLocalServer(
     {
       title: 'Read a file',
       description:
-        'The text of one file from the working tree, or from a branch or commit when ref is given. Binary files and images answer with their kind and size; files that look like credentials are refused.',
+        'The text of one file from the working tree, or from a branch or commit when ref is given. Binary files and images answer with their kind and size. Credential filenames are refused at any ref; ignored, untracked files are refused in the working tree.',
       input: z.object({
         repositoryId,
         path: sourcePathSchema,
@@ -602,7 +606,8 @@ export function buildLocalServer(
     },
     async ({ repositoryId: id, path, ref }) => {
       refuseSecret(path);
-      const file = await services.source.read(
+      if (!ref) refuseSecret(await services.source.agentRenameSource(id, path));
+      const file = await services.source.readForAgent(
         build(sourceReadInputSchema, {
           id,
           snapshot: await snapshotOf(id, ref),
@@ -647,13 +652,13 @@ export function buildLocalServer(
     {
       title: 'Get a pull request',
       description:
-        'One pull request with its comparison, reviews and comments. The comparison names the commits it was made from and when mergeability was last checked.',
+        'Read the stored pull request, its exact comparison commits, reviews and comments. Does not refresh the comparison or report a merge.',
       input: z.object({ repositoryId, pullRequestId: z.uuid() }),
     },
     async ({ repositoryId: id, pullRequestId }) => {
       const ref = build(pullRefSchema, { repoId: id, id: pullRequestId });
       const [pullRequest, comments, reviews] = await Promise.all([
-        services.pulls.get(ref),
+        services.pulls.readStoredDetail(ref),
         services.pulls.comments(ref),
         services.pulls.reviews(ref),
       ]);
@@ -670,16 +675,6 @@ export function buildLocalServer(
       headOid: list.headOid,
       upstream: current?.upstream ?? null,
     };
-  }
-
-  async function stagedOf(id: string) {
-    const changes = await services.repos.changes(id);
-    return changes.files
-      .filter((file) => file.kind === 'staged')
-      .map((file) =>
-        file.origPath ? `${file.origPath} → ${file.path}` : file.path,
-      )
-      .sort();
   }
 
   write('create_branch', {
@@ -708,11 +703,11 @@ export function buildLocalServer(
           `Starts at ${short(head.headOid)}${head.branch ? ` (${head.branch})` : ''}`,
         ],
         total: 1,
-        async run() {
-          if ((await headOf(id)).headOid !== head.headOid)
-            throw changedSinceAsked();
-          return services.branches.create(input);
-        },
+        run: (assertAllowed) =>
+          services.branches.create(input, {
+            assertAllowed,
+            expectedHead: head.headOid,
+          }),
       };
     },
   });
@@ -731,7 +726,8 @@ export function buildLocalServer(
           `Now on ${head.branch ?? `a detached ${short(head.headOid)}`}`,
         ],
         total: 1,
-        run: () => services.workspace.switchBranch(input),
+        run: (assertAllowed) =>
+          services.workspace.switchBranch(input, assertAllowed),
       };
     },
   });
@@ -754,7 +750,8 @@ export function buildLocalServer(
           summary: `${verb} ${unique.length === 1 ? '1 file' : `${unique.length} files`}`,
           details: unique,
           total: unique.length,
-          run: () => services.workspace[action](input),
+          run: (assertAllowed) =>
+            services.workspace[action](input, assertAllowed),
         };
       },
     });
@@ -771,25 +768,19 @@ export function buildLocalServer(
     }),
     async prepare({ repositoryId: id, summary, description }) {
       const input = build(commitInputSchema, { id, summary, description });
-      const [staged, head] = await Promise.all([stagedOf(id), headOf(id)]);
+      const expected = await services.workspace.prepareCommit(id);
+      const staged = expected.paths;
       if (!staged.length)
         throw new ToolError(
           'Nothing is staged. Stage files with stage_paths first.',
           'NOTHING_STAGED',
         );
       return {
-        summary: `Commit ${staged.length === 1 ? '1 staged file' : `${staged.length} staged files`} to ${head.branch ?? 'a detached HEAD'}: ${input.summary.slice(0, 120)}`,
+        summary: `Commit ${staged.length === 1 ? '1 staged file' : `${staged.length} staged files`} to ${expected.branch ?? 'a detached HEAD'}: ${input.summary}`,
         details: staged,
         total: staged.length,
-        async run() {
-          const [now, nowHead] = await Promise.all([stagedOf(id), headOf(id)]);
-          if (
-            now.join('\n') !== staged.join('\n') ||
-            nowHead.headOid !== head.headOid
-          )
-            throw changedSinceAsked();
-          return services.workspace.commit(input);
-        },
+        run: (assertAllowed) =>
+          services.workspace.commit(input, { expected, assertAllowed }),
       };
     },
   });
@@ -822,7 +813,7 @@ export function buildLocalServer(
       return {
         summary: `Fetch from ${chosen.name}`,
         details: chosen.fetchUrl ? [chosen.fetchUrl] : [],
-        run: () => services.workspace.fetch(input),
+        run: (assertAllowed) => services.workspace.fetch(input, assertAllowed),
       };
     },
   });
@@ -830,28 +821,22 @@ export function buildLocalServer(
   write('push', {
     title: 'Push the current branch',
     description:
-      'Pushes the current branch to its upstream, or publishes it to the default remote when it has none. It never forces: a push the remote rejects is reported, and the person decides what happens next.',
+      'Pushes the current branch to its upstream, or publishes it to the default remote without setting an upstream when it has none. It never forces: a push the remote rejects is reported, and the person decides what happens next.',
     input: z.object({ repositoryId }),
     async prepare({ repositoryId: id }) {
       const input = build(pushInputSchema, { id, jobId: randomUUID() });
-      const head = await headOf(id);
-      if (!head.branch)
-        throw new ToolError(
-          'HEAD is detached, so there is no branch to push.',
-          'DETACHED',
-        );
+      const expected = await services.workspace.preparePush(id);
+      const target = `${expected.remote}/${expected.target.slice('refs/heads/'.length)}`;
       return {
-        summary: head.upstream
-          ? `Push ${head.branch} to ${head.upstream}`
-          : `Publish ${head.branch} to the default remote (it has no upstream yet)`,
-        details: [`${head.branch} at ${short(head.headOid)}`],
-        total: 1,
-        async run() {
-          const now = await headOf(id);
-          if (now.branch !== head.branch || now.headOid !== head.headOid)
-            throw changedSinceAsked();
-          return services.workspace.push(input);
-        },
+        summary: expected.tracked
+          ? `Push ${expected.branch} to ${target}`
+          : `Publish ${expected.branch} to ${target} without setting an upstream`,
+        details: [
+          `${expected.branch} at ${expected.branchOid}`,
+          expected.label,
+        ],
+        run: (assertAllowed) =>
+          services.workspace.push(input, { expected, assertAllowed }),
       };
     },
   });
@@ -859,7 +844,7 @@ export function buildLocalServer(
   write('comment_on_pull_request', {
     title: 'Comment on a pull request',
     description:
-      'Adds a general comment to a pull request as the person. Line comments are made in gitdesk.',
+      'Looks up the pull request without changing it. Adds the general comment as the person only after they choose Allow. Line comments are made in gitdesk.',
     input: z.object({
       repositoryId,
       pullRequestId: z.uuid(),
@@ -873,14 +858,12 @@ export function buildLocalServer(
         parentId: null,
         line: null,
       });
-      const pull = await services.pulls.get(
-        build(pullRefSchema, { repoId: id, id: pullRequestId }),
-      );
+      const pull = await services.pulls.readRecord(input);
       return {
-        summary: `Comment on #${pull.pull.number} ${pull.pull.title.slice(0, 120)}`,
-        details: [body.slice(0, 300)],
+        summary: `Comment on #${pull.number} ${pull.title.slice(0, 120)}`,
+        details: [input.body.slice(0, 300)],
         total: 1,
-        run: () => services.pulls.addComment(input),
+        run: (assertAllowed) => services.pulls.addComment(input, assertAllowed),
       };
     },
   });

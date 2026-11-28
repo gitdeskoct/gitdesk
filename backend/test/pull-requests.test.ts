@@ -1,5 +1,8 @@
+import { env } from 'cloudflare:workers';
 import { describe, expect, it } from 'vitest';
 import { createApp } from '../src/app';
+import { getDb } from '../src/db/client';
+import { addReview, pullOwned, recordComparison, setStatus } from '../src/modules/pull-requests/pull-requests';
 import { call, fakeGoogle, postJson, signIn } from './helpers';
 
 const bearer = (token: string) => ({ authorization: `Bearer ${token}` });
@@ -68,6 +71,41 @@ describe('pull requests', () => {
       ['POST', pullPath(pull!.id, '/merge-result'), { operationId: crypto.randomUUID(), mergeCommitOid: A, targetOid: B }],
     ] as const)
       expect((await send(other.access_token, method, path, body)).status).toBe(404);
+  });
+
+  it('scopes individual PR routes and their children to the requested repository as well as the account', async () => {
+    const { owner, other, send, repositoryId, create, pullPath } = await setup();
+    const token = owner.access_token;
+    const sibling = await json<{ repository: { id: string } }>(await send(token, 'POST', '/api/v1/repositories', { name: 'sibling' }));
+    const { pull } = await create();
+    const base = (repo: string, id = pull!.id) => `/api/v1/repositories/${repo}/pull-requests/${id}`;
+    const scoped = base(repositoryId);
+    expect((await send(token, 'GET', scoped)).status).toBe(200);
+    expect((await send(other.access_token, 'GET', scoped)).status).toBe(404);
+    const comment = { body: 'Original', parentCommentId: null, anchor: null };
+    const { comment: { id } } = await json<{ comment: { id: string } }>(await send(token, 'POST', `${scoped}/comments`, comment));
+    const revision = { sourceOid: A, targetOid: B, mergeBaseOid: C };
+    const review = { decision: 'approved', body: '', comparisonVersion: 1, sourceOid: A, targetOid: B };
+    for (const [method, rest, body] of [
+      ['GET', ''], ['PATCH', '', { title: 'Changed' }], ['POST', '/close'], ['POST', '/reopen'],
+      ['GET', '/reviews'], ['POST', '/reviews', review], ['GET', '/comments'], ['POST', '/comments', comment],
+      ['PATCH', `/comments/${id}`, { body: 'Changed' }], ['DELETE', `/comments/${id}`], ['GET', '/activity'],
+      ['POST', '/events', { type: 'merge_aborted', detail: null }], ['POST', '/comparisons', revision],
+      ['POST', '/merge-result', { operationId: crypto.randomUUID(), mergeCommitOid: A, targetOid: B }], ['GET', '/merge-state'],
+    ] as const) {
+      const wrong = await send(token, method, base(sibling.repository.id) + rest, body);
+      const absent = await send(token, method, base(repositoryId, crypto.randomUUID()) + rest, body);
+      expect(wrong.status, `${method} ${rest}`).toBe(404);
+      expect(absent.status).toBe(404);
+      const error = (await json<{ error: { code: string; message: string } }>(wrong)).error;
+      expect(error.code).toBe('NOT_FOUND');
+      expect((await json<{ error: { message: string } }>(absent)).error.message).toBe(error.message);
+    }
+    const comments = await json<{ comments: { body: string }[] }>(await send(token, 'GET', `${scoped}/comments`));
+    expect(comments.comments.map((c) => c.body)).toEqual(['Original']);
+    expect((await send(token, 'POST', `${scoped}/comparisons`, revision)).status).toBe(200);
+    expect((await send(token, 'POST', `${scoped}/reviews`, review)).status).toBe(201);
+    expect((await send(token, 'GET', pullPath(pull!.id, '/reviews'))).status).toBe(200);
   });
 
   it('numbers pull requests per repository and returns the first on a retried create', async () => {
@@ -142,6 +180,34 @@ describe('pull requests', () => {
     expect(view.latest!.mergeability).toBe('unknown');
     expect(view.review).toEqual({ decision: 'approved', version: 1, stale: true });
     expect((await review(1, A)).status).toBe(409);
+  });
+
+  it.each(['new comparison', 'closure'])('refuses a review after a %s immediately before the save batch', async (change) => {
+    const { owner, create, send, pullPath } = await setup();
+    const { pull } = await create();
+    const writer = getDb(env.DB);
+    const accountId = owner.account.id;
+    const row = (await pullOwned(writer, accountId, pull!.id))!;
+    const comparison = { sourceOid: A, targetOid: B, mergeBaseOid: C };
+    const open = await recordComparison(writer, accountId, row, comparison, 10);
+
+    // Interleave the second writer after any preflight reads, just before D1 executes the review batch.
+    const reviewer = getDb(env.DB);
+    reviewer.batch = async (statements) => {
+      if (change === 'closure') await setStatus(writer, accountId, open, 'closed', 20);
+      else await recordComparison(writer, accountId, open, { ...comparison, targetOid: D }, 20);
+      return writer.batch(statements);
+    };
+    expect(await addReview(reviewer, accountId, open, {
+      decision: 'approved', body: '', sourceOid: A, targetOid: B, comparisonVersion: 1,
+    }, 30)).toEqual({ status: 'stale' });
+
+    const saved = await pullOwned(writer, accountId, row.id);
+    expect(saved?.updatedAt).toBe(20);
+    const get = (rest: string) => send(owner.access_token, 'GET', pullPath(row.id, rest));
+    expect(await (await get('/reviews')).json()).toEqual({ reviews: [] });
+    const { events } = await json<{ events: { type: string }[] }>(await get('/activity'));
+    expect(events.map((e) => e.type).sort()).toEqual(['created', change === 'closure' ? 'closed' : 'comparison_updated'].sort());
   });
 
   it('keeps threads one level deep, anchors line comments to a real snapshot, and lets only the author edit', async () => {
